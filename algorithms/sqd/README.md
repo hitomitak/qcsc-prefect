@@ -1,67 +1,17 @@
 # SQD Experiment with DICE Solver
 
-This package provides the SQD experiment demonstrated in the paper [Chemistry Beyond the Scale of Exact Diagonalization on a Quantum-Centric Superomputer](https://arxiv.org/abs/2405.05068).
-
-The experiment requires a [custom DICE solver](https://github.com/caleb-johnson/Dice) to diagonalize a molecular Hamiltonian using MPI. This package also includes a Prefect integration via the `DiceSHCISolverJob` block, which is a Prefect block document. This block implements the `.run` method that accepts molecular properties and returns an `SCIResult` object from [qiskit-addon-sqd](https://github.com/Qiskit/qiskit-addon-sqd), enabling seamless integration of MPI-enabled diagonalization into your quantum chemistry workflow.
+This package provides the SQD experiment demonstrated in the paper [Chemistry Beyond the Scale of Exact Diagonalization on a Quantum-Centric Superomputer](https://arxiv.org/abs/2405.05068). 
+The experiment requires a [custom DICE solver](https://github.com/caleb-johnson/Dice) to diagonalize a molecular Hamiltonian using MPI.
 
 ---
 
 ## Getting Started
 
-```bash
-module load mpi/openmpi-x86_64
-```
-### 1. Install DICE Solver
+### 0. Pre-requisite
 
-First, load `openmpi` or an equivalent module to enable a C++ compiler with MPI support (e.g., `mpicxx`):
+Build the Dice solver executable according to the guide in [prefect-dice](../../framework/prefect-dice/).
 
-```bash
-module load mpi/openmpi-x86_64
-```
-
-If the module is not available (`module avail`), install it manually. The module name may vary depending on your environment.
-
-After loading the module, build the solver:
-
-> [!NOTE]
-> Run `build_dish.sh` exclusively within the `algorithms/sqd/` directory; executing it elsewhere may result in failure.
-```bash
-pwd 
->> /home/prefectuser/qii-miyabi-kawasaki/algorithms/sqd
-sh ../../framework/prefect-dice/build_dice.sh
-```
-
-This process may take some time. Upon successful build, the `bin` directory will contain the `Dice` binary:
-
-```bash
-ls -l bin
-```
-
-Example output:
-
-```
--rwxr-xr-x. 1 prefectuser prefectuser 47132672 Aug 31 19:07 Dice
--rwxr-xr-x. 1 prefectuser prefectuser   227216 Aug 31 19:07 libboost_mpi.so
--rwxr-xr-x. 1 prefectuser prefectuser   227216 Aug 31 19:07 libboost_mpi.so.1.85.0
--rwxr-xr-x. 1 prefectuser prefectuser   479816 Aug 31 19:07 libboost_serialization.so
--rwxr-xr-x. 1 prefectuser prefectuser   479816 Aug 31 19:07 libboost_serialization.so.1.85.0
--rwxr-xr-x. 1 prefectuser prefectuser   334912 Aug 31 19:07 libboost_wserialization.so
--rwxr-xr-x. 1 prefectuser prefectuser   334912 Aug 31 19:07 libboost_wserialization.so.1.85.0
-```
-
-Remember the absolute path of the executable for later use in the Prefect block:
-
-```bash
-realpath bin/Dice
-```
-
-Example output:
-
-```
-/home/prefectuser/qii-miyabi-kawasaki/algorithms/sqd/bin/Dice
-```
-
-### 2. Set Up Python Environment
+### 1. Set Up Python Environment
 
 Create and activate a virtual environment:
 
@@ -89,12 +39,52 @@ prefect-miyabi            0.1.0       /home/prefectuser/qii-miyabi-kawasaki/fram
 sqd-dice                  1.0.0       /home/prefectuser/qii-miyabi-kawasaki/algorithms/sqd
 ```
 
-> [!NOTE]
-> `prefect-miyabi` is an upstream dependency that provides core functionality for integrating the DICE solver into the Miyabi supercomputer environment.
+### 2. Set Prefect Server Endpoint
 
-### 3. Configure Prefect Server
+#### A. Using Prefect Cloud
 
-In the root directory of this package, you'll find a `prefect.toml` file specifying the Prefect server endpoint. Check the configuration:
+We strongly recommend this option, as self-hosted Prefect servers do not support multi-tenancy.  
+This means secrets (e.g., IBM Quantum API keys) may leak to other users with access to the same endpoint.
+
+To set up Prefect Cloud:
+
+```bash
+prefect cloud login
+```
+
+Enter your Prefect Cloud API key to log in. 
+Once logged in, verify the connection:
+
+```bash
+prefect config view
+```
+
+Example output:
+
+```
+🚀 you are connected to:
+https://app.prefect.cloud/account/.../workspace/...
+PREFECT_PROFILE='local'
+PREFECT_API_KEY='********' (from profile)
+PREFECT_API_URL='https://api.prefect.cloud/api/accounts/.../workspaces/...' (from profile)
+```
+
+#### B. Using Self-Hosted Prefect Server
+
+If your project is confidential and cannot rely on third-party cloud storage, use a private server:
+
+```bash
+prefect config set PREFECT_API_URL=https://.../api
+prefect config set PREFECT_SERVER_ALLOW_EPHEMERAL_MODE=false
+```
+
+For example, to use the Prefect server hosted by mdx:
+
+```bash
+prefect config set PREFECT_API_URL=https://qii-kawasaki-miyabi-serv.cspp.cc.u-tokyo.ac.jp/prefect/api
+```
+
+Verify the connection:
 
 ```bash
 prefect config view
@@ -106,19 +96,13 @@ Example output:
 🚀 you are connected to:
 https://qii-kawasaki-miyabi-serv.cspp.cc.u-tokyo.ac.jp/prefect
 PREFECT_PROFILE='ephemeral'
-PREFECT_API_URL='https://qii-kawasaki-miyabi-serv.cspp.cc.u-tokyo.ac.jp/prefect/api' (from prefect.toml)
-PREFECT_SERVER_ALLOW_EPHEMERAL_MODE='False' (from prefect.toml)
+PREFECT_API_URL='https://qii-kawasaki-miyabi-serv.cspp.cc.u-tokyo.ac.jp/prefect/api' (from profile)
+PREFECT_SERVER_ALLOW_EPHEMERAL_MODE='False' (from profile)
 ```
 
-By default, the endpoint connects to `qii-kawasaki-miyabi-serv`, a virtual machine hosted by [mdx](https://mdx.jp/). Modify `PREFECT_API_URL` to connect to your own Prefect server if needed.
-You can export `PREFECT_API_URL` in your shell to apply the setting to all flow runs within that session:
-```
-export PREFECT_API_URL=your/endpoint/url/prefect/api
-```
-Alternatively, you can persist the configuration by directly editing `prefect.toml`.
+### 3. Register Block Schemas
 
-### 4. Configure `QuantumRuntime` block
-Register the data schema for dependency blocks so they can be configured via the Prefect console GUI:
+Register the data schemas for dependency blocks:
 
 ```bash
 prefect block register -m prefect_qiskit
@@ -126,39 +110,50 @@ prefect block register -m prefect_qiskit.vendors
 prefect block register -m prefect_dice
 ```
 
-Refer to the [Prefect Qiskit tutorial](https://qiskit-community.github.io/prefect-qiskit/tutorials/01_getting_started/) for guidance on setting up the `QuantumRuntime` block for primitive executions.
+### 4. Configure `QuantumRuntime` Block
 
-Specifically, use the following block settings:
-- Block Name: `"sqd-runner-{$USER}"`
-- ToDo
-  - Add reference to example-setting folder. 
-  - Add note that if you use an uniform sampler, you do not have to configure `QuantumRuntime` block.
+> **Note**  
+> You can skip this step if you don't have access to any quantum resource. The SQD workflow will then switch to uniform random sampling.
 
-### 5. Configure `DiceSHCISolverJob` block
-Similarly, configure the `DiceSHCISolverJob` block to specify the path to the `Dice` executable and the working directory. In the Miyabi environment, both must reside in shared storage (e.g., `/work`) so compute nodes can access them.
+To get the URL of the webpage to configure the block:
+```bash
+prefect block create quantum-runtime
+```
+Refer to the [Prefect Qiskit tutorial](https://qiskit-community.github.io/prefect-qiskit/tutorials/01_getting_started/) for guidance.
 
-Ensure the following environment variable is set:
+> **Important**  
+> Use `"sqd-runner-{$USER}"` as the block name. Replace `{$USER}` with your login username (e.g., `sqd-runner-prefectuser`) to isolate your settings.
+
+You may also define primitive execution options using the Prefect Variable `sampler_options`.
+
+### 5. Configure `DiceSHCISolverJob` Block
+
+To get the URL of the webpage to configure the block:
+```bash
+prefect block create dice-shci-solver-job
+```
+Configure the block with the path to the `Dice` executable, working directory, and job accounting info.
+
+Set the environment variable:
 
 ```yaml
 {"LD_LIBRARY_PATH": "path/to/bin:$LD_LIBRARY_PATH"}
 ```
 
-To run mpi launchers, make sure the necessary module is loaded:
+Ensure the required MPI module is loaded:
 
 ```yaml
 ["mpi/openmpi-x86_64"]
 ```
 
-Use the following block names:
+> **Important**  
+> Use `"sqd-solver-{$USER}"` as the block name.
 
-- `QuantumRuntime`: `"sqd-runner-{$USER}"`
-- `DiceSHCISolverJob`: `"sqd-solver-{$USER}"`
+If using the `local` executor, see [Special Tips for Local Shell](#special-tips-for-local-shell).
 
-where `{$USER}` indicates a login user name, e.g. `sqd-runner-prefectuser`.
-Optionally, you can define primitive execution options using the Prefect Variable `sampler_options`.
-If you use the `local` executor, please read the [Special Tips for Local Shell](#special-tips-for-local-shell) carefully.
+### 6. Deploy
 
-Once all blocks are configured, deploy the workflow and trigger it from the Prefect console GUI:
+Deploy the workflow and trigger it from the Prefect console:
 
 ```bash
 sqd-deploy
@@ -182,26 +177,32 @@ Ensure the deployed URL matches your Prefect server endpoint.
 
 ## Special Tips for Local Shell
 
-When running experiments in a local shell (e.g., on a virtual machine or laptop), there are several important considerations:
+When running experiments in a local shell (e.g., on a VM or laptop), keep the following in mind:
 
 ### ⚠️ Avoiding Race Conditions in Local Execution
 
-If you set `sqd_num_batches` (Batch Number) > 1, the executors of `DiceSHCISolverJob` may invoke `mpirun` asynchronously, resulting in near-simultaneous launches. This can lead to race conditions during MPI initialization, potentially causing errors like:
+If `sqd_num_batches > 1`, multiple `DiceSHCISolverJob` instances may invoke `mpirun` simultaneously, causing race conditions and errors like:
+
 ```
 terminate called after throwing an instance of 'std::out_of_range'
   what():  vector::_M_range_check: __n (which is 22) >= this->size() (which is 22)
 ```
-To avoid this, you can limit the number of concurrently running jobs using Prefect's concurrency control:
+
+To avoid this, limit concurrency:
+
 ```bash
 prefect concurrency-limit create "res: local" 1
 ```
-This forces local jobs to run sequentially, which may reduce performance but is acceptable for code validation. For high-performance execution, use the `pbs` executor on the Miyabi environment.
+
+This forces sequential execution—suitable for validation.  
+For performance, use the `pbs` executor on Miyabi.
 
 ### 🛠️ Preventing Segmentation Faults from UCX
 
-By default, `mpirun` may use the UCX (Unified Communication X) backend for MPI communication. This can cause segmentation faults or bus errors when running multiple Dice jobs concurrently on a single node, especially in environments with shared memory or RDMA-enabled hardware.
+By default, `mpirun` may use UCX, which can cause segfaults or bus errors in shared-memory environments.
 
-To avoid these issues, explicitly disable UCX and use the TCP backend by setting the following environment variables:
+To disable UCX and use TCP:
+
 ```yaml
 {
   "LD_LIBRARY_PATH": "path/to/bin:$LD_LIBRARY_PATH",
@@ -211,17 +212,19 @@ To avoid these issues, explicitly disable UCX and use the TCP backend by setting
 }
 ```
 
-**Explanation of Each Setting:**
-- `OMPI_MCA_pml="ob1"`: Selects the basic and stable point-to-point messaging layer, avoiding UCX.
-- `OMPI_MCA_btl="tcp,self"`: Uses TCP for inter-process communication and self for intra-process communication.
-- `OMPI_MCA_btl_tcp_if_include="lo"`: Restricts TCP communication to the loopback interface, ideal for single-node testing.
+**Explanation:**
+- `OMPI_MCA_pml="ob1"`: Uses a stable messaging layer.
+- `OMPI_MCA_btl="tcp,self"`: Enables TCP and self-communication.
+- `OMPI_MCA_btl_tcp_if_include="lo"`: Restricts to loopback interface.
 
-These settings ensure mpirun uses a stable and isolated communication backend, making parallel execution reliable in local environments.
+These settings ensure reliable local parallel execution.
 
 ---
 
 ## Contribution Guidelines
 
-This package serves as a Prefect-style reference implementation of the SQD experiment described in the publication. It is considered feature-complete and is now in the maintenance phase.
+This package is a reference implementation of the SQD experiment described in the publication.  
+It is considered feature-complete and is now in maintenance mode.
 
-No further contributions are expected except for bug fixes and improvements to Prefect usage patterns. Workflow developers may use this experiment as a test vehicle for workflow technology research.
+Further contributions are limited to bug fixes and improvements to Prefect usage patterns.  
+Workflow developers may use this as a testbed for workflow technology research.
