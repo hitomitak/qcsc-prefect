@@ -112,7 +112,7 @@ prefect block register -m prefect_dice
 
 ### 4. Configure `QuantumRuntime` Block
 
-> **Note**  
+> [!NOTE]
 > You can skip this step if you don't have access to any quantum resource. The SQD workflow will then switch to uniform random sampling.
 
 To get the URL of the webpage to configure the block:
@@ -121,7 +121,7 @@ prefect block create quantum-runtime
 ```
 Refer to the [Prefect Qiskit tutorial](https://qiskit-community.github.io/prefect-qiskit/tutorials/01_getting_started/) for guidance.
 
-> **Important**  
+> [!IMPORTANT]
 > Use `"sqd-runner-{$USER}"` as the block name. Replace `{$USER}` with your login username (e.g., `sqd-runner-prefectuser`) to isolate your settings.
 
 You may also define primitive execution options using the Prefect Variable `sampler_options`.
@@ -146,7 +146,7 @@ Ensure the required MPI module is loaded:
 ["mpi/openmpi-x86_64"]
 ```
 
-> **Important**  
+> [!IMPORTANT]
 > Use `"sqd-solver-{$USER}"` as the block name.
 
 If using the `local` executor, see [Special Tips for Local Shell](#special-tips-for-local-shell).
