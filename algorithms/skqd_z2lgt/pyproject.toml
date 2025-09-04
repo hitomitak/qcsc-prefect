@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "qiimk"
+name = "skqd_z2lgt"
 version = "0.0.1"
 authors = []
 description = "QCHPC demonstration with 2D Z2 LGT."
