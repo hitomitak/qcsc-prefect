@@ -11,7 +11,7 @@ from qiskit import transpile
 from qiskit_ibm_runtime import QiskitRuntimeService, Sampler
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from heavyhex_qft.utils import as_bitarray
-from qiimk.circuits import make_step_circuits, compose_trotter_circuits
+from skqd_z2lgt.circuits import make_step_circuits, compose_trotter_circuits
 
 
 @dataclass
@@ -53,7 +53,7 @@ class Configuration:
 
 
 if __name__ == '__main__':
-    parser = ArgumentParser(prog='run_simulation.py')
+    parser = ArgumentParser(prog='run_experiment.py')
     parser.add_argument('conf', metavar='PATH',
                         help='Path to a yaml file containing the simulation configuration.')
     parser.add_argument('-o', '--out', metavar='PATH', default='result.h5',

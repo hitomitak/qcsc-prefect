@@ -16,8 +16,8 @@ from qiskit_aer.noise import NoiseModel
 from qiskit_ibm_runtime import QiskitRuntimeService
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from heavyhex_qft.utils import as_bitarray
-from qiimk.circuits import make_step_circuits, compose_trotter_circuits
-from qiimk.noise_model import subset_noise_model
+from skqd_z2lgt.circuits import make_step_circuits, compose_trotter_circuits
+from skqd_z2lgt.noise_model import subset_noise_model
 
 
 @dataclass

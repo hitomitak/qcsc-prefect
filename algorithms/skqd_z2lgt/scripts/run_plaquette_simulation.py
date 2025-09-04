@@ -12,7 +12,7 @@ from qiskit_aer import AerSimulator
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from heavyhex_qft.plaquette_dual import PlaquetteDual
 from heavyhex_qft.utils import as_bitarray
-from qiimk.circuits import make_plaquette_circuits, compose_trotter_circuits
+from skqd_z2lgt.circuits import make_plaquette_circuits, compose_trotter_circuits
 
 
 @dataclass
