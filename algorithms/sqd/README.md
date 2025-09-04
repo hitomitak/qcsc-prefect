@@ -122,7 +122,7 @@ prefect block create quantum-runtime
 Refer to the [Prefect Qiskit tutorial](https://qiskit-community.github.io/prefect-qiskit/tutorials/01_getting_started/) for guidance.
 
 > [!IMPORTANT]
-> Use `"sqd-runner-{$USER}"` as the block name. Replace `{$USER}` with your login username (e.g., `sqd-runner-prefectuser`) to isolate your settings.
+> Use `"sqd-runner"` as the default block name.
 
 You may also define primitive execution options using the Prefect Variable `sampler_options`.
 
@@ -147,7 +147,7 @@ Ensure the required MPI module is loaded:
 ```
 
 > [!IMPORTANT]
-> Use `"sqd-solver-{$USER}"` as the block name.
+> Use `"sqd-solver"` as the  default block name.
 
 If using the `local` executor, see [Special Tips for Local Shell](#special-tips-for-local-shell).
 
@@ -172,6 +172,14 @@ You can also run your flow via the Prefect UI: ...
 ```
 
 Ensure the deployed URL matches your Prefect server endpoint.
+
+### Use Custom Block Name
+
+You can use a custom name for the `QuantumRuntime` and `DiceSHCISolverJob` blocks on a per-run basis.
+  
+This allows you to isolate your configuration from other users sharing the workspace, or switch between blocks dynamically, for example, to charge compute usage to a different account.
+
+To do this, define the custom block names as workflow parameters when triggering a deployed workflow.
 
 ---
 

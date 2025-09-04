@@ -1,6 +1,5 @@
 """Definition of SQD workflow."""
 import asyncio
-import os
 
 import ffsim
 import numpy as np
@@ -32,9 +31,6 @@ from qiskit_addon_sqd.subsampling import postselect_and_subsample
 from qiskit_ibm_runtime.transpiler.passes import FoldRzzAngle
 
 from prefect_dice import DiceSHCISolverJob
-
-RUNNER_BLOCK = f"sqd-runner-{os.getlogin()}"
-SOLVER_BLOCK = f"sqd-solver-{os.getlogin()}"
 
 
 class Parameters(BaseModel):
@@ -120,6 +116,8 @@ class Parameters(BaseModel):
 @flow
 async def sqd_2405_05068(
     parameters: Parameters,
+    runner_name: str = "sqd-runner",
+    solver_name: str = "sqd-solver",
 ):
     """SQD Experiment from arXiv2405.05068."""
     rng = np.random.default_rng(24)
@@ -131,7 +129,7 @@ async def sqd_2405_05068(
     # Sample bitstrings    
     try:
         # Run on a real hardware when credentials are found.
-        runtime = await QuantumRuntime.load(RUNNER_BLOCK)
+        runtime = await QuantumRuntime.load(runner_name)
         options = await Variable.get("sampler_options")
         
         ansatz_circuit = create_ansatz_circuits(
@@ -164,7 +162,7 @@ async def sqd_2405_05068(
     n_alpha, n_beta = nelec
 
     # Run configuration recovery loop
-    sci_solver = await DiceSHCISolverJob.load(SOLVER_BLOCK)
+    sci_solver = await DiceSHCISolverJob.load(solver_name)
     sqd_artifact = []
     current_occupancies = None
     best_result = None
