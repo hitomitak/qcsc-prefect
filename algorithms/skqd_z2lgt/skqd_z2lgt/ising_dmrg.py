@@ -3,12 +3,17 @@ import os
 import sys
 import tempfile
 import subprocess
+from typing import Optional
 import numpy as np
 import h5py
 from qiskit.quantum_info import SparsePauliOp
 
 
-def ising_dmrg(hamiltonian: SparsePauliOp, julia_bin: str = 'julia'):
+def ising_dmrg(
+    hamiltonian: SparsePauliOp,
+    filename: Optional[str] = None,
+    julia_bin: str = 'julia'
+):
     """Call ising_dmrg.jl. There must be a much smarter way to do this."""
     zz_indices = []
     zz_coeffs = []
@@ -31,8 +36,11 @@ def ising_dmrg(hamiltonian: SparsePauliOp, julia_bin: str = 'julia'):
         else:
             raise RuntimeError(pstr)
 
-    with tempfile.NamedTemporaryFile() as tfile:
-        filename = tfile.name
+    is_tempfile = False
+    if not filename:
+        is_tempfile = True
+        with tempfile.NamedTemporaryFile() as tfile:
+            filename = tfile.name
 
     with h5py.File(filename, 'w') as out:
         out.create_dataset('num_qubits', data=hamiltonian.num_qubits)
@@ -60,9 +68,8 @@ def ising_dmrg(hamiltonian: SparsePauliOp, julia_bin: str = 'julia'):
 
     with h5py.File(filename, 'r') as source:
         energy = source['energy'][()]
-        # ground_mps = source['psi'][()]
 
-    os.unlink(filename)
+    if is_tempfile:
+        os.unlink(filename)
 
-    # return energy, ground_mps
     return energy
