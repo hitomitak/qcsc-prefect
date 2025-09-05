@@ -74,8 +74,8 @@ class ConditionalRBM(nnx.Module):
         if size is None:
             return generate_v_state(self, u_state, v_state)
 
-        if isinstance(size, int):
-            size = (size,)
+        if not isinstance(size, tuple):
+            size = (int(size),)
         flat_size = np.prod(size)
 
         def fill_samples(isample, val):
