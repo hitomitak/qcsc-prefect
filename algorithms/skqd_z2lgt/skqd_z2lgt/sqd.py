@@ -34,7 +34,8 @@ def sqd(hamiltonian: SparsePauliOp, indices: np.ndarray, device_id: int):
     return ground_energy
 
 
-def ground_state_lobpcg(mat: BCOO) -> tuple[float, jax.Array]:
+@jax.jit
+def ground_state_lobpcg(mat: BCOO) -> tuple[jax.Array, jax.Array]:
     """Find the 0th eigenvalue and eigenvector of a BCOO matrix."""
     xmat = jnp.ones((mat.shape[0], 1), dtype=np.complex128)
     # pylint: disable-next=unbalanced-tuple-unpacking
@@ -43,4 +44,4 @@ def ground_state_lobpcg(mat: BCOO) -> tuple[float, jax.Array]:
         xmat,
         args=(-mat,)
     )
-    return float(-eigvals[0]), eigvecs[:, 0]
+    return -eigvals[0], eigvecs[:, 0]
