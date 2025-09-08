@@ -132,10 +132,11 @@ def train_crbm(
     seed: int = 0,
     cdpl_num_gen: int = 100
 ):
+    @nnx.jit
     def loss_fn(model: ConditionalRBM, u_state, v_state, vhat_state):
         return jnp.mean(model.percloss(u_state, v_state, vhat_state))
 
-    grad_fn = nnx.value_and_grad(loss_fn)
+    grad_fn = nnx.jit(nnx.value_and_grad(loss_fn))
 
     @nnx.jit
     def train_step(model, optimizer, metrics, u_batch, v_batch):
@@ -186,15 +187,19 @@ def train_crbm(
             end = start + batch_size
             u_batch, v_batch = samples_u[start:end], samples_v[start:end]
             train_step(model, optimizer, metrics, u_batch, v_batch)
+            start = end
 
             if ibatch % eval_every == 0 or ibatch == num_batches - 1:
                 for metric, value in metrics.compute().items():
-                    metrics_history[f'train_{metric}'].append(value)
+                    metrics_history[f'train_{metric}'].append(float(value))
                 metrics.reset()
 
         eval_step(model, metrics, test_u, test_v)
         for metric, value in metrics.compute().items():
-            metrics_history[f'test_{metric}'].append(value)
+            metrics_history[f'test_{metric}'].append(float(value))
         metrics.reset()
+
+    for key, value in metrics_history.items():
+        metrics_history[key] = np.array(value)
 
     return metrics_history
