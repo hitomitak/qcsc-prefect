@@ -58,12 +58,13 @@ class ConditionalRBM(nnx.Module):
         delta_e = h_state @ self.weights_hv + u_state @ self.weights_vu.T + self.bias_v
         return nnx.sigmoid(delta_e)
 
-    @partial(nnx.jit, static_argnames=['size'])
+    @partial(nnx.jit, static_argnames=['size', 'final_state_only'])
     def gibbs_sample(
         self,
         u_state: jax.Array,
         v_state: jax.Array,
-        size: Optional[int | tuple[int, ...]] = None
+        size: Optional[int | tuple[int, ...]] = None,
+        final_state_only: bool = False
     ) -> jax.Array:
         def generate_v_state(module, u_state, v_state):
             ph = module.h_activation(u_state, v_state)
@@ -78,18 +79,30 @@ class ConditionalRBM(nnx.Module):
             size = (int(size),)
         flat_size = np.prod(size)
 
-        def fill_samples(isample, val):
-            module, u_state, v_state, out = val
-            v_state = generate_v_state(module, u_state, v_state)
-            return module, u_state, v_state, out.at[isample].set(v_state)
+        if final_state_only:
+            def fill_samples(_, val):
+                module, u_state, v_state = val
+                v_state = generate_v_state(module, u_state, v_state)
+                return module, u_state, v_state
 
-        out = jnp.empty((flat_size,) + v_state.shape, dtype=np.uint8)
-        out = nnx.fori_loop(
+            init_val = (self, u_state, v_state)
+        else:
+            def fill_samples(isample, val):
+                module, u_state, v_state, out = val
+                v_state = generate_v_state(module, u_state, v_state)
+                return module, u_state, v_state, out.at[isample].set(v_state)
+
+            out = jnp.empty((flat_size,) + v_state.shape, dtype=np.uint8)
+            init_val = (self, u_state, v_state, out)
+
+        final_val = nnx.fori_loop(
             0, flat_size,
             fill_samples,
-            (self, u_state, v_state, out)
-        )[-1]
-        return out.reshape(size + v_state.shape)
+            init_val
+        )
+        if final_state_only:
+            return final_val[-1]
+        return final_val[-1].reshape(size + v_state.shape)
 
     @partial(nnx.jit, static_argnames=['num_gen'])
     def percloss_states(self, u_state: jax.Array, num_gen: int) -> jax.Array:
@@ -116,8 +129,33 @@ class ConditionalRBM(nnx.Module):
     ):
         pv = nnx.sigmoid(u_state @ self.weights_vu.T + self.bias_v)
         v_state = jax.random.binomial(self.rngs.sample(), 1, pv).astype(np.uint8)
-        v_state = self.gibbs_sample(u_state, v_state, size=therm_steps)[-1]
+        v_state = self.gibbs_sample(u_state, v_state, size=therm_steps, final_state_only=True)
         return self.gibbs_sample(u_state, v_state, size=size)
+
+
+@nnx.jit
+def loss_fn(model: ConditionalRBM, u_state, v_state, vhat_state):
+    return jnp.mean(model.percloss(u_state, v_state, vhat_state))
+
+
+grad_fn = nnx.jit(nnx.value_and_grad(loss_fn))
+
+
+@partial(nnx.jit, static_argnums=5)
+def train_step(model, optimizer, metrics, u_batch, v_batch, cdpl_num_gen):
+    vhat_batch = model.percloss_states(u_batch, cdpl_num_gen)
+    loss, grads = grad_fn(model, u_batch, v_batch, vhat_batch)
+    free_energy = jnp.mean(model.free_energy(u_batch, v_batch))
+    metrics.update(loss=loss, free_energy=free_energy)
+    optimizer.update(model, grads)
+
+
+@partial(nnx.jit, static_argnums=4)
+def eval_step(model, metrics, u_batch, v_batch, cdpl_num_gen):
+    vhat_batch = model.percloss_states(u_batch, cdpl_num_gen)
+    loss = loss_fn(model, u_batch, v_batch, vhat_batch)
+    free_energy = jnp.mean(model.free_energy(u_batch, v_batch))
+    metrics.update(loss=loss, free_energy=free_energy)
 
 
 def train_crbm(
@@ -132,27 +170,6 @@ def train_crbm(
     seed: int = 0,
     cdpl_num_gen: int = 100
 ):
-    @nnx.jit
-    def loss_fn(model: ConditionalRBM, u_state, v_state, vhat_state):
-        return jnp.mean(model.percloss(u_state, v_state, vhat_state))
-
-    grad_fn = nnx.jit(nnx.value_and_grad(loss_fn))
-
-    @nnx.jit
-    def train_step(model, optimizer, metrics, u_batch, v_batch):
-        vhat_batch = model.percloss_states(u_batch, cdpl_num_gen)
-        loss, grads = grad_fn(model, u_batch, v_batch, vhat_batch)
-        free_energy = jnp.mean(model.free_energy(u_batch, v_batch))
-        metrics.update(loss=loss, free_energy=free_energy)
-        optimizer.update(model, grads)
-
-    @nnx.jit
-    def eval_step(model, metrics, u_batch, v_batch):
-        vhat_batch = model.percloss_states(u_batch, cdpl_num_gen)
-        loss = loss_fn(model, u_batch, v_batch, vhat_batch)
-        free_energy = jnp.mean(model.free_energy(u_batch, v_batch))
-        metrics.update(loss=loss, free_energy=free_energy)
-
     optax_fn = optax_fn or optax.adamw(learning_rate=0.005)
     optimizer = nnx.Optimizer(model, optax_fn, wrt=nnx.Param)
 
@@ -186,7 +203,7 @@ def train_crbm(
             LOG.debug('Batch %d/%d', ibatch, num_batches)
             end = start + batch_size
             u_batch, v_batch = samples_u[start:end], samples_v[start:end]
-            train_step(model, optimizer, metrics, u_batch, v_batch)
+            train_step(model, optimizer, metrics, u_batch, v_batch, cdpl_num_gen)
             start = end
 
             if ibatch % eval_every == 0 or ibatch == num_batches - 1:
@@ -194,7 +211,7 @@ def train_crbm(
                     metrics_history[f'train_{metric}'].append(float(value))
                 metrics.reset()
 
-        eval_step(model, metrics, test_u, test_v)
+        eval_step(model, metrics, test_u, test_v, cdpl_num_gen)
         for metric, value in metrics.compute().items():
             metrics_history[f'test_{metric}'].append(float(value))
         metrics.reset()
