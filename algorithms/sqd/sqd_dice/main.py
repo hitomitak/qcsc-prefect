@@ -1,4 +1,5 @@
 """Definition of SQD workflow."""
+
 import asyncio
 
 import ffsim
@@ -26,16 +27,17 @@ from qiskit.transpiler.passes import (
 from qiskit.transpiler.passmanager import PassManager
 from qiskit_addon_sqd.configuration_recovery import recover_configurations
 from qiskit_addon_sqd.counts import bit_array_to_arrays, generate_bit_array_uniform
-from qiskit_addon_sqd.fermion import SCIResult, bitstring_matrix_to_ci_strs
-from qiskit_addon_sqd.subsampling import postselect_and_subsample
+from qiskit_addon_sqd.fermion import SCIResult
 from qiskit_ibm_runtime.transpiler.passes import FoldRzzAngle
 
 from prefect_dice import DiceSHCISolverJob
 
+from .subsample import postselect, subsample
+
 
 class Parameters(BaseModel):
     """Workflow parameters to configure sqd_2405_05068 workflow."""
-    
+
     atom: str = Field(
         description="Definition for molecule structure.",
         title="Atom",
@@ -66,9 +68,9 @@ class Parameters(BaseModel):
         description="Whether to always merge spin-alpha and spin-beta CI strings into a single list.",
         title="Symmetrize Spin",
     )
-    sqd_samples_per_batch: int = Field(
-        description="SQD: Number of bitstrings to include, controlling a subspace dimension.",
-        title="Sample Per Batch",
+    sqd_subspace_dim: int = Field(
+        description="SQD: Dimension d of subsampled bitstrings for diagonalization.",
+        title="Subspace Dimension",
         ge=1,
     )
     sqd_num_batches: int = Field(
@@ -110,8 +112,9 @@ class Parameters(BaseModel):
         default=10000,
         description="Transpile: The number of random initial layouts tested, selecting the one that minimizes SWAP gates.",
         title="SABRE Layout Trials",
-        ge=1,        
+        ge=1,
     )
+
 
 @flow
 async def sqd_2405_05068(
@@ -122,41 +125,43 @@ async def sqd_2405_05068(
     """SQD Experiment from arXiv2405.05068."""
     rng = np.random.default_rng(24)
     logger = get_run_logger()
-    
+
     # Compute molecular integrals
-    hcore, eri, t2, nuclear_repulsion_energy, norb, nelec = compute_molecular_integrals(parameters)
-    
-    # Sample bitstrings    
+    hcore, eri, t2, nuclear_repulsion_energy, norb, nelec = compute_molecular_integrals(
+        parameters
+    )
+
+    # Sample bitstrings
     try:
         # Run on a real hardware when credentials are found.
         runtime = await QuantumRuntime.load(runner_name)
         options = await Variable.get("sampler_options")
-        
+
         ansatz_circuit = create_ansatz_circuits(
             parameters=parameters,
             one_body_tensor=hcore,
             num_electrons=nelec,
             t2=t2,
-        )        
+        )
         isa_circuit = transpile_circuit(
             circuit=ansatz_circuit,
             target=await runtime.get_target(),
             parameters=parameters,
-            seed=rng,            
-        )        
+            seed=rng,
+        )
         pub_result = await runtime.sampler(
-            sampler_pubs=[(isa_circuit, )], 
+            sampler_pubs=[(isa_circuit,)],
             options=options,
         )
-        bit_array = pub_result[0].data.meas        
+        bit_array = pub_result[0].data.meas
     except ValueError:
         # Uniform sampling when runtime is not defined.
         logger.warning(
-            f"Runner block {RUNNER_BLOCK} is not defined. "
+            f"Runner block {runner_name} is not defined. "
             "Falling back into random uniform sampling."
         )
         bit_array = generate_bit_array_uniform(10_000, norb * 2, rand_seed=rng)
-    
+
     # Convert BitArray into bitstring and probability arrays
     raw_bitstrings, raw_probs = bit_array_to_arrays(bit_array)
     n_alpha, n_beta = nelec
@@ -171,31 +176,40 @@ async def sqd_2405_05068(
             bitstrings, probs = raw_bitstrings, raw_probs
         else:
             bitstrings, probs = recover_configurations(
-                raw_bitstrings, raw_probs, current_occupancies, n_alpha, n_beta, rand_seed=rng
+                raw_bitstrings,
+                raw_probs,
+                current_occupancies,
+                n_alpha,
+                n_beta,
+                rand_seed=rng,
             )
-        # Postselect and subsample batches of bitstrings
-        subsamples = postselect_and_subsample(
-            bitstrings,
-            probs,
+        bitstrings, probs = postselect(
+            bitstring_matrix=bitstrings,
+            probabilities=probs,
             hamming_right=n_alpha,
             hamming_left=n_beta,
-            samples_per_batch=parameters.sqd_samples_per_batch,
-            num_batches=parameters.sqd_num_batches,
-            rand_seed=rng,
         )
         # Convert bitstrings to CI strings and diagonalize
         coros = []
-        for subsample in subsamples:
-            strs_a, strs_b = bitstring_matrix_to_ci_strs(subsample, open_shell=not parameters.symmetrize_spin)
+        subspace_dims = []
+        for ci_strings in subsample(
+            bitstring_matrix=bitstrings,
+            probabilities=probs,
+            subspace_dim=parameters.sqd_subspace_dim,
+            num_batches=parameters.sqd_num_batches,
+            rng=rng,
+            open_shell=not parameters.symmetrize_spin,
+        ):
+            subspace_dims.append(int(len(ci_strings[0]) * len(ci_strings[1])))
             coro = sci_solver.run(
-                ci_strings=(strs_a, strs_b),
+                ci_strings=ci_strings,
                 one_body_tensor=hcore,
                 two_body_tensor=eri,
                 norb=norb,
                 nelec=nelec,
                 spin_sq=parameters.spin_sq,
             )
-            coros.append(coro)        
+            coros.append(coro)
         results: list[SCIResult] = await asyncio.gather(*coros)
         # Get best result from batch
         best_result_in_batch = min(results, key=lambda result: result.energy)
@@ -209,7 +223,7 @@ async def sqd_2405_05068(
                 round=int(round_idx),
                 subspace=int(subspace_idx),
                 energy=float(result.energy + nuclear_repulsion_energy),
-                dimension=int(np.prod(result.sci_state.amplitudes.shape)),                
+                dimension=subspace_dims[subspace_idx],
             )
             sqd_artifact.append(new_record)
         logger.info(
@@ -247,20 +261,27 @@ def compute_molecular_integrals(
     cas = pyscf.mcscf.CASCI(scf, num_orbitals, (num_elec_a, num_elec_b))
     mo = cas.sort_mo(active_space, base=0)
     hcore, nuclear_repulsion_energy = cas.get_h1cas(mo)
-    eri = pyscf.ao2mo.restore(1, cas.get_h2cas(mo), num_orbitals)    
+    eri = pyscf.ao2mo.restore(1, cas.get_h2cas(mo), num_orbitals)
     # Get CCSD t2 amplitudes for initializing the ansatz
     ccsd = pyscf.cc.CCSD(
         scf,
         frozen=[i for i in range(mol.nao_nr()) if i not in active_space],
     ).run()
-    
-    return hcore, eri, ccsd.t2, nuclear_repulsion_energy, num_orbitals, (num_elec_a, num_elec_b)
+
+    return (
+        hcore,
+        eri,
+        ccsd.t2,
+        nuclear_repulsion_energy,
+        num_orbitals,
+        (num_elec_a, num_elec_b),
+    )
 
 
 @task
 def create_ansatz_circuits(
     parameters: Parameters,
-    one_body_tensor: np. ndarray,
+    one_body_tensor: np.ndarray,
     num_electrons: tuple[int, int],
     t2: np.ndarray,
 ) -> QuantumCircuit:
@@ -279,7 +300,7 @@ def create_ansatz_circuits(
             nelec=num_electrons,
         ),
         qargs=qreg,
-    )    
+    )
     ucj_op = ffsim.UCJOpSpinBalanced.from_t_amplitudes(
         t2=t2,
         n_reps=parameters.n_lucj_layers,
@@ -347,14 +368,16 @@ def transpile_circuit(
                 RemoveIdentityEquivalent(target=target),  # Remove GlobalPhaseGate
             ]
         )
-    
+
     # Transpile
-    isa_circuit = passmanager.run(circuit)        
-    gate_depth = isa_circuit.depth(lambda inst: inst.operation.name not in ("rz", "barrier", "measure"))
+    isa_circuit = passmanager.run(circuit)
+    gate_depth = isa_circuit.depth(
+        lambda inst: inst.operation.name not in ("rz", "barrier", "measure")
+    )
     logger.info(
         f"Circuit depth = {gate_depth}\n"
         f"Instruction counts = {dict(isa_circuit.count_ops())}¥n"
-    )    
+    )
     return isa_circuit
 
 
@@ -367,9 +390,7 @@ def deploy():
     # Workflow is now installed in site-packages.
     os.chdir(pathlib.Path(__file__).parent)
 
-    sqd_2405_05068.with_options(
-        version=os.getenv("WF_VERSION", "unknown")
-    ).serve(
+    sqd_2405_05068.with_options(version=os.getenv("WF_VERSION", "unknown")).serve(
         name="sqd_2405_05068",
         description="SQD experiment from arXiv2405.05068.",
     )
