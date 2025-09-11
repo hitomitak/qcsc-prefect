@@ -1,6 +1,7 @@
 """Conditional restricted Boltzmann machine."""
 from collections.abc import Callable
 from functools import partial
+from itertools import product
 import logging
 from typing import Any, Optional
 import numpy as np
@@ -39,16 +40,30 @@ class ConditionalRBM(nnx.Module):
     @nnx.jit
     def free_energy(self, u_state: jax.Array, v_state: jax.Array) -> jax.Array:
         """Free energy -log(sum_h(exp(-E(v,h,u))))."""
-        f_val = -jnp.sum(v_state * (self.bias_v[None, :] + u_state @ self.weights_vu.T), axis=1)
+        f_val = -jnp.sum(v_state * (self.bias_v + u_state @ self.weights_vu.T), axis=-1)
         f_val -= jnp.sum(
-            jnp.log(1. + jnp.exp(self.bias_h[None, :]
-                                 + v_state @ self.weights_hv.T
+            jnp.log(1. + jnp.exp(self.bias_h + v_state @ self.weights_hv.T
                                  + u_state @ self.weights_hu.T)),
-            axis=1
+            axis=-1
         )
         return f_val
 
-    vfree_energy = nnx.jit(nnx.vmap(free_energy, in_axes=(None, None, 0), out_axes=0))
+    vfree_energy = nnx.jit(nnx.vmap(free_energy, in_axes=(None, None, 0)))
+    bvfree_energy = nnx.jit(nnx.vmap(vfree_energy, in_axes=(None, 0, None)))
+
+    @nnx.jit
+    def conditional_partition_function(self, u_state: jax.Array) -> jax.Array:
+        """Partition function given a u state. Intractable for num_v >~ 25."""
+        num_v = self.bias_v.shape[0]
+        all_v = ((jnp.arange(2 ** num_v)[:, None] >> jnp.arange(num_v)[None, :])
+                 % 2).astype(np.uint8)
+        return jnp.sum(jnp.exp(-self.bvfree_energy(u_state, all_v)), axis=1)
+
+    @nnx.jit
+    def conditional_probability(self, u_state: jax.Array, v_state: jax.Array) -> jax.Array:
+        """Probability of the v state given u state. Intractable for num_v >~ 25."""
+        partfun = self.conditional_partition_function(u_state)
+        return jnp.exp(-self.free_energy(u_state, v_state)) / partfun
 
     @nnx.jit
     def h_activation(self, u_state: jax.Array, v_state: jax.Array) -> jax.Array:
@@ -298,8 +313,8 @@ class DefaultCallback(BaseCallback):
         self.eval_every = eval_every
 
     def init_records(self) -> dict[str, Any]:
-        return {key: [] for key in
-                ['train_loss', 'train_free_energy', 'test_loss', 'test_free_energy']}
+        return {'_'.join(comb): []
+                for comb in product(['train', 'test'], self.metrics._metric_names)}
 
     def as_arrays(self, records: dict[str, list]):
         for key, value in records.items():
@@ -326,6 +341,8 @@ class DefaultCallback(BaseCallback):
         records: dict[str, Any]
     ):
         """Callback at evaluation during training."""
+        if (ibatch + 1) % self.eval_every != 0:
+            return
         for metric, value in self.metrics.compute().items():
             records[f'train_{metric}'].append(float(value))
         self.metrics.reset()
