@@ -49,18 +49,27 @@ class ConditionalRBM(nnx.Module):
     bvfree_energy = nnx.jit(nnx.vmap(vfree_energy, in_axes=(None, 0, None)))
 
     @nnx.jit
-    def conditional_partition_function(self, u_state: jax.Array) -> jax.Array:
-        """Partition function given a u state. Intractable for num_v >~ 25."""
+    def conditional_logz(self, u_state: jax.Array) -> tuple[jax.Array, jax.Array]:
+        """Log partition function given a u state. Intractable for num_v >~ 25.
+
+        Since the raw sum of exp(-F) can be numerically unmanageable, we subtract the mean of F per
+        sample before taking the exponential. This normalization factor will then be needed to
+        compute the conditional probability and is therefore given as the second return value of
+        this function.
+        """
         num_v = self.bias_v.shape[0]
         all_v = ((jnp.arange(2 ** num_v)[:, None] >> jnp.arange(num_v)[None, :])
                  % 2).astype(np.uint8)
-        return jnp.sum(jnp.exp(-self.bvfree_energy(u_state, all_v)), axis=1)
+        all_f = self.bvfree_energy(u_state, all_v)
+        norm = jnp.mean(all_f, axis=1)
+        all_f -= norm[:, None]
+        return jnp.log(jnp.sum(jnp.exp(-all_f), axis=1)), norm
 
     @nnx.jit
-    def conditional_probability(self, u_state: jax.Array, v_state: jax.Array) -> jax.Array:
+    def conditional_nll(self, u_state: jax.Array, v_state: jax.Array) -> jax.Array:
         """Probability of the v state given u state. Intractable for num_v >~ 25."""
-        partfun = self.conditional_partition_function(u_state)
-        return jnp.exp(-self.free_energy(u_state, v_state)) / partfun
+        logz, norm = self.conditional_logz(u_state)
+        return self.free_energy(u_state, v_state) - norm + logz
 
     @nnx.jit
     def h_activation(self, u_state: jax.Array, v_state: jax.Array) -> jax.Array:
@@ -81,10 +90,10 @@ class ConditionalRBM(nnx.Module):
         final_state_only: bool = False
     ) -> jax.Array:
         """MCMC sample generation."""
-        batch_size = np.prod(u_state.shape[:-1])
+        batch_size = np.prod(u_state.shape[:-1]).astype(int)
         num_v = batch_size * self.bias_v.shape[0]
         num_h = batch_size * self.bias_h.shape[0]
-        uniform_size = num_v + (num_v + num_h) * np.prod(size)
+        uniform_size = num_v + (num_v + num_h) * np.prod(size).astype(int)
         uniform = jax.random.uniform(self.rngs.sample(), (uniform_size,))
         return self._gibbs_sample(u_state, v_state, uniform, size=size,
                                   final_state_only=final_state_only)
@@ -99,7 +108,7 @@ class ConditionalRBM(nnx.Module):
         final_state_only: bool = False
     ) -> jax.Array:
         """MCMC sample generation."""
-        batch_size = np.prod(u_state.shape[:-1])
+        batch_size = np.prod(u_state.shape[:-1]).astype(int)
         num_v = batch_size * self.bias_v.shape[0]
         num_h = batch_size * self.bias_h.shape[0]
 
@@ -114,7 +123,7 @@ class ConditionalRBM(nnx.Module):
             final_state_only = True
         if not isinstance(size, tuple):
             size = (int(size),)
-        flat_size = np.prod(size)
+        flat_size = np.prod(size).astype(int)
 
         def loop_body_generate(istep, val):
             module, u_state, v_state, uniform = val
@@ -166,13 +175,13 @@ class ConditionalRBM(nnx.Module):
         u_state: jax.Array,
         size: Optional[int | tuple[int, ...]] = None
     ):
-        batch_size = np.prod(u_state.shape[:-1])
+        batch_size = np.prod(u_state.shape[:-1]).astype(int)
         num_v = batch_size * self.bias_v.shape[0]
         num_h = batch_size * self.bias_h.shape[0]
         if size is None:
             gen_size = 1
         else:
-            gen_size = np.prod(size)
+            gen_size = np.prod(size).astype(int)
         uniform_size = num_v + (num_v + num_h) * (self.therm_steps + gen_size)
         uniform = jax.random.uniform(self.rngs.sample(), (uniform_size,))
 
