@@ -1,3 +1,4 @@
+# pylint: disable=unused-argument
 """Classes and routines for training the CRBM."""
 from collections.abc import Callable
 from itertools import product
@@ -24,8 +25,7 @@ class BaseCallback(nnx.Module):
         model: ConditionalRBM,
         u_batch: jax.Array,
         v_batch: jax.Array,
-        loss: jax.Array,
-        grads: jax.Array
+        loss: jax.Array
     ):
         """Callback within train_step."""
 
@@ -72,12 +72,16 @@ class DefaultCallback(BaseCallback):
         model: ConditionalRBM,
         u_batch: jax.Array,
         v_batch: jax.Array,
-        loss: jax.Array,
-        grads: jax.Array
+        loss: jax.Array
     ):
         """Callback within train_step."""
         free_energy = jnp.mean(model.free_energy(u_batch, v_batch))
-        self.metrics.update(loss=loss, free_energy=free_energy)
+        updates = {'loss': loss, 'free_energy': free_energy}
+        updates |= self._train_step_ext(model, u_batch, v_batch, updates)
+        self.metrics.update(**updates)
+
+    def _train_step_ext(self, model, u_batch, v_batch, updates):
+        return {}
 
     def train_eval(
         self,
@@ -103,7 +107,12 @@ class DefaultCallback(BaseCallback):
         vhat = model.percloss_states(test_u)
         loss = loss_fn(model, test_u, test_v, vhat)
         free_energy = jnp.mean(model.free_energy(test_u, test_v))
-        self.metrics.update(loss=loss, free_energy=free_energy)
+        updates = {'loss': loss, 'free_energy': free_energy}
+        updates |= self._test_update_ext(model, test_u, test_v, updates)
+        self.metrics.update(**updates)
+
+    def _test_update_ext(self, model, test_u, test_v, updates):
+        return {}
 
     def test(
         self,
@@ -142,7 +151,7 @@ def train_step(
 ):
     vhat_batch = model.percloss_states(u_batch)
     loss, grads = grad_fn(model, u_batch, v_batch, vhat_batch)
-    callback.train_step(model, u_batch, v_batch, loss, grads)
+    callback.train_step(model, u_batch, v_batch, loss)
     optimizer.update(model, grads)
 
 
@@ -154,12 +163,13 @@ def train_crbm(
     num_epochs: int,
     optax_fn: Optional[Callable] = None,
     seed: int = 0,
-    callback: Optional[BaseCallback] = None
+    callback: Optional[BaseCallback] = None,
+    records: Optional[dict[str, Any]] = None
 ):
     optax_fn = optax_fn or optax.adamw(learning_rate=0.005)
     optimizer = nnx.Optimizer(model, optax_fn, wrt=nnx.Param)
     callback = callback or BaseCallback()
-    records = callback.init_records()
+    records = records or callback.init_records()
 
     rng = np.random.default_rng(seed)
     num_batches = train_dataset.shape[0] // batch_size
