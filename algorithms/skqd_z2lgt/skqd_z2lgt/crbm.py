@@ -2,7 +2,7 @@
 from collections.abc import Callable
 from functools import partial
 import logging
-from typing import Optional
+from typing import Any, Optional
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -23,6 +23,8 @@ class ConditionalRBM(nnx.Module):
         self.bias_v = nnx.Param(bias_init(rngs.params(), (num_v,), jnp.float32))
         self.bias_h = nnx.Param(bias_init(rngs.params(), (num_h,), jnp.float32))
         self.rngs = rngs
+        self.therm_steps = 100
+        self.vhat_size = 100
 
     @nnx.jit
     def energy(self, u_state: jax.Array, v_state: jax.Array, h_state: jax.Array) -> jax.Array:
@@ -81,7 +83,7 @@ class ConditionalRBM(nnx.Module):
         u_state: jax.Array,
         v_state: jax.Array,
         uniform: jax.Array,
-        size: int | tuple[int, ...] = 1,
+        size: Optional[int | tuple[int, ...]] = None,
         final_state_only: bool = False
     ) -> jax.Array:
         """MCMC sample generation."""
@@ -95,6 +97,9 @@ class ConditionalRBM(nnx.Module):
             pv = module.v_activation(u_state, h_state)
             return (uniform[num_h:].reshape(pv.shape) < pv).astype(np.uint8)
 
+        if size is None:
+            size = 1
+            final_state_only = True
         if not isinstance(size, tuple):
             size = (int(size),)
         flat_size = np.prod(size)
@@ -127,9 +132,9 @@ class ConditionalRBM(nnx.Module):
             return final_val[2]
         return final_val[-1].reshape(size + v_state.shape)
 
-    @partial(nnx.jit, static_argnames=['num_gen'])
-    def percloss_states(self, u_state: jax.Array, num_gen: int) -> jax.Array:
-        v_states = self.sample(u_state, size=num_gen)
+    @nnx.jit
+    def percloss_states(self, u_state: jax.Array):
+        v_states = self.sample(u_state, self.vhat_size)
         free_energies = self.vfree_energy(u_state, v_states)
         min_indices = jnp.argmin(free_energies, axis=0)
         return v_states[min_indices, jnp.arange(u_state.shape[0])]
@@ -143,52 +148,93 @@ class ConditionalRBM(nnx.Module):
     ) -> jax.Array:
         return self.free_energy(u_state, v_state) - self.free_energy(u_state, vhat_state)
 
-    @partial(nnx.jit, static_argnames=['size', 'therm_steps'])
+    @partial(nnx.jit, static_argnames=['size'])
     def sample(
         self,
         u_state: jax.Array,
-        size: int | tuple[int, ...] = 1,
-        therm_steps: int = 100
+        size: Optional[int | tuple[int, ...]] = None
     ):
         batch_size = np.prod(u_state.shape[:-1])
         num_v = batch_size * self.bias_v.shape[0]
         num_h = batch_size * self.bias_h.shape[0]
-        uniform_size = num_v + (num_v + num_h) * (therm_steps + np.prod(size))
+        if size is None:
+            gen_size = 1
+        else:
+            gen_size = np.prod(size)
+        uniform_size = num_v + (num_v + num_h) * (self.therm_steps + gen_size)
         uniform = jax.random.uniform(self.rngs.sample(), (uniform_size,))
 
         pv = nnx.sigmoid(u_state @ self.weights_vu.T + self.bias_v)
         v_state = (uniform[:num_v].reshape(pv.shape) < pv).astype(np.uint8)
         start = num_v
-        end = num_v + (num_v + num_h) * therm_steps
-        v_state = self._gibbs_sample(u_state, v_state, uniform[start:end], size=therm_steps,
+        end = num_v + (num_v + num_h) * self.therm_steps
+        v_state = self._gibbs_sample(u_state, v_state, uniform[start:end], size=self.therm_steps,
                                      final_state_only=True)
         start = end
         return self._gibbs_sample(u_state, v_state, uniform[start:], size=size)
 
 
+class BaseCallback(nnx.Module):
+    """Base class for CRBM training callback."""
+    def init_records(self) -> dict[str, Any]:
+        """Create a container to export the records to."""
+        return {}
+
+    def train_step(
+        self,
+        model: ConditionalRBM,
+        u_batch: jax.Array,
+        v_batch: jax.Array,
+        loss: jax.Array,
+        grads: jax.Array
+    ):
+        """Callback within train_step."""
+
+    def train_eval(
+        self,
+        model: ConditionalRBM,
+        iepoch: int,
+        ibatch: int,
+        records: dict[str, Any]
+    ):
+        """Callback at evaluation during training."""
+
+    def test(
+        self,
+        model: ConditionalRBM,
+        test_u: jax.Array,
+        test_v: jax.Array,
+        iepoch: int,
+        records: dict[str, Any]
+    ):
+        """Callback for per-epoch tests."""
+
+
 @nnx.jit
-def loss_fn(model: ConditionalRBM, u_state, v_state, vhat_state):
+def loss_fn(
+    model: ConditionalRBM,
+    u_state: jax.Array,
+    v_state: jax.Array,
+    vhat_state: jax.Array
+):
     return jnp.mean(model.percloss(u_state, v_state, vhat_state))
 
 
 grad_fn = nnx.jit(nnx.value_and_grad(loss_fn))
 
 
-@partial(nnx.jit, static_argnums=5)
-def train_step(model, optimizer, metrics, u_batch, v_batch, cdpl_num_gen):
-    vhat_batch = model.percloss_states(u_batch, cdpl_num_gen)
+@nnx.jit
+def train_step(
+    model: ConditionalRBM,
+    u_batch: jax.Array,
+    v_batch: jax.Array,
+    optimizer: nnx.optimizer.Optimizer,
+    callback: BaseCallback
+):
+    vhat_batch = model.percloss_states(u_batch)
     loss, grads = grad_fn(model, u_batch, v_batch, vhat_batch)
-    free_energy = jnp.mean(model.free_energy(u_batch, v_batch))
-    metrics.update(loss=loss, free_energy=free_energy)
+    callback.train_step(model, u_batch, v_batch, loss, grads)
     optimizer.update(model, grads)
-
-
-@partial(nnx.jit, static_argnums=4)
-def eval_step(model, metrics, u_batch, v_batch, cdpl_num_gen):
-    vhat_batch = model.percloss_states(u_batch, cdpl_num_gen)
-    loss = loss_fn(model, u_batch, v_batch, vhat_batch)
-    free_energy = jnp.mean(model.free_energy(u_batch, v_batch))
-    metrics.update(loss=loss, free_energy=free_energy)
 
 
 def train_crbm(
@@ -197,19 +243,14 @@ def train_crbm(
     test_dataset: np.ndarray,
     batch_size: int,
     num_epochs: int,
-    metrics_history: Optional[dict[str, list]] = None,
-    eval_every: int = 10,
     optax_fn: Optional[Callable] = None,
     seed: int = 0,
-    cdpl_num_gen: int = 100
+    callback: Optional[BaseCallback] = None
 ):
     optax_fn = optax_fn or optax.adamw(learning_rate=0.005)
     optimizer = nnx.Optimizer(model, optax_fn, wrt=nnx.Param)
-
-    metrics = nnx.metrics.MultiMetric(
-        loss=nnx.metrics.Average('loss'),
-        free_energy=nnx.metrics.Average('free_energy')
-    )
+    callback = callback or BaseCallback()
+    records = callback.init_records()
 
     rng = np.random.default_rng(seed)
     num_batches = train_dataset.shape[0] // batch_size
@@ -217,12 +258,6 @@ def train_crbm(
 
     test_u = jax.device_put(test_dataset[:, :num_u])
     test_v = jax.device_put(test_dataset[:, num_u:])
-
-    if metrics_history is None:
-        metrics_history = {}
-
-    for key in ['train_loss', 'train_free_energy', 'test_loss', 'test_free_energy']:
-        metrics_history.setdefault(key, [])
 
     for iepoch in range(num_epochs):
         LOG.info('Starting epoch %d/%d', iepoch, num_epochs)
@@ -236,21 +271,75 @@ def train_crbm(
             LOG.debug('Batch %d/%d', ibatch, num_batches)
             end = start + batch_size
             u_batch, v_batch = samples_u[start:end], samples_v[start:end]
-
-            train_step(model, optimizer, metrics, u_batch, v_batch, cdpl_num_gen)
+            train_step(model, u_batch, v_batch, optimizer, callback)
             start = end
+            callback.train_eval(model, iepoch, ibatch, records)
 
-            if ibatch % eval_every == 0 or ibatch == num_batches - 1:
-                for metric, value in metrics.compute().items():
-                    metrics_history[f'train_{metric}'].append(float(value))
-                metrics.reset()
+        callback.test(model, test_u, test_v, iepoch, records)
 
-        eval_step(model, metrics, test_u, test_v, cdpl_num_gen)
-        for metric, value in metrics.compute().items():
-            metrics_history[f'test_{metric}'].append(float(value))
-        metrics.reset()
+    return records
 
-    for key, value in metrics_history.items():
-        metrics_history[key] = np.array(value)
 
-    return metrics_history
+@nnx.jit
+def loss_and_free_energy(model, u_batch, v_batch):
+    vhat_batch = model.percloss_states(u_batch)
+    loss = loss_fn(model, u_batch, v_batch, vhat_batch)
+    free_energy = jnp.mean(model.free_energy(u_batch, v_batch))
+    return loss, free_energy
+
+
+class DefaultCallback(BaseCallback):
+    """Default callback module for recording loss and free energy histories."""
+    def __init__(self, eval_every: int = 10):
+        self.metrics = nnx.metrics.MultiMetric(
+            loss=nnx.metrics.Average('loss'),
+            free_energy=nnx.metrics.Average('free_energy')
+        )
+        self.eval_every = eval_every
+
+    def init_records(self) -> dict[str, Any]:
+        return {key: [] for key in
+                ['train_loss', 'train_free_energy', 'test_loss', 'test_free_energy']}
+
+    def as_arrays(self, records: dict[str, list]):
+        for key, value in records.items():
+            records[key] = np.array(value)
+
+    @nnx.jit
+    def train_step(
+        self,
+        model: ConditionalRBM,
+        u_batch: jax.Array,
+        v_batch: jax.Array,
+        loss: jax.Array,
+        grads: jax.Array
+    ):
+        """Callback within train_step."""
+        free_energy = jnp.mean(model.free_energy(u_batch, v_batch))
+        self.metrics.update(loss=loss, free_energy=free_energy)
+
+    def train_eval(
+        self,
+        model: ConditionalRBM,
+        iepoch: int,
+        ibatch: int,
+        records: dict[str, Any]
+    ):
+        """Callback at evaluation during training."""
+        for metric, value in self.metrics.compute().items():
+            records[f'train_{metric}'].append(float(value))
+        self.metrics.reset()
+
+    def test(
+        self,
+        model: ConditionalRBM,
+        test_u: jax.Array,
+        test_v: jax.Array,
+        iepoch: int,
+        records: dict[str, Any]
+    ):
+        loss, free_energy = loss_and_free_energy(model, test_u, test_v)
+        self.metrics.update(loss=loss, free_energy=free_energy)
+        for metric, value in self.metrics.compute().items():
+            records[f'test_{metric}'].append(float(value))
+        self.metrics.reset()
