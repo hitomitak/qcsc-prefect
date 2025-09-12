@@ -11,7 +11,7 @@ def preprocess(
     shuffle: bool = True
 ):
     """Convert the counts dict to input data for correction learning."""
-    lattice = dual_lattice._primal
+    lattice = dual_lattice.primal
     matching = make_matching(lattice)
 
     if isinstance(counts, dict):
