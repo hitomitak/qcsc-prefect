@@ -44,12 +44,19 @@ class ConditionalRBM(nnx.Module):
     def load(filename: str) -> 'ConditionalRBM':
         with h5py.File(filename, 'r') as source:
             params = {key: data[()] for key, data in source['params'].items()}
-            rngs_state = {
-                key: {
-                    'count': state['count'][()],
-                    'key': jax.random.wrap_key_data(state['key'][()])
-                } for key, state in source['rngs'].items()
-            }
+            rngs_state = {}
+            for key, state in source['rngs'].items():
+                rngs_state[key] = {}
+                try:
+                    rngs_state[key]['count'] = state['count'][()]
+                except KeyError:
+                    LOG.error('Failed to load rngs/%s/count', key)
+                    rngs_state[key]['count'] = np.uint32(0)
+                try:
+                    rngs_state[key]['key'] = jax.random.wrap_key_data(state['key'][()])
+                except KeyError:
+                    LOG.error('Failed to load rngs/%s/count', key)
+                    rngs_state[key]['key'] = np.array([0, 0], dtype=np.uint32)
             therm_steps = source['therm_steps'][()]
             vhat_size = source['vhat_size'][()]
 
