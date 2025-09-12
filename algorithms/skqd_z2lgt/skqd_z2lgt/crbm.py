@@ -158,12 +158,6 @@ class ConditionalRBM(nnx.Module):
         num_v = batch_size * self.bias_v.shape[0]
         num_h = batch_size * self.bias_h.shape[0]
 
-        def generate_v_state(module, u_state, v_state, uniform):
-            ph = module.h_activation(u_state, v_state)
-            h_state = (uniform[:num_h].reshape(ph.shape) < ph).astype(np.uint8)
-            pv = module.v_activation(u_state, h_state)
-            return (uniform[num_h:].reshape(pv.shape) < pv).astype(np.uint8)
-
         if size is None:
             size = 1
             final_state_only = True
@@ -175,7 +169,10 @@ class ConditionalRBM(nnx.Module):
             module, u_state, v_state, uniform = val
             start = (num_h + num_v) * istep
             unif = jax.lax.dynamic_slice(uniform, [start], [num_h + num_v])
-            v_state = generate_v_state(module, u_state, v_state, unif)
+            ph = module.h_activation(u_state, v_state)
+            h_state = (unif[:num_h].reshape(ph.shape) < ph).astype(np.uint8)
+            pv = module.v_activation(u_state, h_state)
+            v_state = (unif[num_h:].reshape(pv.shape) < pv).astype(np.uint8)
             return module, u_state, v_state, uniform
 
         if final_state_only:
