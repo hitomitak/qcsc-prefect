@@ -3,6 +3,7 @@ from functools import partial
 import logging
 from typing import Optional
 import numpy as np
+import h5py
 import jax
 import jax.numpy as jnp
 from flax import nnx
@@ -23,6 +24,53 @@ class ConditionalRBM(nnx.Module):
         self.rngs = rngs
         self.therm_steps = 100
         self.vhat_size = 100
+
+    def save(self, filename: str):
+        params_state, rngs_state = map(nnx.pure, nnx.state(self, nnx.Param, ...))
+        with h5py.File(filename, 'w') as out:
+            params = out.create_group('params')
+            for key, value in params_state.items():
+                params.create_dataset(key, data=value)
+
+            rngs = out.create_group('rngs')
+            for key, state in rngs_state['rngs'].items():
+                group = rngs.create_group(key)
+                group.create_dataset('count', data=state['count'])
+                group.create_dataset('key', data=jax.random.key_data(state['key']))
+
+            out.create_dataset('therm_steps', data=self.therm_steps)
+            out.create_dataset('vhat_size', data=self.vhat_size)
+
+    @staticmethod
+    def load(filename: str) -> 'ConditionalRBM':
+        with h5py.File(filename, 'r') as source:
+            params = {key: data[()] for key, data in source['params'].items()}
+            rngs_state = {
+                key: {
+                    'count': state['count'][()],
+                    'key': jax.random.wrap_key_data(state['key'][()])
+                } for key, state in source['rngs'].items()
+            }
+            therm_steps = source['therm_steps'][()]
+            vhat_size = source['vhat_size'][()]
+
+        rngs = nnx.Rngs(**{key: state['key'] for key, state in rngs_state.items()})
+        for key, state in rngs_state.items():
+            getattr(rngs, key).count.value = state['count']
+
+        model = ConditionalRBM(
+            params['weights_vu'].shape[1],
+            params['bias_v'].shape[0],
+            params['bias_h'].shape[0],
+            rngs=rngs
+        )
+        for key, value in params.items():
+            getattr(model, key).value = value
+
+        model.therm_steps = therm_steps
+        model.vhat_size = vhat_size
+
+        return model
 
     @nnx.jit
     def energy(self, u_state: jax.Array, v_state: jax.Array, h_state: jax.Array) -> jax.Array:
