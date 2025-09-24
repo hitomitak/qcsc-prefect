@@ -3,10 +3,12 @@ from collections.abc import Iterable
 import logging
 import time
 import numpy as np
+from scipy.sparse.linalg import eigsh
 import jax
 import jax.numpy as jnp
 from jax.experimental.sparse import BCOO, bcoo_dot_general
 from qiskit.quantum_info import SparsePauliOp
+from qiskit_addon_sqd.qubit import sort_and_remove_duplicates, project_operator_to_subspace
 from skqd_z2lgt.jax_experimental_sparse_linalg import lobpcg_standard
 from skqd_z2lgt.pauli import to_bcoo
 
@@ -45,3 +47,18 @@ def ground_state_lobpcg(mat: BCOO) -> tuple[jax.Array, jax.Array]:
         args=(-mat,)
     )
     return -eigvals[0], eigvecs[:, 0]
+
+
+def qiskit_sqd(bitstrings, hamiltonian, jax_device_id=None):
+    bitstring_matrix = np.unique(bitstrings, axis=0)[:, ::-1].astype(bool)
+    if jax_device_id is None:
+        device = jax.default_device()
+    else:
+        device = jax.devices()[jax_device_id]
+
+    with jax.default_device(device):
+        bitstring_matrix = sort_and_remove_duplicates(bitstring_matrix)
+        ham_proj = project_operator_to_subspace(bitstring_matrix, hamiltonian)
+
+    evals, evecs = eigsh(ham_proj, k=1, which='SA')
+    return bitstring_matrix, ham_proj, evals[0], evecs[:, 0]
