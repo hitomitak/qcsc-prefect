@@ -213,6 +213,7 @@ async def sqd_2405_05068(
     parameters: Parameters,
     runner_name: str = "sqd-runner",
     solver_name: str = "sqd-solver",
+    option_name: str = "sampler_options",
     cache_compute_integrals: bool = False,
     cache_sampling: bool = False,
 ) -> float:
@@ -222,6 +223,7 @@ async def sqd_2405_05068(
         parameters: Workflow parameters.
         runner_name: Name of QuantumRunner block to load.
         solver_name: Name of DiceSHCISolverJob block to load.
+        option_name: Name of Variable storing sampler primitive options to load.
         cache_compute_integrals: Set True to cache compute_molecular_integrals task.
         cache_sampling: Set True to cache sample_bitstrings task.
 
@@ -245,6 +247,7 @@ async def sqd_2405_05068(
         circuit_params=parameters.circuit,
         elec_props=elec_props,
         runner_name=runner_name,
+        option_name=option_name,
     )
 
     # Convert BitArray into bitstring and probability arrays
@@ -433,6 +436,7 @@ async def sample_bitstrings(
     circuit_params: CircuitParameters,
     elec_props: ElectronicProperties,
     runner_name: str,
+    option_name: str,
 ) -> BitArray:
     """Sample bitstring with quantum computer.
 
@@ -440,6 +444,7 @@ async def sample_bitstrings(
         circuit_params: Flow parameters to construct ansatz quantum circuit.
         elec_props: Electronic properties of molecule to solver for.
         runner_name: Block name of QuantumRuntime to execute primitives on.
+        option_name: Name of Variable storing sampler primitive options to load.
 
     Returns:
         Sampled bitstrings representing determinants.
@@ -449,7 +454,7 @@ async def sample_bitstrings(
     try:
         # Run on a real hardware when credentials are found.
         runtime = await QuantumRuntime.load(runner_name)
-        options = await Variable.get("sampler_options")
+        options = await Variable.get(option_name)
     except ValueError:
         # Uniform sampling when runtime is not defined.
         logger.warning(
