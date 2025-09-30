@@ -5,6 +5,8 @@ import jax.numpy as jnp
 from jax.sharding import PartitionSpec, NamedSharding
 from qiskit.quantum_info import SparsePauliOp
 
+SHARD_MIN_NQ = 26
+
 
 def make_matvec(nq, zzops, zops, xops, npmod):
     def _matvec(x):
@@ -41,11 +43,11 @@ class IsingHamiltonian(LinearOperator):
         super().__init__(np.complex128, (2 ** nq,) * 2)
         if npmod is jnp:
             matvec_pre = make_matvec(nq, zzops, zops, xops, jnp)
-            if nq >= 26:
+            if nq >= SHARD_MIN_NQ:
                 mesh = jax.make_mesh((jax.device_count(),), ('dev',))
 
             def matvec_fn(x):
-                if nq >= 26:
+                if nq >= SHARD_MIN_NQ:
                     x = jax.device_put(x, NamedSharding(mesh, PartitionSpec('dev')))
                 else:
                     x = jnp.array(x)
