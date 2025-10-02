@@ -12,7 +12,7 @@ PAULI_ROW_INDICES = np.array([
     [1, 0],  # X
     [1, 0],  # Y
     [0, 1]  # Z
-], dtype=np.int64)
+], dtype=np.uint8)
 PAULI_ELEMENTS = np.array([
     [1., 1.],  # I
     [1., 1.],  # X
@@ -95,7 +95,7 @@ def rows_and_elements_all(pauli_string: jax.Array) -> jax.Array:
     # Can only work for num_qubits < 64 but practical limit for enumerating all rows is much lower
     rows = jnp.zeros((1,) * num_qubits, dtype=np.int64)
     elements = jnp.ones((1,) * num_qubits, dtype=np.complex128)
-    pauli_row_indices = jnp.array(PAULI_ROW_INDICES)
+    pauli_row_indices = jnp.array(PAULI_ROW_INDICES, dtype=np.uint64)
     pauli_elements = jnp.array(PAULI_ELEMENTS)
     for iq in range(num_qubits):
         ex_dim = list(range(num_qubits))
