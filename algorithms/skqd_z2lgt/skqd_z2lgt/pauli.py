@@ -4,6 +4,7 @@ from functools import partial
 import numpy as np
 import jax
 import jax.numpy as jnp
+from jax.sharding import PartitionSpec, NamedSharding
 from jax.experimental.sparse import BCOO
 from qiskit.quantum_info import SparsePauliOp
 
@@ -38,32 +39,41 @@ def to_bcoo(
         proj_dim = indices.shape[0]
 
     num_terms = len(op)
-    terms_per_device = int(np.ceil(num_terms / jax.device_count()).astype(int))
-    pad_to_length = jax.device_count() * terms_per_device
+    if num_terms >= jax.device_count():
+        num_dev = jax.device_count()
+        terms_per_device = int(np.ceil(num_terms / num_dev).astype(int))
+        pad_to_length = num_dev * terms_per_device
+    else:
+        num_dev = 1
+        terms_per_device = num_terms
+        pad_to_length = 0
+
     pauli_strings, op_coeffs = op_to_arrays(op, pad_to_length=pad_to_length)
     # Reshape for pmapping
-    pauli_strings = pauli_strings.reshape((jax.device_count(), terms_per_device, op.num_qubits))
+    pauli_strings = pauli_strings.reshape((num_dev, terms_per_device, op.num_qubits))
+    if num_dev > 1:
+        mesh = jax.make_mesh((jax.device_count(), 1), ('device', 'dum'))
+        pauli_strings = jax.device_put(pauli_strings, NamedSharding(mesh, PartitionSpec('device')))
+
     if indices is None:
-        rows, mat_elems = pv_rows_and_elements_all(pauli_strings)
+        rows, mat_elems = rows_and_elements_all_vmap_pmap(pauli_strings)
     else:
-        rows, mat_elems = pv_rows_and_elements(pauli_strings, indices)
+        packed_indices = jnp.packbits(indices, axis=1)
+        rows, mat_elems = rows_and_elements_scan_pmap(pauli_strings, indices, packed_indices)
 
     # Remove the device axis and truncate at the original number of op terms
-    rows = rows.reshape((-1, proj_dim))[:num_terms]
+    rows = rows.reshape((-1, proj_dim))[:num_terms].reshape(-1)
     cols = jnp.tile(jnp.arange(proj_dim), num_terms)
     data = (mat_elems.reshape((-1, proj_dim)) * op_coeffs[:, None])[:num_terms].reshape(-1)
 
-    if indices is None:
-        cols = jnp.tile(jnp.arange(proj_dim), num_terms)
-    else:
-        rows = rows.reshape(-1)
+    if indices is not None:
         filt = jnp.not_equal(rows, -1)
         data = data[filt]
         rows = rows[filt]
         cols = cols[filt]
 
-    indices = jnp.stack([rows, cols], axis=1)
-    return BCOO((data, indices), shape=(proj_dim, proj_dim))
+    coords = jnp.stack([rows, cols], axis=1)
+    return BCOO((data, coords), shape=(proj_dim, proj_dim))
 
 
 def op_to_arrays(
@@ -107,34 +117,74 @@ def rows_and_elements_all(pauli_string: jax.Array) -> jax.Array:
     return rows.reshape(-1), elements.reshape(-1)
 
 
-v_rows_and_elements_all = jax.jit(jax.vmap(rows_and_elements_all))
-pv_rows_and_elements_all = jax.pmap(v_rows_and_elements_all, axis_name='device')
+rows_and_elements_all_vmap = jax.jit(jax.vmap(rows_and_elements_all))
+rows_and_elements_all_vmap_pmap = jax.pmap(rows_and_elements_all_vmap, axis_name='device')
 
 
 @jax.jit
 def rows_and_elements(
     pauli_string: jax.Array,
     indices: jax.Array,
+    packed_indices: jax.Array
 ) -> tuple[jax.Array, jax.Array]:
     """Return the row numbers and matrix elements of the Pauli strings for the given columns."""
-    mapped, mat_elems = v_pauli_map(pauli_string, indices)
-    # mapped shape: [num_indices, num_qubits]
-    rows = v_bitstring_position(mapped, indices)
+    mat_elems = matrix_element_vmap(pauli_string, indices)
+
+    if pauli_string.shape[0] > 48:
+        position_fn = bitstring_position_scan
+    else:
+        position_fn = bitstring_position_vmap
+
+    # If pauli_string is all diagonal, mapped == indices
+    rows = jax.lax.cond(
+        jnp.all(jnp.equal(pauli_string % 3, 0)),
+        lambda: jnp.arange(indices.shape[0]),
+        lambda: position_fn(index_map_vmap(pauli_string, indices), packed_indices)
+    )
     return rows, mat_elems
 
 
-v_rows_and_elements = jax.jit(jax.vmap(rows_and_elements, in_axes=(0, None)))
-pv_rows_and_elements = jax.pmap(v_rows_and_elements, axis_name='device', in_axes=(0, None))
+@jax.jit
+def rows_and_elements_scan(
+    pauli_strings: jax.Array,
+    indices: jax.Array,
+    packed_indices: jax.Array
+) -> tuple[jax.Array, jax.Array]:
+    """Temporally vectorized rows_and_elements. Cannot vmap because of memory footprint."""
+    def body_fn(carry, pauli_string):
+        _indices, _packed_indices = carry
+        rows, mat_elems = rows_and_elements(pauli_string, _indices, _packed_indices)
+        return carry, (rows, mat_elems)
+
+    return jax.lax.scan(
+        body_fn, (indices, packed_indices), pauli_strings
+    )[1]
+
+
+rows_and_elements_scan_pmap = jax.pmap(rows_and_elements_scan, axis_name='device',
+                                       in_axes=(0, None, None))
 
 
 @jax.jit
 def bitstring_position(bitstring: jax.Array, pool: jax.Array) -> int:
-    matches = jnp.all(jnp.equal(bitstring[None, :], pool), axis=1)
+    packed_bitstring = jnp.packbits(bitstring)
+    matches = jnp.all(jnp.equal(packed_bitstring, pool), axis=1)
     idx = jnp.argmax(matches)
     return jax.lax.select(jnp.equal(idx, 0), jax.lax.select(matches[0], 0, -1), idx)
 
 
-v_bitstring_position = jax.jit(jax.vmap(bitstring_position, in_axes=(0, None)))
+@jax.jit
+def bitstring_position_scan(bitstrings: jax.Array, pool: jax.Array) -> jax.Array:
+    def body_fn(_pool, bitstring):
+        idx = bitstring_position(bitstring, _pool)
+        return _pool, idx
+
+    return jax.lax.scan(
+        body_fn, pool, bitstrings
+    )[1]
+
+
+bitstring_position_vmap = jax.jit(jax.vmap(bitstring_position, in_axes=(0, None)))
 
 
 @jax.jit
@@ -164,28 +214,45 @@ def reduce_rows_and_elements(
 
 
 @jax.jit
-def pauli_map(
+def index_map(
     pauli_string: jax.Array,
     index: jax.Array
-) -> tuple[jax.Array, complex]:
-    """Return the row index and matrix element of the nonzero entry in the Pauli matrix for the
-    given column.
+) -> jax.Array:
+    """Return the row index of the nonzero entry in the Pauli matrix for the given column.
 
     Args:
-        index: A binary column index.
         pauli_string: Pauli string represented as an array of {0,1,2,3} indices.
+        index: A binary column index.
 
     Returns:
-        The row index and the matrix element of the nonzero entry of pauli_string at column index.
+        The row index of the nonzero entry of pauli_string at column index.
     """
     # Mapped index
-    row_index = jnp.array(PAULI_ROW_INDICES)[pauli_string, index]
+    return jnp.array(PAULI_ROW_INDICES)[pauli_string, index]
+
+
+index_map_vmap = jax.jit(jax.vmap(index_map, in_axes=(None, 0)))
+
+
+@jax.jit
+def matrix_element(
+    pauli_string: jax.Array,
+    index: jax.Array
+) -> jax.Array:
+    """Return the matrix element of the nonzero entry in the Pauli matrix for the given column.
+
+    Args:
+        pauli_string: Pauli string represented as an array of {0,1,2,3} indices.
+        index: A binary column index.
+
+    Returns:
+        The matrix element of the nonzero entry of pauli_string at column index.
+    """
     # Matrix element product
-    mat_elem = jnp.prod(jnp.array(PAULI_ELEMENTS)[pauli_string, index])
-    return row_index, mat_elem
+    return jnp.prod(jnp.array(PAULI_ELEMENTS)[pauli_string, index])
 
 
-v_pauli_map = jax.jit(jax.vmap(pauli_map, in_axes=(None, 0)))
+matrix_element_vmap = jax.jit(jax.vmap(matrix_element, in_axes=(None, 0)))
 
 
 @jax.jit
