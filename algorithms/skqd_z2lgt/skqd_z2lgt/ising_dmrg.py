@@ -130,7 +130,7 @@ def get_mps_coverage(
     with tempfile.NamedTemporaryFile() as tfile:
         out_filename = tfile.name
 
-    args = [filename, samples_filename, f'{icp}', f'{ndt}', f'{nstep}', f'{nexp}', out_filename]
+    args = [filename, samples_filename, f'c{icp}/dt{ndt}/step{nstep + 1}/exp{nexp}', out_filename]
 
     proc = subprocess.run(julia_bin + [program] + args,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
@@ -142,8 +142,8 @@ def get_mps_coverage(
         sys.stderr.flush()
 
     with h5py.File(out_filename, 'r') as source:
-        probs = source['probs'][()]
+        prob = source['prob'][()]
 
     os.unlink(out_filename)
 
-    return probs
+    return prob
