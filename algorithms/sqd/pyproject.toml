@@ -21,10 +21,12 @@ dependencies = [
     "prefect==3.4.10",
     "pydantic_numpy",
     "prefect-dice",
+    "qcsc_workflow_utility",
 ]
 
 [tool.uv.sources]
 prefect-dice = { workspace = true }
+qcsc_workflow_utility = { workspace = true }
 
 [tool.setuptools]
 packages = ["sqd_dice"]

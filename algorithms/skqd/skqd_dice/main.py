@@ -1,21 +1,25 @@
 """Definition of SKQD workflow."""
 
 import asyncio
-
+import os
+import pathlib
 import ffsim
 import numpy as np
-import pyscf
-import pyscf.mcscf
 from ffsim.qiskit import PRE_INIT, jordan_wigner
-from ffsim import MolecularHamiltonian, fermion_operator
 from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_table_artifact
+from prefect.cache_policies import NO_CACHE, INPUTS
 from prefect.variables import Variable
 from prefect_qiskit.runtime import QuantumRuntime
 from pydantic import BaseModel, Field
 from qiskit import QuantumCircuit, QuantumRegister
+from qiskit.synthesis import LieTrotter
+from qiskit.circuit.library import PauliEvolutionGate
+from qiskit.transpiler import Target
+from ffsim import MolecularHamiltonian, fermion_operator
 from qiskit.passmanager import ConditionalController
-from qiskit.transpiler import Target, generate_preset_pass_manager
+from qiskit.primitives.containers import BitArray
+from qiskit.transpiler import generate_preset_pass_manager
 from qiskit.transpiler.passes import (
     ApplyLayout,
     BarrierBeforeFinalMeasurements,
@@ -26,9 +30,6 @@ from qiskit.transpiler.passes import (
     SabreLayout,
 )
 from qiskit.transpiler.passmanager import PassManager
-from qiskit.primitives import BitArray
-from qiskit.circuit.library import PauliEvolutionGate
-from qiskit.synthesis import LieTrotter
 from qiskit_addon_sqd.configuration_recovery import recover_configurations
 from qiskit_addon_sqd.counts import bit_array_to_arrays, generate_bit_array_uniform
 from qiskit_addon_sqd.fermion import SCIResult
@@ -36,74 +37,68 @@ from qiskit_ibm_runtime.transpiler.passes import FoldRzzAngle
 
 from prefect_dice import DiceSHCISolverJob
 
-from .subsample import postselect, subsample
+from skqd_dice.subsample import postselect, subsample
+
+from qcsc_workflow_utility import (
+    ElectronicProperties,
+    compute_molecular_integrals_from_geometry,
+    compute_molecular_integrals_from_fcidump,
+)
 
 
-class Parameters(BaseModel):
-    """Workflow parameters to configure skqd_2501_09702 workflow."""
+class MoleculeGeometry(BaseModel):
+    """Molecule definition by geometory and basis."""
 
     atom: str = Field(
         description="Definition for molecule structure.",
         title="Atom",
-    )
-    spin_sq: float = Field(
-        default=0.0,
-        description="Target value for the total spin squared for the ground state.",
-        title="Total Spin Squared",
     )
     basis: str = Field(
         default="6-31g",
         description="Name of basis set.",
         title="Basis Set",
     )
-    n_frozen: int = Field(
-        default=0,
-        description="Number of non-excitation orbitals.",
-        title="Frozen Orbitals",
-        ge=0,
-    )
     symmetry: str | bool = Field(
         default=False,
         description="Whether to use symmetry, otherwise string of point group name.",
         title="Symmetry",
     )
-    symmetrize_spin: bool = Field(
-        default=True,
-        description="Whether to always merge spin-alpha and spin-beta CI strings into a single list.",
-        title="Symmetrize Spin",
+    spin_sq: float = Field(
+        default=0.0,
+        description="Target value for the total spin squared for the ground state.",
+        title="Total Spin Squared",
     )
-    skqd_subspace_dim: int = Field(
-        description="SKQD: Dimension d of subsampled bitstrings for diagonalization.",
-        title="Subspace Dimension",
-        ge=1,
+
+
+class FCIDumpFile(BaseModel):
+    """Molecule definition by FCIDump file."""
+
+    fcidump_file: str = Field(
+        default="",
+        description=(
+            "Location of FCIDump file storing 1-electron and 2-electron integrals. "
+            "We assume these are precomputed in the MO basis."
+        ),
+        title="FCIDump File",
     )
-    skqd_num_batches: int = Field(
-        description="SKQD: Number of batches of configurations used by the different calls to the eigenstate solver.",
-        title="Batch Number",
-        ge=1,
+    spin_sq: float = Field(
+        default=0.0,
+        description="Target value for the total spin squared for the ground state.",
+        title="Total Spin Squared",
     )
-    skqd_max_iterations: int = Field(
-        description="SKQD: Number of self-consistent configuration recovery iterations.",
-        title="Max Iteration",
-        ge=1,
-    )
-    krylov_dim: int = Field(
-        default=5,
-        desciption="Size of Krylov subspace",
-        title="Krylov Dimension",
-        ge=1,
-    )
-    dt: float = Field(
-        default=0.15,
-        description="SKQD: Time Interval for Trotterization.",
-        title="Time Interval",
-        ge=0,
-    )
-    n_trotter_steps: int = Field(
-        default=6,
-        description="SKQD: Number of Trotter steps",
-        title="Trotter Steps",
-        ge=1,
+
+
+class CircuitParameters(BaseModel):
+    """Configuration for circuit."""
+
+    use_reset_mitigation: bool = Field(
+        default=False,
+        description=(
+            "Use reset mitigation scheme that post-selects outcomes with non-ground initial state. "
+            "This post-selection reduces the net shot number and its retention rate depends on "
+            "the quality of hardware reset instruction."
+        ),
+        title="Reset Mitigation",
     )
     optimization_level: int = Field(
         default=3,
@@ -125,10 +120,70 @@ class Parameters(BaseModel):
         ge=1,
     )
     sabre_layout_trials: int = Field(
-        default=10,
+        default=10000,
         description="Transpile: The number of random initial layouts tested, selecting the one that minimizes SWAP gates.",
         title="SABRE Layout Trials",
         ge=1,
+    )
+
+
+class SKQDParameters(BaseModel):
+    """Configuration for SKQD algorithm execution."""
+
+    n_trotter_steps: int = Field(
+        default=2,
+        description="Number of Trotter steps.",
+        title="Trotter Steps",
+        ge=1,
+    )
+    dt: float = Field(
+        default=0.15,
+        description="Time Interval for Trotterization.",
+        title="Time Interval",
+        ge=0,
+    )
+    krylov_dim: int = Field(
+        default=5,
+        desciption="Size of Krylov subspace",
+        title="Krylov Dimension",
+        ge=1,
+    )
+    subspace_dim: int = Field(
+        description="Dimension d of subsampled bitstrings for diagonalization.",
+        title="Subspace Dimension",
+        ge=1,
+    )
+    num_batches: int = Field(
+        description="Number of batches of configurations used by the different calls to the eigenstate solver.",
+        title="Batch Number",
+        ge=1,
+    )
+    max_iterations: int = Field(
+        description="Number of self-consistent configuration recovery iterations.",
+        title="Max Iteration",
+        ge=1,
+    )
+
+
+class Parameters(BaseModel):
+    """Workflow parameters to configure skqd_2501_09702 workflow."""
+
+    molecule: MoleculeGeometry | FCIDumpFile = Field(
+        default_factory=MoleculeGeometry,
+        description="PySCF definition of the molecule to solve for.",
+        title="Molecule",
+    )
+
+    circuit: CircuitParameters = Field(
+        default_factory=CircuitParameters,
+        description="Ansatz circuit definition and transpiler settings.",
+        title="Circuit",
+    )
+
+    skqd: SKQDParameters = Field(
+        default_factory=SKQDParameters,
+        description="Control of SKQD algorithm execution and solver parameters.",
+        title="SKQD",
     )
 
 
@@ -137,105 +192,105 @@ async def skqd_2501_09702(
     parameters: Parameters,
     runner_name: str = "skqd-runner",
     solver_name: str = "skqd-solver",
+    option_name: str = "sampler_options",
+    cache_compute_integrals: bool = False,
+    cache_sampling: bool = False,
 ):
-    """SKQD Experiment from arXiv:2501.09702."""
+    """SKQD Experiment from arXiv:2501.09702.
+
+    Args:
+        parameters: Workflow parameters.
+        runner_name: Name of QuantumRunner block to load.
+        solver_name: Name of DiceSHCISolverJob block to load.
+        option_name: Name of Variable storing sampler primitive options to load.
+        cache_compute_integrals: Set True to cache compute_molecular_integrals task.
+        cache_sampling: Set True to cache sample_bitstrings task.
+
+    Returns:
+        Minimum ground state energy solved by SKQD.
+    """
     rng = np.random.default_rng(24)
     logger = get_run_logger()
 
     # Compute molecular integrals
-    hcore, eri, t2, nuclear_repulsion_energy, norb, nelec = compute_molecular_integrals(
-        parameters
+    if isinstance(parameters.molecule, MoleculeGeometry):
+        elec_props = compute_molecular_integrals_from_geometry.with_options(
+            cache_policy=INPUTS if cache_compute_integrals else NO_CACHE,
+        )(
+            atom=parameters.molecule.atom,
+            basis=parameters.molecule.basis,
+            symmetry=parameters.molecule.symmetry,
+            spin_sq=parameters.molecule.spin_sq,
+        )
+    elif isinstance(parameters.molecule, FCIDumpFile):
+        elec_props = compute_molecular_integrals_from_fcidump.with_options(
+            cache_policy=INPUTS if cache_compute_integrals else NO_CACHE,
+        )(
+            fcidump_file=parameters.molecule.fcidump_file,
+            spin_sq=parameters.molecule.spin_sq,
+        )
+    else:
+        raise TypeError("Unsupported molecule type")
+
+    # sample bitstrings
+    bit_array = await sample_bitstrings.with_options(
+        cache_policy=INPUTS if cache_sampling else NO_CACHE,
+    )(
+        parameters=parameters,
+        elec_props=elec_props,
+        runner_name=runner_name,
+        option_name=option_name,
     )
 
-    # Sample bitstrings
-    try:
-        # Run on a real hardware when credentials are found.
-        runtime = await QuantumRuntime.load(runner_name)
-        options = await Variable.get("sampler_options")
-
-        # ansatz_circuit = create_ansatz_circuits(
-        #     parameters=parameters,
-        #     one_body_tensor=hcore,
-        #     num_electrons=nelec,
-        #     t2=t2,
-        # )
-        trotter_circuits = create_trotter_circuits(
-            parameters=parameters,
-            one_body_tensor=hcore,
-            two_body_tensor=eri,
-            num_electrons=nelec,
-        )
-        isa_circuits = transpile_circuits(
-            circuits=trotter_circuits,
-            target=await runtime.get_target(),
-            parameters=parameters,
-            seed=rng,
-        )
-        pub_results = await runtime.sampler(
-            sampler_pubs=[(isa_circuit,) for isa_circuit in isa_circuits],
-            options=options,
-        )
-        # bit_array = pub_results[0].data.meas
-
-        # Combine the counts from the individual Trotter circuits
-        bit_array = BitArray.concatenate_shots(
-            [result.data.meas for result in pub_results]
-        )
-
-    except ValueError:
-        # Uniform sampling when runtime is not defined.
-        logger.warning(
-            f"Runner block {runner_name} is not defined. "
-            "Falling back into random uniform sampling."
-        )
-        bit_array = generate_bit_array_uniform(10_000, norb * 2, rand_seed=rng)
-
-    # Convert a counts dictionary into bitstring and probability arrays
+    # Convert BitArray into bitstring and probability arrays
     raw_bitstrings, raw_probs = bit_array_to_arrays(bit_array)
-    n_alpha, n_beta = nelec
+    n_alpha, n_beta = elec_props.num_electrons
 
     # Run configuration recovery loop
     sci_solver = await DiceSHCISolverJob.load(solver_name)
     skqd_artifact = []
-    current_occupancies = None
+    current_occupancies = elec_props.initial_occupancy
     best_result = None
-    for round_idx in range(parameters.skqd_max_iterations):
-        if current_occupancies is None:
-            bitstrings, probs = raw_bitstrings, raw_probs
-        else:
-            bitstrings, probs = recover_configurations(
-                raw_bitstrings,
-                raw_probs,
-                current_occupancies,
-                n_alpha,
-                n_beta,
-                rand_seed=rng,
-            )
-        bitstrings, probs = postselect(
+    for round_idx in range(parameters.skqd.max_iterations):
+        bitstrings, probs = recover_configurations(
+            raw_bitstrings,
+            raw_probs,
+            current_occupancies,
+            n_alpha,
+            n_beta,
+            rand_seed=rng,
+        )
+        bitstrings_post, probs_post = postselect(
             bitstring_matrix=bitstrings,
             probabilities=probs,
             hamming_right=n_alpha,
             hamming_left=n_beta,
         )
+        logger.info(f"Number of post-selected bitstrings: {len(bitstrings_post)}")
+        if len(bitstrings_post) == 0:
+            raise RuntimeError(
+                "The input bit array did not contain any valid bitstrings. "
+                "Pass a bit array that contains at least one valid bitstring."
+            )
         # Convert bitstrings to CI strings and diagonalize
         coros = []
         subspace_dims = []
         for ci_strings in subsample(
-            bitstring_matrix=bitstrings,
-            probabilities=probs,
-            subspace_dim=parameters.skqd_subspace_dim,
-            num_batches=parameters.skqd_num_batches,
+            bitstring_matrix=bitstrings_post,
+            probabilities=probs_post,
+            subspace_dim=parameters.skqd.subspace_dim,
+            num_batches=parameters.skqd.num_batches,
             rng=rng,
-            open_shell=not parameters.symmetrize_spin,
+            open_shell=elec_props.open_shell,
         ):
             subspace_dims.append(int(len(ci_strings[0]) * len(ci_strings[1])))
             coro = sci_solver.run(
                 ci_strings=ci_strings,
-                one_body_tensor=hcore,
-                two_body_tensor=eri,
-                norb=norb,
-                nelec=nelec,
-                spin_sq=parameters.spin_sq,
+                one_body_tensor=elec_props.one_body_tensor,
+                two_body_tensor=elec_props.two_body_tensor,
+                norb=elec_props.num_orbitals,
+                nelec=elec_props.num_electrons,
+                spin_sq=elec_props.spin_sq,
             )
             coros.append(coro)
         results: list[SCIResult] = await asyncio.gather(*coros)
@@ -250,12 +305,12 @@ async def skqd_2501_09702(
             new_record = dict(
                 round=int(round_idx),
                 subspace=int(subspace_idx),
-                energy=float(result.energy + nuclear_repulsion_energy),
+                energy=float(result.energy + elec_props.nuclear_repulsion_energy),
                 dimension=subspace_dims[subspace_idx],
             )
             skqd_artifact.append(new_record)
         logger.info(
-            f"Best energy in SKQD iteration {round_idx}: {best_result_in_batch.energy + nuclear_repulsion_energy} Ha."
+            f"Best energy in SKQD iteration {round_idx}: {best_result_in_batch.energy + elec_props.nuclear_repulsion_energy} Ha."
         )
 
     # Upload artifact
@@ -263,78 +318,21 @@ async def skqd_2501_09702(
         table=skqd_artifact,
         key="skqd-configuration-recovery",
     )
-    return best_result.energy + nuclear_repulsion_energy
-
-
-@task
-def compute_molecular_integrals(
-    parametrers: Parameters,
-) -> tuple[np.ndarray, np.ndarray, float, int, tuple[int, int]]:
-    """
-    Compute molecular property using the classical method.
-
-    This function computes molecular integrals and prepares the necessary components for further quantum chemical calculations.
-
-    Parameters:
-    parametrers (Parameters): An object containing molecule specifications such as atom, basis, symmetry, n_frozen, etc.
-
-    Returns:
-    tuple: A tuple containing:
-        - hcore (np.ndarray): One-electron core Hamiltonian matrix.
-            - Shape: (n_orb, n_orb) where n_orb is the number of active orbitals.
-        - eri (np.ndarray): Two-electron integral matrix.
-            - Shape: (n_orb, n_orb, n_orb, n_orb)
-        - ccsd.t2 (float): Amplitudes for the CCSD t2 equation.
-        - nuclear_repulsion_energy (int): Nuclear repulsion energy of the molecule.
-        - num_orbitals (int): Number of active orbitals.
-        - electron_count (tuple[int, int]): Number of alpha and beta electrons.
-    """
-    # Specify molecule properties
-    mol = pyscf.gto.Mole()
-    mol.build(
-        atom=parametrers.atom,
-        basis=parametrers.basis,
-        symmetry=parametrers.symmetry,
-    )
-    # Define active space
-    active_space = range(parametrers.n_frozen, mol.nao_nr())
-    # Get molecular integrals
-    scf = pyscf.scf.RHF(mol).run()
-    num_orbitals = len(active_space)
-    n_electrons = int(sum(scf.mo_occ[active_space]))
-    num_elec_a = (n_electrons + mol.spin) // 2
-    num_elec_b = (n_electrons - mol.spin) // 2
-    cas = pyscf.mcscf.CASCI(scf, num_orbitals, (num_elec_a, num_elec_b))
-    mo = cas.sort_mo(active_space, base=0)
-    hcore, nuclear_repulsion_energy = cas.get_h1cas(mo)
-    eri = pyscf.ao2mo.restore(1, cas.get_h2cas(mo), num_orbitals)
-    # Get CCSD t2 amplitudes for initializing the ansatz
-    ccsd = pyscf.cc.CCSD(
-        scf,
-        frozen=[i for i in range(mol.nao_nr()) if i not in active_space],
-    ).run()
-
-    return (
-        hcore,
-        eri,
-        ccsd.t2,
-        nuclear_repulsion_energy,
-        num_orbitals,
-        (num_elec_a, num_elec_b),
-    )
+    return best_result.energy + elec_props.nuclear_repulsion_energy
 
 
 @task
 def create_trotter_circuits(
-    parameters: Parameters,
-    one_body_tensor: np.ndarray,
-    two_body_tensor: np.ndarray,
-    num_electrons: tuple[int, int],
-) -> QuantumCircuit:
+    skqd_params: SKQDParameters,
+    elec_props: ElectronicProperties,
+) -> list[QuantumCircuit]:
     """Create Trotterized circuit.
     See: https://quantum.cloud.ibm.com/learning/en/courses/quantum-diagonalization-algorithms/skqd#1-map-problem-to-quantum-circuits-and-operators
     """
-    num_orbitals = one_body_tensor.shape[0]
+    num_orbitals = elec_props.num_orbitals
+    one_body_tensor = elec_props.one_body_tensor
+    two_body_tensor = elec_props.two_body_tensor
+    num_electrons = elec_props.num_electrons
     logger = get_run_logger()
 
     qreg = QuantumRegister(2 * num_orbitals, name="q")
@@ -362,14 +360,14 @@ def create_trotter_circuits(
     # `U` operator
     evol_gate = PauliEvolutionGate(
         H_op,
-        time=(parameters.dt / parameters.n_trotter_steps),
-        synthesis=LieTrotter(reps=parameters.n_trotter_steps),
+        time=(skqd_params.dt / skqd_params.n_trotter_steps),
+        synthesis=LieTrotter(reps=skqd_params.n_trotter_steps),
     )
     qc_evol = QuantumCircuit(qreg)
     qc_evol.append(evol_gate, qargs=qreg)
 
     circuits = []
-    for rep in range(parameters.krylov_dim):
+    for rep in range(skqd_params.krylov_dim):
         circ = qc_state_prep.copy()
 
         # Repeating the `U` operator to implement U^0, U^1, U^2, and so on, for power Krylov space
@@ -394,9 +392,9 @@ def create_trotter_circuits(
 def transpile_circuits(
     circuits: list[QuantumCircuit],
     target: Target,
-    parameters: Parameters,
+    circuit_params: CircuitParameters,
     seed: np.random.Generator,
-) -> QuantumCircuit:
+) -> list[QuantumCircuit]:
     """Custom transpiler with massive layout search."""
     logger = get_run_logger()
 
@@ -406,7 +404,7 @@ def transpile_circuits(
 
     # Define a custom pass manager
     passmanager = generate_preset_pass_manager(
-        optimization_level=parameters.optimization_level,
+        optimization_level=circuit_params.optimization_level,
         seed_transpiler=seed,
         target=target,
     )
@@ -419,9 +417,9 @@ def transpile_circuits(
             SabreLayout(
                 coupling_map=coupling_map,
                 seed=seed,
-                max_iterations=parameters.sabre_max_iterations,
-                layout_trials=parameters.sabre_layout_trials,
-                swap_trials=parameters.sabre_swap_trials,
+                max_iterations=circuit_params.sabre_max_iterations,
+                layout_trials=circuit_params.sabre_layout_trials,
+                swap_trials=circuit_params.sabre_swap_trials,
             ),
             ConditionalController(
                 tasks=[
@@ -443,6 +441,7 @@ def transpile_circuits(
         )
 
     # Transpile
+    logger.info("Transpiling ansatz circuit...")
     isa_circuits = []
     for rep, circuit in enumerate(circuits):
         isa_circuit = passmanager.run(circuit)
@@ -461,11 +460,95 @@ def transpile_circuits(
     return isa_circuits
 
 
+@task(
+    persist_result=True,
+    result_serializer="compressed/pickle",
+)
+async def sample_bitstrings(
+    parameters: Parameters,
+    elec_props: ElectronicProperties,
+    runner_name: str,
+    option_name: str,
+) -> BitArray:
+    """Sample bitstring with quantum computer.
+
+    Args:
+        parameters: Workflow parameters including circuit and SKQD configuration.
+        elec_props: Electronic properties of molecule to solver for.
+        runner_name: Block name of QuantumRuntime to execute primitives on.
+        option_name: Name of Variable storing sampler primitive options to load.
+
+    Returns:
+        Sampled bitstrings representing determinants.
+    """
+    logger = get_run_logger()
+    rng = np.random.default_rng(24)
+
+    try:
+        # Run on a real hardware when credentials are found.
+        runtime = await QuantumRuntime.load(runner_name)
+        options = await Variable.get(option_name)
+
+        # Create Trotter circuits
+        trotter_circuits = create_trotter_circuits(
+            skqd_params=parameters.skqd,
+            elec_props=elec_props,
+        )
+
+        # Transpile
+        target = await runtime.get_target()
+        isa_circuits = transpile_circuits(
+            circuits=trotter_circuits,
+            target=target,
+            circuit_params=parameters.circuit,
+            seed=rng,
+        )
+
+        # Run primitive
+        pub_results = await runtime.sampler(
+            sampler_pubs=[(isa_circuit,) for isa_circuit in isa_circuits],
+            options=options,
+        )
+
+        # Post-process bitstrings
+        bit_arrays = []
+        for result in pub_results:
+            meas_bits = result.data.meas
+            if parameters.circuit.use_reset_mitigation:
+                test_bits = result.data.test
+                bit_array = meas_bits.get_bitstrings(test_bits.bitcount() == 0)
+                bit_array = BitArray.from_samples(
+                    bit_array, num_bits=meas_bits.num_bits
+                )
+                logger.info(
+                    "Reset mitigation result:\n"
+                    f"  Before: {meas_bits.num_shots} bitstrings\n"
+                    f"  After: {bit_array.num_shots} bitstrings\n"
+                    f"  Retention rate: {bit_array.num_shots / meas_bits.num_shots}\n"
+                )
+            else:
+                bit_array = meas_bits
+            bit_arrays.append(bit_array)
+
+        # Combine the counts from the individual Trotter circuits
+        bit_array = BitArray.concatenate_shots(bit_arrays)
+
+    except ValueError:
+        # Uniform sampling when runtime is not defined.
+        logger.warning(
+            f"QuantumRuntime block '{runner_name}' is not defined. "
+            "Falling back into random uniform sampling."
+        )
+        return generate_bit_array_uniform(
+            100_000,
+            elec_props.num_orbitals * 2,
+        )
+
+    return bit_array
+
+
 def deploy():
     """Deploy workflow with a local worker."""
-    import os
-    import pathlib
-
     # Prefect deploys with relative path.
     # Workflow is now installed in site-packages.
     os.chdir(pathlib.Path(__file__).parent)
