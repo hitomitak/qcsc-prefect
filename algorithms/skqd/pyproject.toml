@@ -19,10 +19,12 @@ dependencies = [
     "prefect-qiskit==0.2.0",
     "prefect==3.4.10",
     "prefect-dice",
+    "qcsc_workflow_utility",
 ]
 
 [tool.uv.sources]
 prefect-dice = { workspace = true }
+qcsc_workflow_utility = { workspace = true }
 
 [tool.setuptools]
 packages = ["skqd_dice"]
