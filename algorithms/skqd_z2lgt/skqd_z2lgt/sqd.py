@@ -27,10 +27,8 @@ def sqd(
     states: np.ndarray,
     jax_device_id: Optional[int] = None
 ) -> tuple[np.ndarray, csr_array, float, np.ndarray]:
-    LOG.info('%d configurations', states.shape[0])
-
     if jax_device_id is None:
-        device = jax.default_device()
+        device = None
     else:
         device = jax.devices()[jax_device_id]
 
@@ -38,19 +36,20 @@ def sqd(
         start = time.time()
         states = uniquify_and_sort_states(states, hamiltonian.num_qubits)
         hproj = to_bcoo(hamiltonian, states)
-        LOG.info('%f seconds to project', time.time() - start)
+        LOG.info('%f seconds to project onto %d-dim subspace', time.time() - start, states.shape[0])
         start = time.time()
         eigval, eigvec = ground_state_lobpcg(hproj)
         LOG.info('%f seconds to diagonalize', time.time() - start)
-        filt = np.logical_not(np.isclose(hproj.data, 0.))
-        coo = coo_array(
-            (
-                hproj.data[filt],
-                (hproj.indices[filt, 0], hproj.indices[filt, 1])
-            ),
-            shape=hproj.shape
-        )
-        ham_proj = csr_array(coo)
+
+    filt = np.logical_not(np.isclose(hproj.data, 0.))
+    coo = coo_array(
+        (
+            hproj.data[filt],
+            (hproj.indices[filt, 0], hproj.indices[filt, 1])
+        ),
+        shape=hproj.shape
+    )
+    ham_proj = csr_array(coo)
 
     return np.array(states), ham_proj, eigval, eigvec
 
@@ -131,7 +130,7 @@ def qiskit_sqd(
     jax_device_id=None
 ) -> tuple[np.ndarray, csr_array, float, np.ndarray]:
     if jax_device_id is None:
-        device = jax.default_device()
+        device = None
     else:
         device = jax.devices()[jax_device_id]
 
@@ -140,7 +139,8 @@ def qiskit_sqd(
         start = time.time()
         bitstring_matrix = sort_and_remove_duplicates(bitstring_matrix)
         ham_proj = project_operator_to_subspace(bitstring_matrix, hamiltonian)
-        LOG.info('%f seconds to project', time.time() - start)
+        LOG.info('%f seconds to project onto %d-dim subspace',
+                 time.time() - start, bitstring_matrix.shape[0])
 
     start = time.time()
     evals, evecs = eigsh(ham_proj, k=1, which='SA')
