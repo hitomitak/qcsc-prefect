@@ -35,8 +35,10 @@ def sqd(
     with jax.default_device(device):
         start = time.time()
         states = uniquify_and_sort_states(states, hamiltonian.num_qubits)
+        LOG.info('%f seconds to sort %d bitstrings', time.time() - start, states.shape[0])
+        start = time.time()
         hproj = to_bcoo(hamiltonian, states)
-        LOG.info('%f seconds to project onto %d-dim subspace', time.time() - start, states.shape[0])
+        LOG.info('%f seconds to project the Hamiltonian onto subspace', time.time() - start)
         start = time.time()
         eigval, eigvec = ground_state_lobpcg(hproj)
         LOG.info('%f seconds to diagonalize', time.time() - start)
@@ -55,15 +57,15 @@ def sqd(
 
 
 def uniquify_and_sort_states(states: np.ndarray, num_qubits: Optional[int] = None) -> jax.Array:
-    states = np.unique(states, axis=0)
+    states = jnp.unique(states, axis=0)
     if states.ndim == 1:
-        states = np.sort(states)
+        states = jnp.sort(states)
         # Convert integer indices to binary
-        states = (states[:, None] >> np.arange(num_qubits)[None, ::-1]) % 2
+        states = (states[:, None] >> jnp.arange(num_qubits)[None, ::-1]) % 2
     else:
-        indices = np.lexsort(states.T[::-1])
+        indices = jnp.lexsort(states.T[::-1])
         states = states[indices]
-    return jnp.array(states, dtype=np.uint8)
+    return states.astype(np.uint8)
 
 
 def to_bcoo(
@@ -93,7 +95,7 @@ def to_bcoo(
 
     rows, signs, imaginary = multi_pauli_map(pauli_strings, states)
 
-    # Remove the device axis and truncate at the original number of op terms
+    # Truncate at the original number of op terms
     subspace_dim = rows.shape[-1]
     rows = rows[:num_terms].reshape(-1)
     cols = jnp.tile(jnp.arange(subspace_dim), num_terms)
