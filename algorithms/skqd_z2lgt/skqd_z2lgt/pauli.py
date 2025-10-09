@@ -5,64 +5,7 @@ from functools import partial
 import numpy as np
 import jax
 import jax.numpy as jnp
-from jax.experimental.sparse import BCOO
 from qiskit.quantum_info import SparsePauliOp
-
-
-def to_bcoo(
-    op: SparsePauliOp,
-    states: Optional[np.ndarray] = None,
-    pmap: bool = False
-) -> BCOO:
-    """Convert a SparsePauliOp to a sparse (COO) array, with optional subspace projection.
-
-    Args:
-        op: Sum of Pauli strings.
-        states: List of bitstrings with shape [subspace_dim, num_qubits] or an integer array of
-            indices of the computational basis in the full Hilbert space.
-
-    Returns:
-        A COO array encoding the op projected onto the subspace.
-    """
-    if states is not None:
-        states = np.unique(states, axis=0)
-        if states.ndim == 1:
-            states = np.sort(states)
-            # Convert integer indices to binary
-            states = (states[:, None] >> np.arange(op.num_qubits)[None, ::-1]) % 2
-        else:
-            indices = np.lexsort(states.T[::-1])
-            states = states[indices]
-        states = jnp.array(states, dtype=np.uint8)
-
-    num_terms = len(op)
-    if pmap:
-        num_dev = jax.device_count()
-        terms_per_device = int(np.ceil(num_terms / num_dev).astype(int))
-        pad_to_length = num_dev * terms_per_device
-        pauli_strings, op_coeffs = op_to_arrays(op, pad_to_length=pad_to_length)
-        pauli_strings = pauli_strings.reshape((num_dev, terms_per_device, op.num_qubits))
-    else:
-        pauli_strings, op_coeffs = op_to_arrays(op)
-
-    rows, signs, imaginary = multi_pauli_map(pauli_strings, states)
-
-    # Remove the device axis and truncate at the original number of op terms
-    subspace_dim = rows.shape[-1]
-    rows = rows[:num_terms].reshape(-1)
-    cols = jnp.tile(jnp.arange(subspace_dim), num_terms)
-    op_coeffs *= jnp.array([1., 1.j])[imaginary]
-    data = op_coeffs[:, None] * (1. - 2. * signs)
-    data = data[:num_terms].reshape(-1)
-
-    if states is not None:
-        filt = jnp.not_equal(rows, -1)
-        data = data[filt]
-        rows = rows[filt]
-        cols = cols[filt]
-
-    coords = jnp.stack([rows, cols], axis=1)
-    return BCOO((data, coords), shape=(subspace_dim, subspace_dim))
 
 
 def op_to_arrays(
@@ -98,7 +41,7 @@ def op_to_arrays(
 def multi_pauli_map(
     pauli_strings: jax.Array,
     states: Optional[jax.Array] = None
-) -> tuple[jax.Array, jax.Array, bool]:
+) -> tuple[jax.Array, jax.Array, jax.Array]:
     if states is None:
         match pauli_strings.ndim:
             case 2:
@@ -254,7 +197,7 @@ def _subspace_pauli_map_nondiagonal(
     pauli_string: jax.Array,
     states: jax.Array,
     subspace: jax.Array
-) -> jax.Array:
+) -> tuple[jax.Array, jax.Array]:
     mapped_states = states ^ jnp.not_equal(pauli_string % 3, 0).astype(np.uint8)
     packed_mapped_states = jnp.packbits(mapped_states, axis=1)
     rows = subspace_indices(packed_mapped_states, subspace)
@@ -263,7 +206,7 @@ def _subspace_pauli_map_nondiagonal(
 
 
 @jax.jit
-def subspace_indices(states: jax.Array, subspace: jax.Array) -> int:
+def subspace_indices(states: jax.Array, subspace: jax.Array) -> jax.Array:
     """Return the positions of the states in the subspace, or -1 if not found."""
     # Borrowing from jax._src.lax.lax_numpy._searchsorted_via_sort
     def _rank(x):
