@@ -216,8 +216,10 @@ def make_l2_loss_fn(loss_fn: Callable, l2w_weights: float, l2w_biases: float):
 
 def train_crbm(
     model: ConditionalRBM,
-    train_dataset: np.ndarray,
-    test_dataset: np.ndarray,
+    train_u: np.ndarray,
+    train_v: np.ndarray,
+    test_u: np.ndarray,
+    test_v: np.ndarray,
     batch_size: int,
     num_epochs: int,
     loss_fn: Callable[[ConditionalRBM, jax.Array, jax.Array], jax.Array],
@@ -277,18 +279,17 @@ def train_crbm(
     records = records or callback.init_records()
 
     rng = np.random.default_rng(seed)
-    num_batches = train_dataset.shape[0] // batch_size
-    num_u = model.weights_hu.shape[1]
+    num_batches = train_u.shape[0] // batch_size
 
-    test_u = jax.device_put(test_dataset[:, :num_u])
-    test_v = jax.device_put(test_dataset[:, num_u:])
+    test_u = jax.device_put(test_u)
+    test_v = jax.device_put(test_v)
 
     for iepoch in range(num_epochs):
         LOG.info('Starting epoch %d/%d', iepoch, num_epochs)
-        sample_indices = np.arange(train_dataset.shape[0])
+        sample_indices = np.arange(train_u.shape[0])
         rng.shuffle(sample_indices)
-        samples_u = jax.device_put(train_dataset[sample_indices][:, :num_u])
-        samples_v = jax.device_put(train_dataset[sample_indices][:, num_u:])
+        samples_u = jax.device_put(train_u[sample_indices])
+        samples_v = jax.device_put(train_v[sample_indices])
 
         try:
             start = 0

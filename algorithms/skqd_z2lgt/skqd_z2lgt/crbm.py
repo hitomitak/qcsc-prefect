@@ -66,7 +66,7 @@ class ConditionalRBM(nnx.Module):
             try:
                 rngs_state[key]['key'] = jax.random.wrap_key_data(state['key'][()])
             except KeyError:
-                LOG.error('Failed to load rngs/%s/count', key)
+                LOG.error('Failed to load rngs/%s/key', key)
                 rngs_state[key]['key'] = np.array([0, 0], dtype=np.uint32)
         therm_steps = source['therm_steps'][()]
         vhat_size = source['vhat_size'][()]
