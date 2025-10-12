@@ -1,5 +1,6 @@
 """Circuits."""
 from collections.abc import Sequence
+from numbers import Number
 from qiskit import QuantumCircuit
 from qiskit.converters import circuit_to_dag, dag_to_circuit
 
@@ -72,8 +73,8 @@ def compose_trotter_circuits(
     steps: int | Sequence[int]
 ):
     """Make Trotter evolution circuits from single-step and measurement circuits."""
-    if isinstance(steps, int):
-        steps = list(range(1, steps + 1))
+    if isinstance(steps, Number):
+        steps = list(range(1, int(steps) + 1))
 
     circuits = []
     trotter = step_circuit.copy_empty_like()
