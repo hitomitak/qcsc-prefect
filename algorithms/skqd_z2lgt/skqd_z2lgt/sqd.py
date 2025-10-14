@@ -28,6 +28,19 @@ def sqd(
     states: np.ndarray,
     jax_device_id: Optional[int] = None
 ) -> tuple[np.ndarray, csr_array, float, np.ndarray]:
+    """Perform a sample-based quantum diagonalization of the Hamiltonian.
+
+    Args:
+        hamiltonian: Hamiltonian to be projected and diagonalized.
+        states: Binary array of computational basis states to project the Hamiltonian onto. Shape
+            [subspace_dim, num_qubits].
+        jax_device_id: Index of the GPU device to use. If -1, the projection function is pmapped
+            across all available GPUs.
+
+    Returns:
+        Array of sorted unique states, projected Hamiltonian as a CSR array, calculated ground state
+        energy, and ground state vector.
+    """
     pmap = False
     if jax_device_id is None:
         device = None
@@ -39,7 +52,8 @@ def sqd(
 
     with jax.default_device(device):
         start = time.time()
-        states = uniquify_states(states, hamiltonian.num_qubits)
+        states = jnp.packbits(states, axis=1)
+        states = uniquify_states(states)
         LOG.info('%f seconds to sort %d bitstrings', time.time() - start, states.shape[0])
         start = time.time()
         hproj = to_bcoo(hamiltonian, states, pmap=pmap)
@@ -48,7 +62,8 @@ def sqd(
         eigval, eigvec = ground_state_lobpcg(hproj)
         LOG.info('%f seconds to diagonalize', time.time() - start)
 
-    filt = np.logical_not(np.isclose(hproj.data, 0.))
+    sqd_states = np.array(jnp.unpackbits(states, axis=1)[:, :hamiltonian.num_qubits])
+    filt = jnp.logical_not(jnp.isclose(hproj.data, 0.))
     coo = coo_array(
         (
             hproj.data[filt],
@@ -58,7 +73,7 @@ def sqd(
     )
     ham_proj = csr_array(coo)
 
-    return np.array(states), ham_proj, eigval, eigvec
+    return sqd_states, ham_proj, float(eigval), np.array(eigvec)
 
 
 def uniquify_states(states: np.ndarray, num_qubits: Optional[int] = None) -> jax.Array:
@@ -80,8 +95,9 @@ def to_bcoo(
 
     Args:
         op: Sum of Pauli strings.
-        states: Sorted list of unique bitstrings with shape [subspace_dim, num_qubits] or an integer
-            array of indices of the computational basis in the full Hilbert space.
+        states: Sorted list of unique packed bitstrings with shape [subspace_dim,
+            ceil(num_qubits / 8)].
+        pmap: Whether to map the projection function across GPU devices.
 
     Returns:
         A COO array encoding the op projected onto the subspace.
