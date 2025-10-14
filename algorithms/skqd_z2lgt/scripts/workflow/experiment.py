@@ -9,6 +9,7 @@ from skqd_z2lgt.circuits import make_step_circuits, compose_trotter_circuits
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('filename')
+    parser.add_argument('--job')
     options = parser.parse_args()
 
     with h5py.File(options.filename, 'r', swmr=True) as source:
@@ -28,17 +29,20 @@ if __name__ == '__main__':
                                       backend_properties=backend.properties(),
                                       basis_2q=configuration['basis_2q'])
 
-    full_step, fwd_step, bkd_step, measure = transpile(
-        make_step_circuits(lattice, configuration['plaquette_energy'],
-                           configuration['delta_t'], configuration['basis_2q']),
-        backend=backend, initial_layout=layout, optimization_level=2
-    )
-    id_step = fwd_step.compose(bkd_step)
-    exp_circuits = compose_trotter_circuits(full_step, measure, configuration['num_steps'])
-    ref_circuits = compose_trotter_circuits(id_step, measure, configuration['num_steps'])
+    if options.job:
+        job = service.job(options.job)
+    else:
+        full_step, fwd_step, bkd_step, measure = transpile(
+            make_step_circuits(lattice, configuration['plaquette_energy'],
+                               configuration['delta_t'], configuration['basis_2q']),
+            backend=backend, initial_layout=layout, optimization_level=2
+        )
+        id_step = fwd_step.compose(bkd_step)
+        exp_circuits = compose_trotter_circuits(full_step, measure, configuration['num_steps'])
+        ref_circuits = compose_trotter_circuits(id_step, measure, configuration['num_steps'])
 
-    sampler = Sampler(backend)
-    job = sampler.run(exp_circuits + ref_circuits, shots=configuration['shots'])
+        sampler = Sampler(backend)
+        job = sampler.run(exp_circuits + ref_circuits, shots=configuration['shots'])
 
     with h5py.File(options.filename, 'r+') as out:
         try:
