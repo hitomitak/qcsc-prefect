@@ -25,6 +25,7 @@ if __name__ == '__main__':
     parser.add_argument('--learning-rate', type=float, default=0.001)
     parser.add_argument('--init-h-sparsity', type=float, default=0.01)
     parser.add_argument('--num-epochs', type=int, default=10)
+    parser.add_argument('--rtol', type=float)
     options = parser.parse_args()
 
     if options.gpu:
@@ -62,9 +63,10 @@ if __name__ == '__main__':
     LOG.info('Start training model for step %d', options.istep)
 
     loss_fn = make_l2_loss_fn(cd_meanloss, options.l2w_weights, options.l2w_biases)
-    records = train_crbm(model, train_u, train_v, test_u, test_v,
-                         options.batch_size, options.num_epochs, loss_fn,
-                         lr=options.learning_rate, callback=DefaultCallback())
+    best_model, records = train_crbm(model, train_u, train_v, test_u, test_v,
+                                     options.batch_size, options.num_epochs, loss_fn,
+                                     lr=options.learning_rate, rtol=options.rtol,
+                                     callback=DefaultCallback())
 
     out_filename = options.out or options.filename
     groupname = f'crbm_step{options.istep}'  # pylint: disable=invalid-name
@@ -74,7 +76,7 @@ if __name__ == '__main__':
         except KeyError:
             pass
         group = out.create_group(f'crbm_step{options.istep}')
-        model.save(group)
+        best_model.save(group)
         group = group.create_group('records')
         for key, array in records.items():
             group.create_dataset(key, data=array)
