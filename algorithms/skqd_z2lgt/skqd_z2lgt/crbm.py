@@ -54,20 +54,20 @@ class ConditionalRBM(nnx.Module):
         else:
             source = file
 
-        params = {key: data[()] for key, data in source['params'].items()}
+        params = {key: jnp.array(data[()]) for key, data in source['params'].items()}
         rngs_state = {}
         for key, state in source['rngs'].items():
             rngs_state[key] = {}
             try:
-                rngs_state[key]['count'] = state['count'][()]
+                rngs_state[key]['count'] = jnp.array(state['count'][()])
             except KeyError:
                 LOG.error('Failed to load rngs/%s/count', key)
-                rngs_state[key]['count'] = np.uint32(0)
+                rngs_state[key]['count'] = jnp.array(0, dtype=np.uint32)
             try:
                 rngs_state[key]['key'] = jax.random.wrap_key_data(state['key'][()])
             except KeyError:
                 LOG.error('Failed to load rngs/%s/key', key)
-                rngs_state[key]['key'] = np.array([0, 0], dtype=np.uint32)
+                rngs_state[key]['key'] = jnp.array([0, 0], dtype=np.uint32)
         therm_steps = source['therm_steps'][()]
         vhat_size = source['vhat_size'][()]
 
