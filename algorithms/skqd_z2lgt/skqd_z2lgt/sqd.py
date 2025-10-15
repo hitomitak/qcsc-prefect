@@ -26,7 +26,8 @@ def keys_to_intset(keys: Iterable[str]) -> set:
 def sqd(
     hamiltonian: SparsePauliOp,
     states: np.ndarray,
-    jax_device_id: Optional[int] = None
+    jax_device_id: Optional[int] = None,
+    states_size: Optional[int] = None
 ) -> tuple[np.ndarray, csr_array, float, np.ndarray]:
     """Perform a sample-based quantum diagonalization of the Hamiltonian.
 
@@ -36,6 +37,8 @@ def sqd(
             [subspace_dim, num_qubits].
         jax_device_id: Index of the GPU device to use. If -1, the projection function is pmapped
             across all available GPUs.
+        states_size: Fix the size of the states array used in computation to the specified value so
+            that compilation is not triggered at each call with slightly different array sizes.
 
     Returns:
         Array of sorted unique states, projected Hamiltonian as a CSR array, calculated ground state
@@ -50,13 +53,22 @@ def sqd(
     else:
         device = jax.devices()[jax_device_id]
 
+    if states_size is not None:
+        subspace_dim = states.shape[0]
+        if states_size < subspace_dim:
+            raise ValueError('states_size smaller than the states array length')
+        # Extend axis 1 by 1 bit for the padding flag
+        states = np.concatenate([np.zeros((subspace_dim, 1), dtype=np.uint8), states], axis=1)
+    else:
+        subspace_dim = None
+
     with jax.default_device(device):
         start = time.time()
         states = jnp.packbits(states, axis=1)
-        states = uniquify_states(states)
+        states = uniquify_states(states, size=states_size, fill_value=255)
         LOG.info('%f seconds to sort %d bitstrings', time.time() - start, states.shape[0])
         start = time.time()
-        hproj = to_bcoo(hamiltonian, states, pmap=pmap)
+        hproj = to_bcoo(hamiltonian, states, subspace_dim=subspace_dim, pmap=pmap)
         LOG.info('%f seconds to project the Hamiltonian onto subspace', time.time() - start)
         start = time.time()
         eigval, eigvec = ground_state_lobpcg(hproj)
@@ -76,9 +88,14 @@ def sqd(
     return sqd_states, ham_proj, float(eigval), np.array(eigvec)
 
 
-def uniquify_states(states: np.ndarray, num_qubits: Optional[int] = None) -> jax.Array:
+def uniquify_states(
+    states: np.ndarray,
+    num_qubits: Optional[int] = None,
+    size: Optional[int] = None,
+    fill_value: Optional[int] = None
+) -> jax.Array:
     """Uniquify the states array. Note that np.unique performs the desired lexicographic sort."""
-    states = jnp.unique(states, axis=0)
+    states = jnp.unique(states, axis=0, size=size, fill_value=fill_value)
     if states.ndim == 1:
         # Convert integer indices to binary
         states = (states[:, None] >> jnp.arange(num_qubits)[None, ::-1]) % 2
@@ -89,7 +106,8 @@ def uniquify_states(states: np.ndarray, num_qubits: Optional[int] = None) -> jax
 def to_bcoo(
     op: SparsePauliOp,
     states: Optional[jax.Array] = None,
-    pmap: bool = False
+    subspace_dim: Optional[int] = None,
+    pmap: bool = False,
 ) -> BCOO:
     """Convert a SparsePauliOp to a sparse (COO) array, with optional subspace projection.
 
@@ -97,6 +115,8 @@ def to_bcoo(
         op: Sum of Pauli strings.
         states: Sorted list of unique packed bitstrings with shape [subspace_dim,
             ceil(num_qubits / 8)].
+        subspace_dim: When the states array is padded to a fixed size, specifies the actual
+            dimension of the projection subspace.
         pmap: Whether to map the projection function across GPU devices.
 
     Returns:
@@ -112,16 +132,33 @@ def to_bcoo(
     else:
         pauli_strings, op_coeffs = op_to_arrays(op)
 
+    if states is not None and subspace_dim is not None:
+        # states array is given an extra padding flag bit -> add an identity Pauli at the
+        # corresponding location
+        pauli_strings = jnp.concatenate(
+            [jnp.zeros(pauli_strings.shape[:-1] + (1,), dtype=pauli_strings.dtype), pauli_strings],
+            axis=-1
+        )
+
     # Possible extension: Adjust the pauli_strings shape when the next line fails with OOM
     rows, signs, imaginary = multi_pauli_map(pauli_strings, states)
-    data, coords, shape = _make_bcoo_data(rows, signs, imaginary, op_coeffs, num_terms)
+    data, coords = _make_bcoo_data(rows, signs, imaginary, op_coeffs, num_terms)
 
     if states is not None:
+        if subspace_dim is not None:
+            # rows[subspace_dim:] are either -1 (nondiagonal) or range(subspace_dim, rows.shape[0])
+            # (diagonal)
+            data = data.reshape((num_terms, -1))[:, :subspace_dim].reshape(-1)
+            coords = coords.reshape((num_terms, -1, 2))[:, :subspace_dim].reshape((-1, 2))
+
         filt = jnp.not_equal(coords[:, 0], -1)
         data = data[filt]
         coords = coords[filt]
 
-    return BCOO((data, coords), shape=shape)
+    if subspace_dim is None:
+        subspace_dim = rows.shape[-1]
+
+    return BCOO((data, coords), shape=(subspace_dim,) * 2)
 
 
 @partial(jax.jit, static_argnums=[4])
@@ -138,7 +175,7 @@ def _make_bcoo_data(rows, signs, imaginary, op_coeffs, num_terms):
     coords = coords.at[..., 1].set(jnp.arange(subspace_dim, dtype=rows.dtype)[None, :])
     coords = coords.reshape((-1, 2))
     data = data.reshape(-1)
-    return data, coords, (subspace_dim, subspace_dim)
+    return data, coords
 
 
 @jax.jit
