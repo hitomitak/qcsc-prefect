@@ -227,7 +227,8 @@ def train_crbm(
     optax_fn: Optional[Callable] = None,
     seed: int = 0,
     callback: Optional[BaseCallback] = None,
-    records: Optional[dict[str, Any]] = None
+    records: Optional[dict[str, Any]] = None,
+    rtol: float = 1.
 ):
     if isinstance(loss_fn, tuple) and loss_fn[0] == 'cd':
         l2w_weights, l2w_biases = loss_fn[1:]
@@ -258,6 +259,7 @@ def train_crbm(
             loss, grads = grad_fn(model, u_batch, v_batch, vhat_batch)
             callback.train_step(model, u_batch, v_batch, loss)
             optimizer.update(model, grads)
+            return loss
 
     else:
         @nnx.jit
@@ -272,6 +274,7 @@ def train_crbm(
             loss, grads = grad_fn(model, u_batch, v_batch)
             callback.train_step(model, u_batch, v_batch, loss)
             optimizer.update(model, grads)
+            return loss
 
     optax_fn = optax_fn or optax.adamw(learning_rate=lr)
     optimizer = nnx.Optimizer(model, optax_fn, wrt=nnx.Param)
@@ -284,7 +287,9 @@ def train_crbm(
     test_u = jax.device_put(test_u)
     test_v = jax.device_put(test_v)
 
-    for iepoch in range(num_epochs):
+    epoch_losses = []
+    iepoch = 0
+    while iepoch != num_epochs:
         LOG.info('Starting epoch %d/%d', iepoch, num_epochs)
         sample_indices = np.arange(train_u.shape[0])
         rng.shuffle(sample_indices)
@@ -293,17 +298,31 @@ def train_crbm(
 
         try:
             start = 0
+            losses = []
             for ibatch in range(num_batches):
                 LOG.debug('Batch %d/%d', ibatch, num_batches)
                 end = start + batch_size
                 u_batch, v_batch = samples_u[start:end], samples_v[start:end]
-                train_step(model, u_batch, v_batch, optimizer, callback)
+                loss = train_step(model, u_batch, v_batch, optimizer, callback)
                 start = end
+                losses.append(loss)
                 callback.train_eval(model, iepoch, ibatch, records)
-        except KeyboardInterrupt:
-            pass
 
-        loss = loss_fn(model, test_u, test_v)
-        callback.test(model, test_u, test_v, loss, iepoch, records)
+            epoch_losses.append(np.mean(losses))
+
+            loss = loss_fn(model, test_u, test_v)
+            callback.test(model, test_u, test_v, loss, iepoch, records)
+
+            if num_epochs < 0 and iepoch >= 5:
+                recent = np.array(epoch_losses[:-5])
+                mean = np.mean(recent)
+                stddev = np.std(recent)
+                if np.all(np.abs(recent - mean) < stddev * rtol):
+                    break
+        except KeyboardInterrupt:
+            LOG.info('Training interrupted by SIGINT')
+            break
+
+        iepoch += 1
 
     return records
