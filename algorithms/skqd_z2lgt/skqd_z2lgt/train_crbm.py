@@ -5,6 +5,7 @@ from itertools import product
 import logging
 from typing import Any, Optional
 import numpy as np
+import h5py
 import jax
 import jax.numpy as jnp
 from flax import nnx
@@ -225,10 +226,10 @@ def train_crbm(
     loss_fn: Callable[[ConditionalRBM, jax.Array, jax.Array], jax.Array],
     lr: float = 0.001,
     optax_fn: Optional[Callable] = None,
+    rtol: Optional[float] = None,
     seed: int = 0,
     callback: Optional[BaseCallback] = None,
-    records: Optional[dict[str, Any]] = None,
-    rtol: float = 1.
+    records: Optional[dict[str, Any]] = None
 ):
     if isinstance(loss_fn, tuple) and loss_fn[0] == 'cd':
         l2w_weights, l2w_biases = loss_fn[1:]
@@ -288,8 +289,8 @@ def train_crbm(
     test_v = jax.device_put(test_v)
 
     epoch_losses = []
-    iepoch = 0
-    while iepoch != num_epochs:
+    best_model_snapshot = None
+    for iepoch in range(num_epochs):
         LOG.info('Starting epoch %d/%d', iepoch, num_epochs)
         sample_indices = np.arange(train_u.shape[0])
         rng.shuffle(sample_indices)
@@ -308,13 +309,20 @@ def train_crbm(
                 losses.append(loss)
                 callback.train_eval(model, iepoch, ibatch, records)
 
-            epoch_losses.append(np.mean(losses))
+            epoch_loss = np.mean(losses)
+            if np.all(np.array(epoch_losses) > epoch_loss):
+                if best_model_snapshot is not None:
+                    best_model_snapshot.close()
+                best_model_snapshot = h5py.File.in_memory()
+                model.save(best_model_snapshot)
 
-            loss = loss_fn(model, test_u, test_v)
-            callback.test(model, test_u, test_v, loss, iepoch, records)
+            epoch_losses.append(epoch_loss)
 
-            if num_epochs < 0 and iepoch >= 5:
-                recent = np.array(epoch_losses[:-5])
+            test_loss = loss_fn(model, test_u, test_v)
+            callback.test(model, test_u, test_v, test_loss, iepoch, records)
+
+            if rtol is not None and iepoch >= 5:
+                recent = np.array(epoch_losses[-5:])
                 mean = np.mean(recent)
                 stddev = np.std(recent)
                 if np.all(np.abs(recent - mean) < stddev * rtol):
@@ -323,6 +331,10 @@ def train_crbm(
             LOG.info('Training interrupted by SIGINT')
             break
 
-        iepoch += 1
+    if best_model_snapshot is None:
+        best_model = None
+    else:
+        best_model = ConditionalRBM.load(best_model_snapshot)
+        best_model_snapshot.close()
 
-    return records
+    return best_model, records
