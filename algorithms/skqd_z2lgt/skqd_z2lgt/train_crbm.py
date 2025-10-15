@@ -323,10 +323,12 @@ def train_crbm(
 
             if rtol is not None and iepoch >= 5:
                 recent = np.array(epoch_losses[-5:])
-                mean = np.mean(recent)
-                stddev = np.std(recent)
-                if np.all(np.abs(recent - mean) < stddev * rtol):
-                    break
+                if np.nonzero(np.diff(recent) > 0.)[0].shape[0] >= 2:
+                    mean = np.mean(recent)
+                    stddev = np.std(recent)
+                    if np.all(np.abs(recent - mean) < stddev * rtol):
+                        break
+
         except KeyboardInterrupt:
             LOG.info('Training interrupted by SIGINT')
             break
