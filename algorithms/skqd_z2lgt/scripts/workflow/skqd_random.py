@@ -11,13 +11,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('filename')
     parser.add_argument('iexp', type=int)
-    parser.add_argument('--gpu')
+    parser.add_argument('--gpu', nargs='+')
     parser.add_argument('--num', type=int, default=5)
     parser.add_argument('--out')
     options = parser.parse_args()
 
     if options.gpu:
-        os.environ['CUDA_VISIBLE_DEVICES'] = options.gpu
+        os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(options.gpu)
     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     jax.config.update('jax_enable_x64', True)
 
@@ -47,7 +47,12 @@ if __name__ == '__main__':
         exp_plaq_data.reshape((-1, num_plaq)),
         (exp_plaq_data[:, :, None, :] ^ flips).reshape((-1, num_plaq))
     ], axis=0)[:, ::-1]
-    sqd_states, ham_proj, energy, _ = sqd(ising_hamiltonian, states)
+
+    if not options.gpu or len(options.gpu) == 1:
+        device_id = 0
+    else:
+        device_id = -1
+    sqd_states, ham_proj, energy, _ = sqd(ising_hamiltonian, states, jax_device_id=device_id)
 
     out_filename = options.out or options.filename
     groupname = f'skqd_rnd_{options.iexp}'  # pylint: disable=invalid-name

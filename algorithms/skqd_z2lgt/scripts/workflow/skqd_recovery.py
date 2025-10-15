@@ -1,23 +1,53 @@
 """SKQD with random bit flips."""
 import os
 import argparse
+import logging
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import h5py
 import jax
+import jax.numpy as jnp
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.sqd import sqd
 from skqd_z2lgt.crbm import ConditionalRBM
 
+logging.basicConfig(level=logging.INFO)
+LOG = logging.getLogger(__name__)
+
+
+def generate_states(model, vtx_data, plaq_data, num_gen, batch_size):
+    shots = plaq_data.shape[0]
+    num_p = plaq_data.shape[1]
+    data = np.empty((shots, num_gen, num_p), dtype=np.uint8)
+    with jax.default_device(model.weights_vu.value.device):
+        start = 0
+        while start < vtx_data.shape[0]:
+            end = start + batch_size
+            if (residual := end - vtx_data.shape[0]) <= 0:
+                batch = jnp.array(vtx_data[start:end])
+            else:
+                padding = np.zeros((residual, vtx_data.shape[1]), dtype=vtx_data.dtype)
+                batch = jnp.concatenate([vtx_data[start:], padding], axis=0)
+            sample = model.sample(batch, size=num_gen)
+            if residual > 0:
+                sample = sample[:-residual]
+            flips = sample.transpose((1, 0, 2))
+            data[start:end] = plaq_data[start:end, None, :] ^ flips
+            start = end
+    return data.reshape((-1, num_p))[:, ::-1]
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('filename')
-    parser.add_argument('--gpu')
+    parser.add_argument('--gpu', nargs='+')
     parser.add_argument('--num', type=int, default=5)
     parser.add_argument('--gen-batch-size', type=int, default=10_000)
+    parser.add_argument('--niter', type=int, default=1)
     options = parser.parse_args()
 
     if options.gpu:
-        os.environ['CUDA_VISIBLE_DEVICES'] = options.gpu
+        os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(options.gpu)
     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     jax.config.update('jax_enable_x64', True)
 
@@ -34,30 +64,50 @@ if __name__ == '__main__':
         exp_plaq_data = np.unpackbits(source['data/exp_plaq_data'][()], axis=2)[..., :num_plaq]
         exp_vtx_data = np.unpackbits(source['data/exp_vtx_data'][()], axis=2)[..., :num_vtx]
 
-        models = [ConditionalRBM.load(source[f'crbm_step{istep}'])
-                  for istep in range(configuration['num_steps'])]
+        raw_states = np.unpackbits(source['skqd_raw/sqd_states'][()], axis=1)[:, :num_plaq]
+        raw_eigvec = source['skqd_raw/eigvec'][()]
+
+        models = []
+        for istep in range(configuration['num_steps']):
+            if options.gpu and len(options.gpu) > 1:
+                device = jax.devices()[istep % len(options.gpu)]
+            else:
+                device = None
+
+            with jax.default_device(device):
+                models.append(ConditionalRBM.load(source[f'crbm_step{istep}']))
+                # Compile the model
+                models[-1].sample(jnp.zeros((options.gen_batch_size, num_vtx), dtype=np.uint8),
+                                  size=options.num)
 
     lattice = TriangularZ2Lattice(configuration['lattice'])
     dual_lattice = lattice.plaquette_dual()
-    ising_hamiltonian = dual_lattice.make_hamiltonian(configuration['plaquette_energy'])
+    hamiltonian = dual_lattice.make_hamiltonian(configuration['plaquette_energy'])
 
-    num_batches = int(np.ceil(exp_vtx_data.shape[1] / options.gen_batch_size).astype(int))
-    gen_shape = (configuration['shots'], options.num, num_plaq)
+    relevant_states = raw_states[np.square(np.abs(raw_eigvec)) > 1.e-20]
 
-    gen_data = []
-    for istep, model in enumerate(models):
-        data = np.empty(gen_shape, dtype=np.uint8)
-        for ibatch in range(num_batches):
-            start = ibatch * options.gen_batch_size
-            end = start + options.gen_batch_size
-            sample = model.sample(exp_vtx_data[istep, start:end], size=options.num)
-            flips = sample.transpose((1, 0, 2))
-            data[start:end] = exp_plaq_data[istep, start:end, None, :] ^ flips
-        data = data.reshape((-1, num_plaq))
-        gen_data.append(data)
+    if not options.gpu or len(options.gpu) == 1:
+        device_id = 0
+    else:
+        device_id = -1
 
-    states = np.concatenate([exp_plaq_data.reshape((-1, num_plaq))] + gen_data, axis=0)[:, ::-1]
-    sqd_states, ham_proj, energy, _ = sqd(ising_hamiltonian, states)
+    for it in range(options.niter):
+        LOG.info('Iteration %d: %d relevant + %d generated states', it, relevant_states.shape[0],
+                 exp_vtx_data.shape[0] * exp_vtx_data.shape[1] * options.num)
+
+        with ThreadPoolExecutor() as executor:
+            futures = [
+                executor.submit(generate_states,
+                                models[istep], exp_vtx_data[istep], exp_plaq_data[istep],
+                                options.num, options.gen_batch_size)
+                for istep in range(configuration['num_steps'])
+            ]
+        gen_states = [future.result() for future in futures]
+        states = np.concatenate([relevant_states] + gen_states, axis=0)
+        sqd_states, ham_proj, energy, eigvec = sqd(hamiltonian, states, jax_device_id=device_id)
+
+        if it != options.niter - 1:
+            relevant_states = sqd_states[np.square(np.abs(eigvec)) > 1.e-20]
 
     groupname = 'skqd_rcv'  # pylint: disable=invalid-name
     with h5py.File(options.filename, 'r+') as out:
@@ -70,6 +120,7 @@ if __name__ == '__main__':
         group.create_dataset('num_plaq', data=num_plaq)
         group.create_dataset('sqd_states', data=np.packbits(sqd_states, axis=1))
         group.create_dataset('energy', data=energy)
+        group.create_dataset('eigvec', data=eigvec)
         subgroup = group.create_group('ham_proj')
         subgroup.create_dataset('data', data=ham_proj.data)
         subgroup.create_dataset('indices', data=ham_proj.indices)
