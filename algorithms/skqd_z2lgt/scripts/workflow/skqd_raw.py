@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """SKQD with no configuration recovery."""
 import os
 import argparse
@@ -18,7 +19,7 @@ if __name__ == '__main__':
     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     jax.config.update('jax_enable_x64', True)
 
-    with h5py.File(options.filename, 'r', swmr=True) as source:
+    with h5py.File(options.filename, 'r') as source:
         configuration = {}
         for key in source['configuration'].keys():
             record = source[f'configuration/{key}'][()]

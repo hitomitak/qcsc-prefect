@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """SKQD with random bit flips."""
 import os
 import argparse
@@ -10,9 +11,9 @@ from skqd_z2lgt.sqd import sqd
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('filename')
-    parser.add_argument('iexp', type=int)
+    parser.add_argument('iexp', type=int, nargs='+')
+    parser.add_argument('--num-gen', type=int, default=5)
     parser.add_argument('--gpu', nargs='+')
-    parser.add_argument('--num', type=int, default=5)
     parser.add_argument('--out')
     options = parser.parse_args()
 
@@ -39,35 +40,34 @@ if __name__ == '__main__':
 
     mean_activation = np.mean(ref_plaq_data, axis=1)
 
-    rng = np.random.default_rng(12345 + options.iexp)
-    num_steps, shots, num_plaq = exp_plaq_data.shape  # pylint: disable=redefined-outer-name
-    uniform = rng.random((num_steps, shots, options.num, num_plaq))
-    flips = np.asarray(uniform < mean_activation[:, None, None, :], dtype=np.uint8)
-    states = np.concatenate([
-        exp_plaq_data.reshape((-1, num_plaq)),
-        (exp_plaq_data[:, :, None, :] ^ flips).reshape((-1, num_plaq))
-    ], axis=0)[:, ::-1]
-
     if not options.gpu or len(options.gpu) == 1:
         device_id = 0
     else:
         device_id = -1
-    energy, eigvec, sqd_states, ham_proj = sqd(ising_hamiltonian, states, jax_device_id=device_id)
 
     out_filename = options.out or options.filename
-    groupname = f'skqd_rnd_{options.iexp}'  # pylint: disable=invalid-name
-    with h5py.File(out_filename, 'w-' if options.out else 'r+', libver='latest') as out:
-        try:
-            del out[groupname]
-        except KeyError:
-            pass
+    fopen_opt = 'w-' if options.out else 'r+'
 
-        group = out.create_group(groupname)
-        group.create_dataset('num_plaq', data=num_plaq)
-        group.create_dataset('sqd_states', data=np.packbits(sqd_states, axis=1))
-        group.create_dataset('energy', data=energy)
-        group.create_dataset('eigvec', data=eigvec)
-        subgroup = group.create_group('ham_proj')
-        subgroup.create_dataset('data', data=ham_proj.data)
-        subgroup.create_dataset('indices', data=ham_proj.indices)
-        subgroup.create_dataset('indptr', data=ham_proj.indptr)
+    for iexp in options.iexp:
+        rng = np.random.default_rng(12345 + iexp)
+        num_steps, shots, num_plaq = exp_plaq_data.shape  # pylint: disable=redefined-outer-name
+        uniform = rng.random((num_steps, shots, options.num_gen, num_plaq))
+        flips = np.asarray(uniform < mean_activation[:, None, None, :], dtype=np.uint8)
+        states = np.concatenate([
+            exp_plaq_data.reshape((-1, num_plaq)),
+            (exp_plaq_data[:, :, None, :] ^ flips).reshape((-1, num_plaq))
+        ], axis=0)[:, ::-1]
+
+        energy, eigvec = sqd(ising_hamiltonian, states, jax_device_id=device_id,
+                             return_states=False, return_hproj=False)
+
+        groupname = f'skqd_rnd_{iexp}'
+        with h5py.File(out_filename, fopen_opt, libver='latest') as out:
+            try:
+                del out[groupname]
+            except KeyError:
+                pass
+
+            group = out.create_group(groupname)
+            group.create_dataset('energy', data=energy)
+            group.create_dataset('eigvec', data=eigvec)
