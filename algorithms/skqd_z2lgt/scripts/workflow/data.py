@@ -1,6 +1,7 @@
 """Process the link-state bitstrings with MWPM."""
 import argparse
-import json
+import logging
+import time
 from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 import h5py
@@ -9,6 +10,9 @@ from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.recovery_learning import preprocess
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    LOG = logging.getLogger()
+
     parser = argparse.ArgumentParser()
     parser.add_argument('filename')
     options = parser.parse_args()
@@ -23,12 +27,13 @@ if __name__ == '__main__':
 
         job_id = source['experiment/job_id'][()].decode()  # pylint: disable=no-member
 
+    LOG.info('Job ID: %s', job_id)
+
     service = QiskitRuntimeService(instance=configuration['instance'])
-    try:
-        job_result = service.job(job_id).result()
-    except json.JSONDecodeError as exc:
-        print(exc.doc)
-        raise
+    job_result = service.job(job_id).result()
+
+    LOG.info('Retrieved results of %d PUBs. Converting link states to vertex and plaquette states.')
+    start = time.time()
 
     lattice = TriangularZ2Lattice(configuration['lattice'])
     dual_lattice = lattice.plaquette_dual()
@@ -50,6 +55,8 @@ if __name__ == '__main__':
         vtx_data, plaq_data = future.result()
         ref_vtx_data[istep] = vtx_data
         ref_plaq_data[istep] = plaq_data
+
+    LOG.info('State conversion took %.2f seconds.', time.time() - start)
 
     with h5py.File(options.filename, 'r+') as out:
         try:

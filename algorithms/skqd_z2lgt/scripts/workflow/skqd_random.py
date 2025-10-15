@@ -2,6 +2,7 @@
 """SKQD with random bit flips."""
 import os
 import argparse
+import logging
 import numpy as np
 import h5py
 import jax
@@ -9,6 +10,9 @@ from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.sqd import sqd
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    LOG = logging.getLogger()
+
     parser = argparse.ArgumentParser()
     parser.add_argument('filename')
     parser.add_argument('iexp', type=int, nargs='+')
@@ -49,6 +53,7 @@ if __name__ == '__main__':
     fopen_opt = 'w-' if options.out else 'r+'
 
     for iexp in options.iexp:
+        LOG.info('Starting experiment %d', iexp)
         rng = np.random.default_rng(12345 + iexp)
         num_steps, shots, num_plaq = exp_plaq_data.shape  # pylint: disable=redefined-outer-name
         uniform = rng.random((num_steps, shots, options.num_gen, num_plaq))
