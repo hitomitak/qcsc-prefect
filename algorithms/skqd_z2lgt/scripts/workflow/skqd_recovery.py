@@ -85,6 +85,12 @@ if __name__ == '__main__':
     hamiltonian = dual_lattice.make_hamiltonian(configuration['plaquette_energy'])
 
     relevant_states = raw_states[np.square(np.abs(raw_eigvec)) > 1.e-20]
+    exp_data_size = configuration['num_steps'] * configuration['shots']
+    gen_data_size = exp_data_size * options.num
+    max_size = gen_data_size + min(exp_data_size, 2 * relevant_states.shape[0])
+
+    energies = []
+    subspace_dims = []
 
     if not options.gpu or len(options.gpu) == 1:
         device_id = 0
@@ -95,6 +101,8 @@ if __name__ == '__main__':
         LOG.info('Iteration %d: %d relevant + %d generated states', it, relevant_states.shape[0],
                  exp_vtx_data.shape[0] * exp_vtx_data.shape[1] * options.num)
 
+        is_last = it == options.niter - 1
+
         with ThreadPoolExecutor() as executor:
             futures = [
                 executor.submit(generate_states,
@@ -104,10 +112,18 @@ if __name__ == '__main__':
             ]
         gen_states = [future.result() for future in futures]
         states = np.concatenate([relevant_states] + gen_states, axis=0)
-        sqd_states, ham_proj, energy, eigvec = sqd(hamiltonian, states, jax_device_id=device_id)
+        if (excess := states.shape[0] - max_size) > 0:
+            max_size += 2 * excess
+        sqd_result = sqd(hamiltonian, states, jax_device_id=device_id, states_size=max_size,
+                         return_hproj=is_last)
+        energy, eigvec, sqd_states = sqd_result[:3]
+        energies.append(energy)
+        subspace_dims.append(sqd_states.shape[0])
 
-        if it != options.niter - 1:
+        if not is_last:
             relevant_states = sqd_states[np.square(np.abs(eigvec)) > 1.e-20]
+
+    ham_proj = sqd_result[-1]
 
     groupname = 'skqd_rcv'  # pylint: disable=invalid-name
     with h5py.File(options.filename, 'r+') as out:
@@ -121,6 +137,8 @@ if __name__ == '__main__':
         group.create_dataset('sqd_states', data=np.packbits(sqd_states, axis=1))
         group.create_dataset('energy', data=energy)
         group.create_dataset('eigvec', data=eigvec)
+        group.create_dataset('energies', data=energies)
+        group.create_dataset('subspace_dims', data=subspace_dims)
         subgroup = group.create_group('ham_proj')
         subgroup.create_dataset('data', data=ham_proj.data)
         subgroup.create_dataset('indices', data=ham_proj.indices)
