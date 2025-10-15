@@ -27,7 +27,9 @@ def sqd(
     hamiltonian: SparsePauliOp,
     states: np.ndarray,
     jax_device_id: Optional[int] = None,
-    states_size: Optional[int] = None
+    states_size: Optional[int] = None,
+    return_states: bool = True,
+    return_hproj: bool = True
 ) -> tuple[np.ndarray, csr_array, float, np.ndarray]:
     """Perform a sample-based quantum diagonalization of the Hamiltonian.
 
@@ -39,10 +41,12 @@ def sqd(
             across all available GPUs.
         states_size: Fix the size of the states array used in computation to the specified value so
             that compilation is not triggered at each call with slightly different array sizes.
+        return_states: Whether to return the sorted uniquified states.
+        return_hproj: Whether to return the projected Hamiltonian.
 
     Returns:
-        Array of sorted unique states, projected Hamiltonian as a CSR array, calculated ground state
-        energy, and ground state vector.
+        Calculated ground state energy, ground state vector, sorted uniquified states (if
+        return_states=True), and the projected Hamiltonian as a CSR array (if return_hproj=True).
     """
     pmap = False
     if jax_device_id is None:
@@ -74,18 +78,22 @@ def sqd(
         eigval, eigvec = ground_state_lobpcg(hproj)
         LOG.info('%f seconds to diagonalize', time.time() - start)
 
-    sqd_states = np.array(jnp.unpackbits(states, axis=1)[:, :hamiltonian.num_qubits])
-    filt = jnp.logical_not(jnp.isclose(hproj.data, 0.))
-    coo = coo_array(
-        (
-            hproj.data[filt],
-            (hproj.indices[filt, 0], hproj.indices[filt, 1])
-        ),
-        shape=hproj.shape
-    )
-    ham_proj = csr_array(coo)
+    retval = (float(eigval), np.array(eigvec))
 
-    return sqd_states, ham_proj, float(eigval), np.array(eigvec)
+    if return_states:
+        retval += (np.array(jnp.unpackbits(states, axis=1)[:, :hamiltonian.num_qubits]),)
+    if return_hproj:
+        filt = jnp.logical_not(jnp.isclose(hproj.data, 0.))
+        coo = coo_array(
+            (
+                hproj.data[filt],
+                (hproj.indices[filt, 0], hproj.indices[filt, 1])
+            ),
+            shape=hproj.shape
+        )
+        retval += (csr_array(coo),)
+
+    return retval
 
 
 def uniquify_states(
@@ -212,4 +220,4 @@ def qiskit_sqd(
     start = time.time()
     evals, evecs = eigsh(ham_proj, k=1, which='SA')
     LOG.info('%f seconds to diagonalize', time.time() - start)
-    return bitstring_matrix.astype(np.uint8), ham_proj, evals[0], evecs[:, 0]
+    return evals[0], evecs[:, 0], bitstring_matrix.astype(np.uint8), ham_proj
