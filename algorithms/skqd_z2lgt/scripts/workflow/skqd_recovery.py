@@ -1,14 +1,17 @@
 """SKQD with random bit flips."""
 import os
 import argparse
+from functools import partial
+import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import h5py
 import jax
 import jax.numpy as jnp
+from flax import nnx
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
-from skqd_z2lgt.sqd import sqd
+from skqd_z2lgt.sqd import sqd, to_bcoo, bcoo_to_csr
 from skqd_z2lgt.crbm import ConditionalRBM
 
 logging.basicConfig(level=logging.INFO)
@@ -18,23 +21,35 @@ LOG = logging.getLogger(__name__)
 def generate_states(model, vtx_data, plaq_data, num_gen, batch_size):
     shots = plaq_data.shape[0]
     num_p = plaq_data.shape[1]
-    data = np.empty((shots, num_gen, num_p), dtype=np.uint8)
+
+    generate_fn = nnx.scan(partial(_generate_batch, num_gen=num_gen),
+                           in_axes=(nnx.Carry, 0, 0), out_axes=(nnx.Carry, 0))
+
     with jax.default_device(model.weights_vu.value.device):
-        start = 0
-        while start < vtx_data.shape[0]:
-            end = start + batch_size
-            if (residual := end - vtx_data.shape[0]) <= 0:
-                batch = jnp.array(vtx_data[start:end])
-            else:
-                padding = np.zeros((residual, vtx_data.shape[1]), dtype=vtx_data.dtype)
-                batch = jnp.concatenate([vtx_data[start:], padding], axis=0)
-            sample = model.sample(batch, size=num_gen)
-            if residual > 0:
-                sample = sample[:-residual]
-            flips = sample.transpose((1, 0, 2))
-            data[start:end] = plaq_data[start:end, None, :] ^ flips
-            start = end
-    return data.reshape((-1, num_p))[:, ::-1]
+        num_batches = int(np.ceil(shots / batch_size).astype(int))
+        residue = num_batches * batch_size - shots
+        if residue != 0:
+            padding = np.zeros((residue,) + vtx_data.shape[1:], dtype=np.uint8)
+            vtx_data = jnp.concatenate([vtx_data, padding], axis=0)
+            padding = np.zeros((residue,) + plaq_data.shape[1:], dtype=np.uint8)
+            plaq_data = jnp.concatenate([plaq_data, padding], axis=0)
+        else:
+            vtx_data = jax.device_put(vtx_data)
+            plaq_data = jax.device_put(plaq_data)
+
+        vtx_data = vtx_data.reshape((num_batches, batch_size,) + vtx_data.shape[1:])
+        plaq_data = plaq_data.reshape((num_batches, batch_size,) + plaq_data.shape[1:])
+
+        gen_data = generate_fn(model, vtx_data, plaq_data)[1]
+
+    return np.array(gen_data.reshape((-1, num_p))[:, ::-1])
+
+
+@partial(nnx.jit, static_argnums=[3])
+def _generate_batch(model, vtx_batch, plaq_batch, num_gen):
+    sample = model.sample(vtx_batch, size=num_gen)
+    flips = sample.transpose((1, 0, 2))
+    return model, plaq_batch[:, None, :] ^ flips
 
 
 if __name__ == '__main__':
@@ -44,6 +59,7 @@ if __name__ == '__main__':
     parser.add_argument('--num', type=int, default=5)
     parser.add_argument('--gen-batch-size', type=int, default=10_000)
     parser.add_argument('--niter', type=int, default=1)
+    parser.add_argument('--terminate', nargs='+')
     options = parser.parse_args()
 
     if options.gpu:
@@ -87,7 +103,8 @@ if __name__ == '__main__':
     relevant_states = raw_states[np.square(np.abs(raw_eigvec)) > 1.e-20]
     exp_data_size = configuration['num_steps'] * configuration['shots']
     gen_data_size = exp_data_size * options.num
-    max_size = gen_data_size + min(exp_data_size, 2 * relevant_states.shape[0])
+    max_size = gen_data_size + min(exp_data_size, 10 * relevant_states.shape[0])
+    LOG.info('Set maximum array size to %d', max_size)
 
     energies = []
     subspace_dims = []
@@ -97,12 +114,22 @@ if __name__ == '__main__':
     else:
         device_id = -1
 
-    for it in range(options.niter):
-        LOG.info('Iteration %d: %d relevant + %d generated states', it, relevant_states.shape[0],
-                 exp_vtx_data.shape[0] * exp_vtx_data.shape[1] * options.num)
+    terminate_conditions = {}
+    if options.terminate:
+        for term in options.terminate:
+            key, _, value = term.partition('=')
+            terminate_conditions[key] = float(value)
+    prev_energy = None
 
+    is_last = False
+    it = 0
+    while not is_last and it != options.niter:
+        LOG.info('Iteration %d: %d relevant states', it, relevant_states.shape[0])
         is_last = it == options.niter - 1
 
+        LOG.info('Generating for %d steps, %d shots, %d samples per shot',
+                 exp_vtx_data.shape[0], exp_vtx_data.shape[1], options.num)
+        start = time.time()
         with ThreadPoolExecutor() as executor:
             futures = [
                 executor.submit(generate_states,
@@ -111,14 +138,39 @@ if __name__ == '__main__':
                 for istep in range(configuration['num_steps'])
             ]
         gen_states = [future.result() for future in futures]
+        # gen_states = [
+        #     generate_states(models[istep], exp_vtx_data[istep], exp_plaq_data[istep],
+        #                     options.num, options.gen_batch_size)
+        #     for istep in range(configuration['num_steps'])
+        # ]
+        LOG.info('Generation took %.2f seconds.', time.time() - start)
+
         states = np.concatenate([relevant_states] + gen_states, axis=0)
         if (excess := states.shape[0] - max_size) > 0:
-            max_size += 2 * excess
+            max_size += 10 * excess
+            LOG.info('Updated maximum array size to %d', max_size)
+        LOG.info('Diagonalizing the Hamiltonian projected onto %d states..', states.shape[0])
+        start = time.time()
         sqd_result = sqd(hamiltonian, states, jax_device_id=device_id, states_size=max_size,
                          return_hproj=is_last)
         energy, eigvec, sqd_states = sqd_result[:3]
         energies.append(energy)
         subspace_dims.append(sqd_states.shape[0])
+        LOG.info('Projection and diagonalization took %.2f seconds. Current energy %.4f',
+                 time.time() - start, energy)
+
+        terminate = False
+        for key, value in terminate_conditions.items():
+            if key == 'diff':
+                terminate = prev_energy is not None and prev_energy - energy < value
+            elif key == 'dim':
+                terminate = relevant_states.shape[0] >= value
+
+        if not is_last and terminate:
+            subspace_dim = sqd_states.shape[0]
+            hproj = to_bcoo(hamiltonian, sqd_states, subspace_dim=subspace_dim, pmap=device_id < 0)
+            sqd_result += (bcoo_to_csr(hproj),)
+            is_last = True
 
         if not is_last:
             relevant_states = sqd_states[np.square(np.abs(eigvec)) > 1.e-20]
