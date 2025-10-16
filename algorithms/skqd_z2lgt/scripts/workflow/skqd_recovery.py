@@ -122,8 +122,7 @@ if __name__ == '__main__':
     prev_energy = None
 
     is_last = False
-    it = 0
-    while not is_last and it != options.niter:
+    for it in range(options.niter):
         LOG.info('Iteration %d: %d relevant states', it, relevant_states.shape[0])
         is_last = it == options.niter - 1
 
@@ -163,12 +162,14 @@ if __name__ == '__main__':
 
         if not is_last and terminate:
             subspace_dim = sqd_states.shape[0]
-            hproj = to_bcoo(hamiltonian, sqd_states, sharded=device_id < 0)
+            hproj = to_bcoo(hamiltonian, np.packbits(sqd_states, axis=1), sharded=device_id < 0)
             sqd_result += (bcoo_to_csr(hproj),)
             is_last = True
 
-        if not is_last:
-            relevant_states = sqd_states[np.square(np.abs(eigvec)) > 1.e-20]
+        if is_last:
+            break
+
+        relevant_states = sqd_states[np.square(np.abs(eigvec)) > 1.e-20]
 
     ham_proj = sqd_result[-1]
 
