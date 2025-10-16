@@ -9,12 +9,12 @@ from scipy.sparse import csr_array, coo_array
 from scipy.sparse.linalg import eigsh
 import jax
 import jax.numpy as jnp
-from jax.sharding import NamedSharding, PartitionSpec
 from jax.experimental.sparse import BCOO, bcoo_dot_general
 from qiskit.quantum_info import SparsePauliOp
 from qiskit_addon_sqd.qubit import sort_and_remove_duplicates, project_operator_to_subspace
 from skqd_z2lgt.jax_experimental_sparse_linalg import lobpcg_standard
 from skqd_z2lgt.pauli import op_to_arrays, multi_pauli_map
+from skqd_z2lgt.utils import shard_array_1d
 
 LOG = logging.getLogger(__name__)
 
@@ -129,16 +129,9 @@ def to_bcoo(
         A COO array encoding the op projected onto the subspace.
     """
     num_terms = len(op)
+    pauli_strings, op_coeffs = op_to_arrays(op)
     if pmap:
-        num_dev = jax.device_count()
-        terms_per_device = int(np.ceil(num_terms / num_dev).astype(int))
-        pad_to_length = num_dev * terms_per_device
-        pauli_strings, op_coeffs = op_to_arrays(op, pad_to_length=pad_to_length)
-        # pauli_strings = pauli_strings.reshape((num_dev, 1, terms_per_device, op.num_qubits))
-        mesh = jax.make_mesh((num_dev,), ('device',))
-        pauli_strings = jax.device_put(pauli_strings, NamedSharding(mesh, PartitionSpec('device')))
-    else:
-        pauli_strings, op_coeffs = op_to_arrays(op)
+        pauli_strings = shard_array_1d(pauli_strings, fill_value=0)
 
     if states is not None and subspace_dim is not None:
         # states array is given an extra padding flag bit -> add an identity Pauli at the
