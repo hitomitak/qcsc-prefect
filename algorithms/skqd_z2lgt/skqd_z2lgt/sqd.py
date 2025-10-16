@@ -13,7 +13,7 @@ from jax.experimental.sparse import BCOO, bcoo_dot_general
 from qiskit.quantum_info import SparsePauliOp
 from qiskit_addon_sqd.qubit import sort_and_remove_duplicates, project_operator_to_subspace
 from skqd_z2lgt.jax_experimental_sparse_linalg import lobpcg_standard
-from skqd_z2lgt.pauli import op_to_arrays, multi_pauli_map
+from skqd_z2lgt.pauli import op_to_arrays, _subspace_pauli_map_nondiagonal
 from skqd_z2lgt.utils import shard_array_1d
 
 LOG = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ def sqd(
         hamiltonian: Hamiltonian to be projected and diagonalized.
         states: Binary array of computational basis states to project the Hamiltonian onto. Shape
             [subspace_dim, num_qubits].
-        jax_device_id: Index of the GPU device to use. If -1, the projection function is pmapped
+        jax_device_id: Index of the GPU device to use. If -1, the projection function is mapped
             across all available GPUs.
         states_size: Fix the size of the states array used in computation to the specified value so
             that compilation is not triggered at each call with slightly different array sizes.
@@ -49,12 +49,12 @@ def sqd(
         Calculated ground state energy, ground state vector, sorted uniquified states (if
         return_states=True), and the projected Hamiltonian as a CSR array (if return_hproj=True).
     """
-    pmap = False
+    sharded = False
     if jax_device_id is None:
         device = None
     elif jax_device_id < 0:
         device = None
-        pmap = True
+        sharded = True
     else:
         device = jax.devices()[jax_device_id]
 
@@ -70,10 +70,18 @@ def sqd(
 
         with jax.default_device(device):
             start = time.time()
-            pauli_strings, op_coeffs, num_diag, num_terms = get_hamiltonian_array(hamiltonian,
-                                                                                  pmap=pmap)
-            retval_jax = _sqd_fixed(pauli_strings, op_coeffs, num_diag, num_terms, states,
-                                    return_states, return_hproj)
+            diag, nondiag = get_hamiltonian_arrays(hamiltonian, sharded=sharded)
+            # Add an identity Pauli at the padding big
+            diag_paulis = jnp.concatenate(
+                [jnp.zeros((diag[0].shape[0], 1), dtype=diag[0].dtype), diag[0]],
+                axis=-1
+            )
+            nondiag_paulis = jnp.concatenate(
+                [jnp.zeros((nondiag[0].shape[0], 1), dtype=nondiag[0].dtype), nondiag[0]],
+                axis=-1
+            )
+            retval_jax = _sqd_fixed((diag_paulis, diag[1]), (nondiag_paulis, nondiag[1]), states,
+                                    diag_paulis.sharding.num_devices, return_states, return_hproj)
             subspace_dim = int(retval_jax[0])
             LOG.info('%f seconds for SQD. Subspace dimension %d', time.time() - start, subspace_dim)
             retval = (float(retval_jax[1]), np.array(retval_jax[2][:subspace_dim]))
@@ -91,7 +99,7 @@ def sqd(
             states = uniquify_states(states)
             LOG.info('%f seconds to sort %d bitstrings', time.time() - start, states.shape[0])
             start = time.time()
-            hproj = to_bcoo(hamiltonian, states, pmap=pmap)
+            hproj = to_bcoo(hamiltonian, states, sharded=sharded)
             LOG.info('%f seconds to project the Hamiltonian onto subspace', time.time() - start)
             start = time.time()
             eigval, eigvec = ground_state_lobpcg(hproj)
@@ -107,13 +115,12 @@ def sqd(
     return retval
 
 
-@partial(jax.jit, static_argnums=[2, 3, 5, 6])
+@partial(jax.jit, static_argnums=[3, 4, 5])
 def _sqd_fixed(
-    pauli_strings,
-    op_coeffs,
-    num_diag,
-    num_terms,
+    diag,
+    nondiag,
     states,
+    num_devices,
     return_states,
     return_hproj
 ):
@@ -121,12 +128,7 @@ def _sqd_fixed(
     states = jnp.packbits(states, axis=1)
     states = jnp.unique(states, axis=0, size=states.shape[0], fill_value=255)
     subspace_dim = jnp.searchsorted(states[:, 0], search_val)
-    # states array is given an extra flag bit -> add an identity Pauli at the corresponding location
-    pauli_strings = jnp.concatenate(
-        [jnp.zeros(pauli_strings.shape[:-1] + (1,), dtype=pauli_strings.dtype), pauli_strings],
-        axis=-1
-    )
-    data, coords, _ = _make_bcoo_data(pauli_strings, states, op_coeffs, num_diag, num_terms)
+    data, coords = _make_bcoo_data(diag, nondiag, states, num_devices)
     # rows[subspace_dim:] are either -1 or range(subspace_dim, rows.shape[0])
     mask = jnp.logical_and(jnp.not_equal(coords[:, 0], -1), jnp.less(coords[:, 0], subspace_dim))
     data *= mask
@@ -154,21 +156,26 @@ def uniquify_states(
     return states.astype(np.uint8)
 
 
-def get_hamiltonian_array(hamiltonian: SparsePauliOp, pmap: bool = False):
-    num_terms = len(hamiltonian)
+def get_hamiltonian_arrays(hamiltonian: SparsePauliOp, sharded: bool = False):
     pauli_strings, op_coeffs = op_to_arrays(hamiltonian)
-    # op_to_arrays sort the op terms so that diagonal Paulis come first
-    num_diag = int(np.searchsorted(np.any(np.not_equal(pauli_strings % 3, 0), axis=1), True))
-    if pmap:
-        pauli_strings = shard_array_1d(pauli_strings, fill_value=0)
+    is_diag = jnp.all(jnp.equal(pauli_strings % 3, 0), axis=1)
+    diag_paulis = pauli_strings[is_diag]
+    diag_coeffs = op_coeffs[is_diag]
+    nondiag_paulis = pauli_strings[jnp.logical_not(is_diag)]
+    nondiag_coeffs = op_coeffs[jnp.logical_not(is_diag)]
+    if sharded:
+        diag_paulis = shard_array_1d(diag_paulis)
+        diag_coeffs = shard_array_1d(diag_coeffs)
+        nondiag_paulis = shard_array_1d(nondiag_paulis)
+        nondiag_coeffs = shard_array_1d(nondiag_coeffs)
 
-    return pauli_strings, op_coeffs, num_diag, num_terms
+    return (diag_paulis, diag_coeffs), (nondiag_paulis, nondiag_coeffs)
 
 
 def to_bcoo(
     hamiltonian: SparsePauliOp,
-    states: Optional[jax.Array] = None,
-    pmap: bool = False,
+    states: jax.Array,
+    sharded: bool = False
 ) -> BCOO:
     """Convert a SparsePauliOp to a sparse (COO) array, with optional subspace projection.
 
@@ -176,21 +183,25 @@ def to_bcoo(
         op: Sum of Pauli strings.
         states: Sorted list of unique packed bitstrings with shape [subspace_dim,
             ceil(num_qubits / 8)].
-        pmap: Whether to map the projection function across GPU devices.
+        sharded: Whether to map the projection function across GPU devices.
 
     Returns:
         A COO array encoding the op projected onto the subspace.
     """
-    pauli_strings, op_coeffs, num_diag, num_terms = get_hamiltonian_array(hamiltonian, pmap=pmap)
+    diag, nondiag = get_hamiltonian_arrays(hamiltonian, sharded=sharded)
     # Possible extension: Adjust the pauli_strings shape when the next line fails with OOM
-    data, coords, shape = _make_bcoo_data(pauli_strings, states, op_coeffs, num_diag, num_terms)
+    data, coords = _make_bcoo_data(diag, nondiag, states, diag[0].sharding.num_devices)
 
-    if states is not None:
-        filt = jnp.not_equal(coords[:, 0], -1)
-        data = data[filt]
-        coords = coords[filt]
+    mask = jnp.not_equal(coords[:, 0], -1)
+    if sharded:
+        # Keep the sharding
+        data *= mask
+        coords *= mask[:, None]
+    else:
+        data = data[mask]
+        coords = coords[mask]
 
-    return BCOO((data, coords), shape=shape)
+    return BCOO((data, coords), shape=(states.shape[0],) * 2)
 
 
 def bcoo_to_csr(bcoo: BCOO):
@@ -205,26 +216,47 @@ def bcoo_to_csr(bcoo: BCOO):
     return csr_array(coo)
 
 
-@partial(jax.jit, static_argnums=[3, 4])
-def _make_bcoo_data(pauli_strings, states, op_coeffs, num_diag, num_terms):
-    """Truncate at the original number of op terms and flatten."""
-    rows, signs, imaginary = multi_pauli_map(pauli_strings, states)
-    subspace_dim = rows.shape[-1]
+_v_subspace_pauli_map_nondiagonal = jax.jit(
+    jax.vmap(_subspace_pauli_map_nondiagonal, in_axes=(0, None))
+)
+
+
+@partial(jax.jit, static_argnums=[3])
+def _make_bcoo_data(diag, nondiag, states, num_devices):
+    """Return data, coords, and shape from the given representation of Paulis and states."""
+    # Nondiagonal part
+    nondiag_rows, signs = _v_subspace_pauli_map_nondiagonal(nondiag[0], states)
+    imaginary = (jnp.sum(jnp.equal(nondiag[0], 2), axis=-1) % 2).astype(np.uint8)
     phases = jnp.array([1., 1.j])[imaginary]
-    data = (op_coeffs * phases)[:, None] * (1. - 2. * signs)
-    if num_terms != rows.shape[0]:
-        rows = rows[:num_terms]
-        data = data[:num_terms]
-    if num_diag > 1:
-        rows = rows[num_diag - 1:]
-        data = jnp.concatenate([jnp.sum(data[:num_diag], axis=0, keepdims=True), data[num_diag:]],
-                               axis=0)
-    coords = jnp.empty(rows.shape + (2,), dtype=rows.dtype)
-    coords = coords.at[..., 0].set(rows)
-    coords = coords.at[..., 1].set(jnp.arange(subspace_dim, dtype=rows.dtype)[None, :])
-    coords = coords.reshape((-1, 2))
+    nondiag_data = (nondiag[1] * phases)[:, None] * (1. - 2. * signs)
+    # Diagonal part
+    is_signed = jnp.packbits(jnp.greater(diag[0], 1).astype(np.uint8), axis=1)
+    signs = jnp.sum(jnp.bitwise_count(states[None, ...] & is_signed[:, None]), axis=-1) % 2
+    diag_data = diag[1][:, None] * (1. - 2. * signs)
+
+    aidx = jnp.arange(states.shape[0], dtype=np.int32)[None, :]
+
+    if num_devices == 1:
+        # Single-device
+        data = jnp.concatenate([jnp.sum(diag_data, axis=0, keepdims=True), nondiag_data], axis=0)
+        rows = jnp.concatenate([aidx, nondiag_rows], axis=0)
+        cols = jnp.tile(aidx, (rows.shape[0], 1))
+        coords = jnp.stack([rows, cols], axis=-1)
+    else:
+        # Sharded
+        diag_data = diag_data.reshape((num_devices, -1, states.shape[0]))
+        diag_data = jnp.sum(diag_data, axis=1, keepdims=True)
+        nondiag_data = nondiag_data.reshape((num_devices, -1, states.shape[0]))
+        data = jnp.concatenate([diag_data, nondiag_data], axis=1)
+        nondiag_rows = nondiag_rows.reshape((num_devices, -1, states.shape[0]))
+        diag_rows = jnp.tile(aidx[None, ...], (num_devices, 1, 1))
+        rows = jnp.concatenate([diag_rows, nondiag_rows], axis=1)
+        cols = jnp.tile(aidx[None, ...], rows.shape[:2] + (1,))
+        coords = jnp.stack([rows, cols], axis=-1)
+
     data = data.reshape(-1)
-    return data, coords, (subspace_dim,) * 2
+    coords = coords.reshape((-1, 2))
+    return data, coords
 
 
 @jax.jit
