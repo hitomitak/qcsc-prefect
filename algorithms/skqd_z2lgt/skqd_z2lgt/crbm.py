@@ -152,33 +152,11 @@ class ConditionalRBM(nnx.Module):
     def gibbs_sample(
         self,
         u_state: jax.Array,
-        v_state: jax.Array,
-        size: int | tuple[int, ...] = 1,
-        final_state_only: bool = False
-    ) -> jax.Array:
-        """MCMC sample generation."""
-        batch_size = u_state.size // u_state.shape[-1]
-        num_v = batch_size * self.bias_v.shape[0]
-        num_h = batch_size * self.bias_h.shape[0]
-        uniform_size = num_v + (num_v + num_h) * np.prod(size).astype(int)
-        uniform = jax.random.uniform(self.rngs.sample(), (uniform_size,))
-        return self._gibbs_sample(u_state, v_state, uniform, size=size,
-                                  final_state_only=final_state_only)
-
-    @partial(nnx.jit, static_argnames=['size', 'final_state_only'])
-    def _gibbs_sample(
-        self,
-        u_state: jax.Array,
-        v_state: jax.Array,
-        uniform: jax.Array,
+        init_v_state: jax.Array,
         size: Optional[int | tuple[int, ...]] = None,
         final_state_only: bool = False
     ) -> jax.Array:
         """MCMC sample generation."""
-        batch_size = u_state.size // u_state.shape[-1]
-        num_v = batch_size * self.bias_v.shape[0]
-        num_h = batch_size * self.bias_h.shape[0]
-
         if size is None:
             size = 1
             final_state_only = True
@@ -186,36 +164,42 @@ class ConditionalRBM(nnx.Module):
             size = (int(size),)
         flat_size = np.prod(size).astype(int)
 
-        def loop_body_generate(istep, val):
-            module, u_state, v_state, uniform = val
-            start = (num_h + num_v) * istep
-            unif = jax.lax.dynamic_slice(uniform, [start], [num_h + num_v])
-            ph = module.h_activation(u_state, v_state)
-            h_state = (unif[:num_h].reshape(ph.shape) < ph).astype(np.uint8)
-            pv = module.v_activation(u_state, h_state)
-            v_state = (unif[num_h:].reshape(pv.shape) < pv).astype(np.uint8)
-            return module, u_state, v_state, uniform
-
         if final_state_only:
-            loop_body = loop_body_generate
-            init_val = (self, u_state, v_state, uniform)
+            def loop_body(_, val):
+                module, u_state, v_state = val
+                v_state = module._gibbs_sample_step(u_state, v_state)
+                return module, u_state, v_state
+
+            v_state = nnx.fori_loop(
+                0, flat_size,
+                loop_body,
+                (self, u_state, init_v_state)
+            )[2]
         else:
-            def loop_body(istep, val):
-                module, u_state, v_state, uniform = loop_body_generate(istep, val[:-1])
-                out = val[-1]
-                return module, u_state, v_state, uniform, out.at[istep].set(v_state)
+            def loop_body(module, u_state, v_state):
+                v_state = module._gibbs_sample_step(u_state, v_state)
+                return v_state, v_state
 
-            out = jnp.empty((flat_size,) + v_state.shape, dtype=np.uint8)
-            init_val = (self, u_state, v_state, uniform, out)
+            v_state = nnx.scan(
+                loop_body,
+                length=flat_size,
+                in_axes=(None, None, nnx.Carry),
+                out_axes=(0, nnx.Carry)
+            )(self, u_state, init_v_state)[0].reshape(size + init_v_state.shape)
 
-        final_val = nnx.fori_loop(
-            0, flat_size,
-            loop_body,
-            init_val
-        )
-        if final_state_only:
-            return final_val[2]
-        return final_val[-1].reshape(size + v_state.shape)
+        return v_state
+
+    @nnx.jit
+    def _gibbs_sample_step(self, u_state, v_state):
+        batch_size = u_state.size // u_state.shape[-1]
+        num_h = batch_size * self.bias_h.shape[0]
+        num_v = batch_size * self.bias_v.shape[0]
+        uniform = jax.random.uniform(self.rngs.sample(), (num_v + num_h,))
+        ph = self.h_activation(u_state, v_state)
+        h_state = (uniform[:num_h] < ph.reshape(-1)).astype(np.uint8).reshape(ph.shape)
+        pv = self.v_activation(u_state, h_state)
+        v_state = (uniform[num_h:] < pv.reshape(-1)).astype(np.uint8).reshape(pv.shape)
+        return v_state
 
     @nnx.jit
     def percloss_states(self, u_state: jax.Array):
@@ -248,22 +232,23 @@ class ConditionalRBM(nnx.Module):
         self,
         u_state: jax.Array,
         size: Optional[int | tuple[int, ...]] = None
-    ):
-        batch_size = u_state.size // u_state.shape[-1]
-        num_v = batch_size * self.bias_v.shape[0]
-        num_h = batch_size * self.bias_h.shape[0]
-        if size is None:
-            gen_size = 1
-        else:
-            gen_size = np.prod(size).astype(int)
-        uniform_size = num_v + (num_v + num_h) * (self.therm_steps + gen_size)
-        uniform = jax.random.uniform(self.rngs.sample(), (uniform_size,))
+    ) -> jax.Array:
+        """Generate samples of v vectors.
 
+        Returns the result of Gibbs sampling from a thermalized state. Thermalization is performed
+        by `self.therm_steps` iterations of Gibbs sampling on the initial v vector drawn from
+        v_activation(u, 0).
+
+        Args:
+            u_state: Condition bits. Shape [..., num_u].
+            size: Number of samples to generate for each condition vector.
+
+        Returns:
+            Array of v vector samples with shape [*size, *u_state.shape[:-1], num_v].
+
+        """
         pv = nnx.sigmoid(u_state @ self.weights_vu.T + self.bias_v)
-        v_state = (uniform[:num_v].reshape(pv.shape) < pv).astype(np.uint8)
-        start = num_v
-        end = num_v + (num_v + num_h) * self.therm_steps
-        v_state = self._gibbs_sample(u_state, v_state, uniform[start:end], size=self.therm_steps,
-                                     final_state_only=True)
-        start = end
-        return self._gibbs_sample(u_state, v_state, uniform[start:], size=size)
+        uniform = jax.random.uniform(self.rngs.sample(), pv.shape)
+        v_state = (uniform < pv).astype(np.uint8)
+        v_state = self.gibbs_sample(u_state, v_state, size=self.therm_steps, final_state_only=True)
+        return self.gibbs_sample(u_state, v_state, size=size)
