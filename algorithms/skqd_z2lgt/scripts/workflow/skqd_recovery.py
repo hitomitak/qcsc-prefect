@@ -1,7 +1,6 @@
 """SKQD with random bit flips."""
 import os
 import argparse
-from functools import partial
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
@@ -18,12 +17,9 @@ logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger(__name__)
 
 
-def generate_states(model, vtx_data, plaq_data, num_gen, batch_size):
+def generate_states(model, vtx_data, plaq_data, generate_fn, batch_size):
     shots = plaq_data.shape[0]
     num_p = plaq_data.shape[1]
-
-    generate_fn = nnx.scan(partial(_generate_batch, num_gen=num_gen),
-                           in_axes=(nnx.Carry, 0, 0), out_axes=(nnx.Carry, 0))
 
     with jax.default_device(model.weights_vu.value.device):
         num_batches = int(np.ceil(shots / batch_size).astype(int))
@@ -40,16 +36,20 @@ def generate_states(model, vtx_data, plaq_data, num_gen, batch_size):
         vtx_data = vtx_data.reshape((num_batches, batch_size,) + vtx_data.shape[1:])
         plaq_data = plaq_data.reshape((num_batches, batch_size,) + plaq_data.shape[1:])
 
-        gen_data = generate_fn(model, vtx_data, plaq_data)[1]
+        gen_data = generate_fn(model, vtx_data, plaq_data)
 
     return np.array(gen_data.reshape((-1, num_p))[:, ::-1])
 
 
-@partial(nnx.jit, static_argnums=[3])
-def _generate_batch(model, vtx_batch, plaq_batch, num_gen):
-    sample = model.sample(vtx_batch, size=num_gen)
-    flips = sample.transpose((1, 0, 2))
-    return model, plaq_batch[:, None, :] ^ flips
+def make_batch_generator(num_gen):
+    @nnx.scan(in_axes=(None, 0, 0), out_axes=0)
+    @nnx.jit
+    def generate_fn(model, vtx_batch, plaq_batch):
+        sample = model.sample(vtx_batch, size=num_gen)
+        flips = sample.transpose((1, 0, 2))
+        return plaq_batch[:, None, :] ^ flips
+
+    return generate_fn
 
 
 if __name__ == '__main__':
@@ -106,6 +106,8 @@ if __name__ == '__main__':
     max_size = gen_data_size + min(exp_data_size, 10 * relevant_states.shape[0])
     LOG.info('Set maximum array size to %d', max_size)
 
+    generate_fn = make_batch_generator(options.num)
+
     energies = []
     subspace_dims = []
 
@@ -133,7 +135,7 @@ if __name__ == '__main__':
             futures = [
                 executor.submit(generate_states,
                                 models[istep], exp_vtx_data[istep], exp_plaq_data[istep],
-                                options.num, options.gen_batch_size)
+                                generate_fn, options.gen_batch_size)
                 for istep in range(configuration['num_steps'])
             ]
         gen_states = [future.result() for future in futures]
