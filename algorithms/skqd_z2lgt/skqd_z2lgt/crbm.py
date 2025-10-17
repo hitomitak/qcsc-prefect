@@ -174,18 +174,20 @@ class ConditionalRBM(nnx.Module):
                 0, flat_size,
                 loop_body,
                 (self, u_state, init_v_state)
-            )[2]
+            )[-1]
         else:
-            def loop_body(module, u_state, v_state):
+            def loop_body(istep, val):
+                module, u_state, v_state, out = val
                 v_state = module._gibbs_sample_step(u_state, v_state)
-                return v_state, v_state
+                out = out.at[istep].set(v_state)
+                return module, u_state, v_state, out
 
-            v_state = nnx.scan(
+            out = jnp.empty((flat_size,) + init_v_state.shape, dtype=init_v_state.dtype)
+            v_state = nnx.fori_loop(
+                0, flat_size,
                 loop_body,
-                length=flat_size,
-                in_axes=(None, None, nnx.Carry),
-                out_axes=(0, nnx.Carry)
-            )(self, u_state, init_v_state)[0].reshape(size + init_v_state.shape)
+                (self, u_state, init_v_state, out)
+            )[-1]
 
         return v_state
 

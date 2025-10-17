@@ -36,18 +36,18 @@ def generate_states(model, vtx_data, plaq_data, generate_fn, batch_size):
         vtx_data = vtx_data.reshape((num_batches, batch_size,) + vtx_data.shape[1:])
         plaq_data = plaq_data.reshape((num_batches, batch_size,) + plaq_data.shape[1:])
 
-        gen_data = generate_fn(model, vtx_data, plaq_data)
+        gen_data = generate_fn(model, vtx_data, plaq_data)[1]
 
     return np.array(gen_data.reshape((-1, num_p))[:, ::-1])
 
 
 def make_batch_generator(num_gen):
-    @nnx.scan(in_axes=(None, 0, 0), out_axes=0)
+    @nnx.scan(in_axes=(nnx.Carry, 0, 0), out_axes=(nnx.Carry, 0))
     @nnx.jit
     def generate_fn(model, vtx_batch, plaq_batch):
         sample = model.sample(vtx_batch, size=num_gen)
         flips = sample.transpose((1, 0, 2))
-        return plaq_batch[:, None, :] ^ flips
+        return model, plaq_batch[:, None, :] ^ flips
 
     return generate_fn
 
