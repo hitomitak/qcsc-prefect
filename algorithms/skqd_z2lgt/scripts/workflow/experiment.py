@@ -2,22 +2,18 @@
 import argparse
 import logging
 import time
+from typing import Optional
 import h5py
 from qiskit import transpile
 from qiskit_ibm_runtime import QiskitRuntimeService, Sampler
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.circuits import make_step_circuits, compose_trotter_circuits
 
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    LOG = logging.getLogger()
+LOG = logging.getLogger(__name__)
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('filename')
-    parser.add_argument('--job')
-    options = parser.parse_args()
 
-    with h5py.File(options.filename, 'r', swmr=True) as source:
+def main(filename: str, job_id: Optional[str] = None):
+    with h5py.File(filename, 'r', swmr=True) as source:
         configuration = {}
         for key in source['configuration'].keys():
             record = source[f'configuration/{key}'][()]
@@ -34,9 +30,9 @@ if __name__ == '__main__':
                                       backend_properties=backend.properties(),
                                       basis_2q=configuration['basis_2q'])
 
-    if options.job:
-        LOG.info('Retrieving job %s', options.job)
-        job = service.job(options.job)
+    if job_id:
+        LOG.info('Retrieving job %s', job_id)
+        job = service.job(job_id)
     else:
         LOG.info('Transpiling single-step circuits..')
         start = time.time()
@@ -55,7 +51,7 @@ if __name__ == '__main__':
         job = sampler.run(exp_circuits + ref_circuits, shots=configuration['shots'])
         LOG.info('Submitted job %s to %s.', job.job_id(), configuration['backend'])
 
-    with h5py.File(options.filename, 'r+') as out:
+    with h5py.File(filename, 'r+') as out:
         try:
             del out['experiment']
         except KeyError:
@@ -63,3 +59,15 @@ if __name__ == '__main__':
         group = out.create_group('experiment')
         group.create_dataset('job_id', data=job.job_id())
         group.create_dataset('layout', data=layout)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('filename')
+    parser.add_argument('--job-id')
+    parser.add_argument('--log-level', default='INFO')
+    options = parser.parse_args()
+
+    logging.basicConfig(level=getattr(logging, options.log_level.upper()))
+
+    main(options.filename, job_id=options.job_id)

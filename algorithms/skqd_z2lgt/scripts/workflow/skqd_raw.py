@@ -2,24 +2,18 @@
 """SKQD with no configuration recovery."""
 import os
 import argparse
+import logging
 import numpy as np
 import h5py
 import jax
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.sqd import sqd
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('filename')
-    parser.add_argument('--gpu', nargs='+')
-    options = parser.parse_args()
+LOG = logging.getLogger(__name__)
 
-    if options.gpu:
-        os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(options.gpu)
-    os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-    jax.config.update('jax_enable_x64', True)
 
-    with h5py.File(options.filename, 'r') as source:
+def main(filename: str, multi_gpu: bool = False):
+    with h5py.File(filename, 'r') as source:
         configuration = {}
         for key in source['configuration'].keys():
             record = source[f'configuration/{key}'][()]
@@ -34,13 +28,10 @@ if __name__ == '__main__':
     ising_hamiltonian = dual_lattice.make_hamiltonian(configuration['plaquette_energy'])
 
     states = exp_plaq_data.reshape(-1, num_plaq)[:, ::-1]
-    if not options.gpu or len(options.gpu) == 1:
-        device_id = 0
-    else:
-        device_id = -1
-    energy, eigvec, sqd_states, ham_proj = sqd(ising_hamiltonian, states, jax_device_id=device_id)
+    energy, eigvec, sqd_states, ham_proj = sqd(ising_hamiltonian, states,
+                                               jax_device_id=-1 if multi_gpu else None)
 
-    with h5py.File(options.filename, 'r+') as out:
+    with h5py.File(filename, 'r+') as out:
         try:
             del out['skqd_raw']
         except KeyError:
@@ -55,3 +46,20 @@ if __name__ == '__main__':
         subgroup.create_dataset('data', data=ham_proj.data)
         subgroup.create_dataset('indices', data=ham_proj.indices)
         subgroup.create_dataset('indptr', data=ham_proj.indptr)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('filename')
+    parser.add_argument('--gpu', nargs='+')
+    parser.add_argument('--log-level', default='INFO')
+    options = parser.parse_args()
+
+    logging.basicConfig(level=getattr(logging, options.log_level.upper()))
+
+    if options.gpu:
+        os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(options.gpu)
+    os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.99'
+    jax.config.update('jax_enable_x64', True)
+
+    main(options.filename, multi_gpu=options.gpu and len(options.gpu) > 1)

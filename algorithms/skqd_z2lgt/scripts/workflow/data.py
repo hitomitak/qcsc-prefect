@@ -9,15 +9,11 @@ from qiskit_ibm_runtime import QiskitRuntimeService
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.recovery_learning import preprocess
 
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    LOG = logging.getLogger()
+LOG = logging.getLogger(__name__)
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('filename')
-    options = parser.parse_args()
 
-    with h5py.File(options.filename, 'r', swmr=True) as source:
+def main(filename: str):
+    with h5py.File(filename, 'r', swmr=True) as source:
         configuration = {}
         for key in source['configuration'].keys():
             record = source[f'configuration/{key}'][()]
@@ -32,7 +28,8 @@ if __name__ == '__main__':
     service = QiskitRuntimeService(instance=configuration['instance'])
     job_result = service.job(job_id).result()
 
-    LOG.info('Retrieved results of %d PUBs. Converting link states to vertex and plaquette states.')
+    LOG.info('Retrieved results of %d PUBs. Converting link states to vertex and plaquette states.',
+             len(job_result))
     start = time.time()
 
     lattice = TriangularZ2Lattice(configuration['lattice'])
@@ -58,7 +55,7 @@ if __name__ == '__main__':
 
     LOG.info('State conversion took %.2f seconds.', time.time() - start)
 
-    with h5py.File(options.filename, 'r+') as out:
+    with h5py.File(filename, 'r+') as out:
         try:
             del out['data']
         except KeyError:
@@ -71,3 +68,14 @@ if __name__ == '__main__':
         group.create_dataset('exp_plaq_data', data=np.packbits(exp_plaq_data, axis=2))
         group.create_dataset('ref_vtx_data', data=np.packbits(ref_vtx_data, axis=2))
         group.create_dataset('ref_plaq_data', data=np.packbits(ref_plaq_data, axis=2))
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('filename')
+    parser.add_argument('--log-level', default='INFO')
+    options = parser.parse_args()
+
+    logging.basicConfig(level=getattr(logging, options.log_level.upper()))
+
+    main(options.filename)

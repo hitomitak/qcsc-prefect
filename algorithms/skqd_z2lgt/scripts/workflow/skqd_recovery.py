@@ -4,6 +4,7 @@ import argparse
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Optional
 import numpy as np
 import h5py
 import jax
@@ -52,22 +53,15 @@ def make_batch_generator(num_gen):
     return generate_fn
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('filename')
-    parser.add_argument('--gpu', nargs='+')
-    parser.add_argument('--num', type=int, default=5)
-    parser.add_argument('--gen-batch-size', type=int, default=10_000)
-    parser.add_argument('--niter', type=int, default=1)
-    parser.add_argument('--terminate', nargs='+')
-    options = parser.parse_args()
-
-    if options.gpu:
-        os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(options.gpu)
-    os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-    jax.config.update('jax_enable_x64', True)
-
-    with h5py.File(options.filename, 'r') as source:
+def main(
+    filename: str,
+    gen_batch_size: int = 10_000,
+    num_gen: int = 5,
+    niter: int = 10,
+    terminate_conditions: Optional[dict[str, Any]] = None,
+    multi_gpu: bool = False
+):
+    with h5py.File(filename, 'r') as source:
         configuration = {}
         for key in source['configuration'].keys():
             record = source[f'configuration/{key}'][()]
@@ -85,16 +79,16 @@ if __name__ == '__main__':
 
         models = []
         for istep in range(configuration['num_steps']):
-            if options.gpu and len(options.gpu) > 1:
-                device = jax.devices()[istep % len(options.gpu)]
+            if multi_gpu:
+                device = jax.devices()[istep % jax.device_count()]
             else:
                 device = None
 
             with jax.default_device(device):
                 models.append(ConditionalRBM.load(source[f'crbm_step{istep}']))
                 # Compile the model
-                models[-1].sample(jnp.zeros((options.gen_batch_size, num_vtx), dtype=np.uint8),
-                                  size=options.num)
+                models[-1].sample(jnp.zeros((gen_batch_size, num_vtx), dtype=np.uint8),
+                                  size=num_gen)
 
     lattice = TriangularZ2Lattice(configuration['lattice'])
     dual_lattice = lattice.plaquette_dual()
@@ -102,40 +96,30 @@ if __name__ == '__main__':
 
     relevant_states = raw_states[np.square(np.abs(raw_eigvec)) > 1.e-20]
     exp_data_size = configuration['num_steps'] * configuration['shots']
-    gen_data_size = exp_data_size * options.num
+    gen_data_size = exp_data_size * num_gen
     max_size = gen_data_size + min(exp_data_size, 10 * relevant_states.shape[0])
     LOG.info('Set maximum array size to %d', max_size)
 
-    generate_fn = make_batch_generator(options.num)
+    generate_fn = make_batch_generator(num_gen)
 
     energies = []
     subspace_dims = []
-
-    if not options.gpu or len(options.gpu) == 1:
-        device_id = 0
-    else:
-        device_id = -1
-
-    terminate_conditions = {}
-    if options.terminate:
-        for term in options.terminate:
-            key, _, value = term.partition('=')
-            terminate_conditions[key] = float(value)
+    terminate_conditions = terminate_conditions or {}
     prev_energy = None
 
     is_last = False
-    for it in range(options.niter):
+    for it in range(niter):
         LOG.info('Iteration %d: %d relevant states', it, relevant_states.shape[0])
-        is_last = it == options.niter - 1
+        is_last = it == niter - 1
 
         LOG.info('Generating for %d steps, %d shots, %d samples per shot',
-                 exp_vtx_data.shape[0], exp_vtx_data.shape[1], options.num)
+                 exp_vtx_data.shape[0], exp_vtx_data.shape[1], num_gen)
         start = time.time()
         with ThreadPoolExecutor() as executor:
             futures = [
                 executor.submit(generate_states,
                                 models[istep], exp_vtx_data[istep], exp_plaq_data[istep],
-                                generate_fn, options.gen_batch_size)
+                                generate_fn, gen_batch_size)
                 for istep in range(configuration['num_steps'])
             ]
         gen_states = [future.result() for future in futures]
@@ -147,8 +131,8 @@ if __name__ == '__main__':
             LOG.info('Updated maximum array size to %d', max_size)
         LOG.info('Diagonalizing the Hamiltonian projected onto %d states..', states.shape[0])
         start = time.time()
-        sqd_result = sqd(hamiltonian, states, jax_device_id=device_id, states_size=max_size,
-                         return_hproj=is_last)
+        sqd_result = sqd(hamiltonian, states, jax_device_id=-1 if multi_gpu else None,
+                         states_size=max_size, return_hproj=is_last)
         energy, eigvec, sqd_states = sqd_result[:3]
         energies.append(energy)
         subspace_dims.append(sqd_states.shape[0])
@@ -163,8 +147,7 @@ if __name__ == '__main__':
                 terminate = relevant_states.shape[0] >= value
 
         if not is_last and terminate:
-            subspace_dim = sqd_states.shape[0]
-            hproj = to_bcoo(hamiltonian, np.packbits(sqd_states, axis=1), sharded=device_id < 0)
+            hproj = to_bcoo(hamiltonian, np.packbits(sqd_states, axis=1), sharded=multi_gpu)
             sqd_result += (bcoo_to_csr(hproj),)
             is_last = True
 
@@ -176,7 +159,7 @@ if __name__ == '__main__':
     ham_proj = sqd_result[-1]
 
     groupname = 'skqd_rcv'  # pylint: disable=invalid-name
-    with h5py.File(options.filename, 'r+') as out:
+    with h5py.File(filename, 'r+') as out:
         try:
             del out[groupname]
         except KeyError:
@@ -193,3 +176,29 @@ if __name__ == '__main__':
         subgroup.create_dataset('data', data=ham_proj.data)
         subgroup.create_dataset('indices', data=ham_proj.indices)
         subgroup.create_dataset('indptr', data=ham_proj.indptr)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('filename')
+    parser.add_argument('--gpu', nargs='+')
+    parser.add_argument('--num-gen', type=int, default=5)
+    parser.add_argument('--gen-batch-size', type=int, default=10_000)
+    parser.add_argument('--niter', type=int, default=1)
+    parser.add_argument('--terminate', nargs='+')
+    options = parser.parse_args()
+
+    if options.gpu:
+        os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(options.gpu)
+    os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+    jax.config.update('jax_enable_x64', True)
+
+    conditions = {}
+    if options.terminate:
+        for term in options.terminate:
+            cond = term.partition('=')
+            conditions[cond[0]] = float(cond[2])
+
+    main(options.filename, gen_batch_size=options.gen_batch_size, num_gen=options.num_gen,
+         niter=options.niter, terminate_conditions=conditions,
+         multi_gpu=options.gpu and len(options.gpu) > 1)
