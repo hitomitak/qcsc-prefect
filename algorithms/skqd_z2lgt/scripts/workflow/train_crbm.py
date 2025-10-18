@@ -60,6 +60,7 @@ if __name__ == '__main__':
     model.bias_v.value = bias_init
     model.bias_h.value = jnp.full(options.num_h,
                                   np.log(options.init_h_sparsity / (1. - options.init_h_sparsity)))
+    model.pregenerate = True
 
     LOG.info('Start training model for step %d', options.istep)
 

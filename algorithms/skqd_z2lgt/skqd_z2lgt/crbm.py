@@ -23,6 +23,10 @@ class ConditionalRBM(nnx.Module):
         self.rngs = rngs
         self.therm_steps = 100
         self.vhat_size = 100
+        # Generate uniform random values for all sampling uses in a single
+        # call to jax.random.uniform(). Makes sampling faster but seems to cause GPU memory
+        # leak.
+        self.pregenerate = False
 
     def save(self, file: str | h5py.Group):
         params_state, rngs_state = map(nnx.pure, nnx.state(self, nnx.Param, ...))
@@ -154,7 +158,8 @@ class ConditionalRBM(nnx.Module):
         u_state: jax.Array,
         init_v_state: jax.Array,
         size: Optional[int | tuple[int, ...]] = None,
-        final_state_only: bool = False
+        final_state_only: bool = False,
+        uniform: Optional[jax.Array] = None
     ) -> jax.Array:
         """MCMC sample generation."""
         if size is None:
@@ -164,39 +169,53 @@ class ConditionalRBM(nnx.Module):
             size = (int(size),)
         flat_size = np.prod(size).astype(int)
 
+        if uniform is not None:
+            uniform = uniform.reshape((flat_size, -1))
+
         if final_state_only:
-            def loop_body(_, val):
-                module, u_state, v_state = val
-                v_state = module._gibbs_sample_step(u_state, v_state)
-                return module, u_state, v_state
+            if uniform is None:
+                def loop_body(_, val):
+                    module, _u_state, _v_state = val
+                    _v_state = module._gibbs_sample_step(_u_state, _v_state)
+                    return module, _u_state, _v_state
 
-            v_state = nnx.fori_loop(
-                0, flat_size,
-                loop_body,
-                (self, u_state, init_v_state)
-            )[-1]
+                init = (self, u_state, init_v_state)
+            else:
+                def loop_body(istep, val):
+                    module, _uniform, _u_state, _v_state = val
+                    _v_state = module._gibbs_sample_step(_u_state, _v_state, _uniform[istep])
+                    return module, _uniform, _u_state, _v_state
+
+                init = (self, uniform, u_state, init_v_state)
         else:
-            def loop_body(istep, val):
-                module, u_state, v_state, out = val
-                v_state = module._gibbs_sample_step(u_state, v_state)
-                out = out.at[istep].set(v_state)
-                return module, u_state, v_state, out
-
             out = jnp.empty((flat_size,) + init_v_state.shape, dtype=init_v_state.dtype)
-            v_state = nnx.fori_loop(
-                0, flat_size,
-                loop_body,
-                (self, u_state, init_v_state, out)
-            )[-1]
 
-        return v_state
+            if uniform is None:
+                def loop_body(istep, val):
+                    module, _u_state, _v_state, _out = val
+                    _v_state = module._gibbs_sample_step(_u_state, _v_state)
+                    _out = _out.at[istep].set(_v_state)
+                    return module, _u_state, _v_state, _out
+
+                init = (self, u_state, init_v_state, out)
+            else:
+                def loop_body(istep, val):
+                    module, _uniform, _u_state, _v_state, _out = val
+                    _v_state = module._gibbs_sample_step(_u_state, _v_state, _uniform[istep])
+                    _out = _out.at[istep].set(_v_state)
+                    return module, _uniform, _u_state, _v_state, _out
+
+                init = (self, uniform, u_state, init_v_state, out)
+
+        return nnx.fori_loop(0, flat_size, loop_body, init)[-1]
 
     @nnx.jit
-    def _gibbs_sample_step(self, u_state, v_state):
-        batch_size = u_state.size // u_state.shape[-1]
-        num_h = batch_size * self.bias_h.shape[0]
-        num_v = batch_size * self.bias_v.shape[0]
-        uniform = jax.random.uniform(self.rngs.sample(), (num_v + num_h,))
+    def _gibbs_sample_step(self, u_state, v_state, uniform=None):
+        if uniform is None:
+            batch_size = u_state.size // u_state.shape[-1]
+            num_h = batch_size * self.bias_h.shape[0]
+            num_v = batch_size * self.bias_v.shape[0]
+            uniform = jax.random.uniform(self.rngs.sample(), (num_v + num_h,))
         ph = self.h_activation(u_state, v_state)
         h_state = (uniform[:num_h] < ph.reshape(-1)).astype(np.uint8).reshape(ph.shape)
         pv = self.v_activation(u_state, h_state)
@@ -250,7 +269,28 @@ class ConditionalRBM(nnx.Module):
 
         """
         pv = nnx.sigmoid(u_state @ self.weights_vu.T + self.bias_v)
-        uniform = jax.random.uniform(self.rngs.sample(), pv.shape)
+
+        if self.pregenerate:
+            batch_size = u_state.size // u_state.shape[-1]
+            num_v = batch_size * self.bias_v.shape[0]
+            num_h = batch_size * self.bias_h.shape[0]
+            if size is None:
+                size_flat = 1
+            else:
+                size_flat = np.prod(size).astype(int)
+            init_stop = num_v
+            therm_stop = init_stop + (num_v + num_h) * self.therm_steps
+            uniform_size = therm_stop + (num_v + num_h) * size_flat
+            uniform_all = jax.random.uniform(self.rngs.sample(), (uniform_size,))
+            uniform = uniform_all[:init_stop].reshape(pv.shape)
+            uniform_therm = uniform[init_stop:therm_stop]
+            uniform_gen = uniform[therm_stop:]
+        else:
+            uniform = jax.random.uniform(self.rngs.sample(), pv.shape)
+            uniform_therm = None
+            uniform_gen = None
+
         v_state = (uniform < pv).astype(np.uint8)
-        v_state = self.gibbs_sample(u_state, v_state, size=self.therm_steps, final_state_only=True)
-        return self.gibbs_sample(u_state, v_state, size=size)
+        v_state = self.gibbs_sample(u_state, v_state, size=self.therm_steps, final_state_only=True,
+                                    uniform=uniform_therm)
+        return self.gibbs_sample(u_state, v_state, size=size, uniform=uniform_gen)
