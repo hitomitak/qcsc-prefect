@@ -29,14 +29,15 @@ def main(
                 record = record.decode()
             configuration[key] = record
 
-        num_plaq = source['data/num_plaq'][()]
-        num_vtx = source['data/num_vtx'][()]
-        ref_vtx_data = np.unpackbits(source['data/ref_vtx_data'], axis=-1)[..., :num_vtx]
-        ref_plaq_data = np.unpackbits(source['data/ref_plaq_data'], axis=-1)[..., :num_plaq]
-        train_u = ref_vtx_data[istep, :80_000]
-        train_v = ref_plaq_data[istep, :80_000]
-        test_u = ref_vtx_data[istep, 80_000:]
-        test_v = ref_plaq_data[istep, 80_000:]
+        group = source[f'ref_step{istep}']
+        num_plaq = group['num_plaq'][()]
+        num_vtx = group['num_vtx'][()]
+        vtx_data = np.unpackbits(group['vtx_data'], axis=-1)[..., :num_vtx]
+        plaq_data = np.unpackbits(group['plaq_data'], axis=-1)[..., :num_plaq]
+        train_u = vtx_data[:80_000]
+        train_v = plaq_data[:80_000]
+        test_u = vtx_data[80_000:]
+        test_v = plaq_data[80_000:]
 
     mean_activation = np.mean(train_v, axis=0)
     mean_activation = np.where(np.isclose(mean_activation, 0.), 1.e-6, mean_activation)

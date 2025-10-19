@@ -69,16 +69,23 @@ def main(
                 record = record.decode()
             configuration[key] = record
 
-        num_plaq = source['data/num_plaq'][()]
-        num_vtx = source['data/num_vtx'][()]
-        exp_plaq_data = np.unpackbits(source['data/exp_plaq_data'][()], axis=2)[..., :num_plaq]
-        exp_vtx_data = np.unpackbits(source['data/exp_vtx_data'][()], axis=2)[..., :num_vtx]
+        num_steps = configuration['num_steps']
+        shots = configuration['shots']
 
-        raw_states = np.unpackbits(source['skqd_raw/sqd_states'][()], axis=1)[:, :num_plaq]
+        exp_plaq_data = []
+        exp_vtx_data = []
+        for istep in range(num_steps):
+            group = source[f'exp_step{istep}']
+            num_plaq = group['num_plaq'][()]
+            num_vtx = group['num_vtx'][()]
+            exp_plaq_data.append(np.unpackbits(group['plaq_data'][()], axis=-1)[..., :num_plaq])
+            exp_vtx_data.append(np.unpackbits(group['vtx_data'][()], axis=-1)[..., :num_vtx])
+
+        raw_states = np.unpackbits(source['skqd_raw/sqd_states'][()], axis=-1)[:, :num_plaq]
         raw_eigvec = source['skqd_raw/eigvec'][()]
 
         models = []
-        for istep in range(configuration['num_steps']):
+        for istep in range(num_steps):
             if multi_gpu:
                 device = jax.devices()[istep % jax.device_count()]
             else:
@@ -95,7 +102,7 @@ def main(
     hamiltonian = dual_lattice.make_hamiltonian(configuration['plaquette_energy'])
 
     relevant_states = raw_states[np.square(np.abs(raw_eigvec)) > 1.e-20]
-    exp_data_size = configuration['num_steps'] * configuration['shots']
+    exp_data_size = num_steps * shots
     gen_data_size = exp_data_size * num_gen
     max_size = gen_data_size + min(exp_data_size, 10 * relevant_states.shape[0])
     LOG.info('Set maximum array size to %d', max_size)
@@ -113,14 +120,14 @@ def main(
         is_last = it == niter - 1
 
         LOG.info('Generating for %d steps, %d shots, %d samples per shot',
-                 exp_vtx_data.shape[0], exp_vtx_data.shape[1], num_gen)
+                 num_steps, shots, num_gen)
         start = time.time()
         with ThreadPoolExecutor() as executor:
             futures = [
                 executor.submit(generate_states,
                                 models[istep], exp_vtx_data[istep], exp_plaq_data[istep],
                                 generate_fn, gen_batch_size)
-                for istep in range(configuration['num_steps'])
+                for istep in range(num_steps)
             ]
         gen_states = [future.result() for future in futures]
         LOG.info('Generation took %.2f seconds.', time.time() - start)

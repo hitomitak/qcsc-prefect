@@ -38,15 +38,21 @@ def main(
                 record = record.decode()
             configuration[key] = record
 
-        num_plaq = source['data/num_plaq'][()]
-        exp_plaq_data = np.unpackbits(source['data/exp_plaq_data'][()], axis=2)[..., :num_plaq]
-        ref_plaq_data = np.unpackbits(source['data/ref_plaq_data'][()], axis=2)[..., :num_plaq]
+        num_steps = configuration['num_steps']
+
+        exp_plaq_data = []
+        ref_plaq_data = []
+        for dataset, dlist in [('exp', exp_plaq_data), ('ref', ref_plaq_data)]:
+            for istep in range(num_steps):
+                group = source[f'{dataset}_step{istep}']
+                num_plaq = group['num_plaq'][()]
+                dlist.append(np.unpackbits(group['plaq_data'][()], axis=1)[..., :num_plaq])
 
     lattice = TriangularZ2Lattice(configuration['lattice'])
     dual_lattice = lattice.plaquette_dual()
     ising_hamiltonian = dual_lattice.make_hamiltonian(configuration['plaquette_energy'])
 
-    mean_activation = np.mean(ref_plaq_data, axis=1)
+    mean_activation = [np.mean(data, axis=0) for data in ref_plaq_data]
 
     if not gpus or len(gpus) == 1:
         device_id = 0
@@ -59,14 +65,12 @@ def main(
     for iexp in iexps:
         LOG.info('Starting experiment %d', iexp)
         rng = np.random.default_rng(12345 + iexp)
-        num_steps, shots, num_plaq = exp_plaq_data.shape  # pylint: disable=redefined-outer-name
-        uniform = rng.random((num_steps, shots, num_gen, num_plaq))
-        flips = np.asarray(uniform < mean_activation[:, None, None, :], dtype=np.uint8)
-        states = np.concatenate([
-            exp_plaq_data.reshape((-1, num_plaq)),
-            (exp_plaq_data[:, :, None, :] ^ flips).reshape((-1, num_plaq))
-        ], axis=0)[:, ::-1]
-
+        uniform = rng.random((num_steps, configuration['shots'], num_gen, num_plaq))
+        flips = [np.asarray(uniform[istep] < act[istep][None, None, :], dtype=np.uint8)
+                 for istep, act in enumerate(mean_activation)]
+        flipped = [(data[:, None, :] ^ fl).reshape((-1, num_plaq))
+                   for data, fl in zip(exp_plaq_data, flips)]
+        states = np.concatenate(exp_plaq_data + flipped, axis=0)[:, ::-1]
         energy, eigvec = sqd(ising_hamiltonian, states, jax_device_id=device_id,
                              return_states=False, return_hproj=False)
 

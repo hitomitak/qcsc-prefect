@@ -21,13 +21,16 @@ def main(filename: str, multi_gpu: bool = False):
                 record = record.decode()
             configuration[key] = record
 
-        num_plaq = source['data/num_plaq'][()]
-        exp_plaq_data = np.unpackbits(source['data/exp_plaq_data'][()], axis=2)[..., :num_plaq]
+        plaq_data = []
+        for istep in range(configuration['num_steps']):
+            group = source[f'exp_step{istep}']
+            num_plaq = group['num_plaq'][()]
+            plaq_data.append(np.unpackbits(group['plaq_data'][()], axis=1)[..., :num_plaq])
 
     dual_lattice = TriangularZ2Lattice(configuration['lattice']).plaquette_dual()
     ising_hamiltonian = dual_lattice.make_hamiltonian(configuration['plaquette_energy'])
 
-    states = exp_plaq_data.reshape(-1, num_plaq)[:, ::-1]
+    states = np.concatenate(plaq_data, axis=0)[:, ::-1]
     energy, eigvec, sqd_states, ham_proj = sqd(ising_hamiltonian, states,
                                                jax_device_id=-1 if multi_gpu else None)
 
