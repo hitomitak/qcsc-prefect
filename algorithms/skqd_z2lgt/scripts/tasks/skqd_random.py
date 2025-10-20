@@ -31,26 +31,23 @@ def main(
             gpus = [gpus]
 
     with h5py.File(filename, 'r') as source:
-        configuration = {}
-        for key in source['configuration'].keys():
-            record = source[f'configuration/{key}'][()]
-            if isinstance(record, bytes):
-                record = record.decode()
-            configuration[key] = record
+        configuration = dict(source.attrs)
 
         num_steps = configuration['num_steps']
-
         exp_plaq_data = []
         ref_plaq_data = []
         for dataset, dlist in [('exp', exp_plaq_data), ('ref', ref_plaq_data)]:
             for istep in range(num_steps):
                 group = source[f'{dataset}_step{istep}']
-                num_plaq = group['num_plaq'][()]
-                dlist.append(np.unpackbits(group['plaq_data'][()], axis=1)[..., :num_plaq])
+                dataset = group['plaq_data']
+                dlist.append(np.unpackbits(dataset[()], axis=1)[..., :dataset.attrs['num_bits']])
 
     lattice = TriangularZ2Lattice(configuration['lattice'])
     dual_lattice = lattice.plaquette_dual()
     ising_hamiltonian = dual_lattice.make_hamiltonian(configuration['plaquette_energy'])
+
+    shots, num_plaq = exp_plaq_data[0].shape[-2:]
+    num_plaq = dual_lattice.num_plaquettes
 
     mean_activation = [np.mean(data, axis=0) for data in ref_plaq_data]
 
@@ -65,7 +62,7 @@ def main(
     for iexp in iexps:
         LOG.info('Starting experiment %d', iexp)
         rng = np.random.default_rng(12345 + iexp)
-        uniform = rng.random((num_steps, configuration['shots'], num_gen, num_plaq))
+        uniform = rng.random((num_steps, shots, num_gen, num_plaq))
         flips = [np.asarray(uniform[istep] < act[istep][None, None, :], dtype=np.uint8)
                  for istep, act in enumerate(mean_activation)]
         flipped = [(data[:, None, :] ^ fl).reshape((-1, num_plaq))

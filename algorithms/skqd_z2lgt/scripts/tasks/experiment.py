@@ -14,12 +14,7 @@ LOG = logging.getLogger(__name__)
 
 def main(filename: str, job_id: Optional[str] = None):
     with h5py.File(filename, 'r', swmr=True) as source:
-        configuration = {}
-        for key in source['configuration'].keys():
-            record = source[f'configuration/{key}'][()]
-            if isinstance(record, bytes):
-                record = record.decode()
-            configuration[key] = record
+        configuration = dict(source.attrs)
 
     service = QiskitRuntimeService(instance=configuration['instance'])
     backend = service.backend(configuration['backend'])
@@ -51,14 +46,26 @@ def main(filename: str, job_id: Optional[str] = None):
         job = sampler.run(exp_circuits + ref_circuits, shots=configuration['shots'])
         LOG.info('Submitted job %s to %s.', job.job_id(), configuration['backend'])
 
+    result = job.result()
+
     with h5py.File(filename, 'r+') as out:
         try:
             del out['experiment']
         except KeyError:
             pass
         group = out.create_group('experiment')
-        group.create_dataset('job_id', data=job.job_id())
-        group.create_dataset('layout', data=layout)
+        group.attrs['job_id'] = job.job_id()
+        group.attrs['layout'] = layout
+        for ires, res in enumerate(result):
+            if ires < configuration['num_steps']:
+                dataset = 'exp'
+                istep = ires
+            else:
+                dataset = 'ref'
+                istep -= configuration['num_steps']
+            # Note: Qiskit BitArray is packed in big endian
+            dataset = group.create_dataset(f'{dataset}_step{istep}', data=res.data.c.array)
+            dataset.attrs['num_bits'] = res.data.c.num_bits
 
 
 if __name__ == '__main__':

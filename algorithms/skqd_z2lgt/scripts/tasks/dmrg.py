@@ -13,12 +13,7 @@ LOG = logging.getLogger(__name__)
 
 def main(filename: str):
     with h5py.File(filename, 'r', swmr=True) as source:
-        configuration = {}
-        for key in source['configuration'].keys():
-            record = source[f'configuration/{key}'][()]
-            if isinstance(record, bytes):
-                record = record.decode()
-            configuration[key] = record
+        configuration = dict(source.attrs)
 
     dual_lattice = TriangularZ2Lattice(configuration['lattice']).plaquette_dual()
     ising_hamiltonian = dual_lattice.make_hamiltonian(configuration['plaquette_energy'])

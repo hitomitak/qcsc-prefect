@@ -62,26 +62,25 @@ def main(
     multi_gpu: bool = False
 ):
     with h5py.File(filename, 'r') as source:
-        configuration = {}
-        for key in source['configuration'].keys():
-            record = source[f'configuration/{key}'][()]
-            if isinstance(record, bytes):
-                record = record.decode()
-            configuration[key] = record
+        configuration = dict(source.attrs)
 
         num_steps = configuration['num_steps']
-        shots = configuration['shots']
-
         exp_plaq_data = []
         exp_vtx_data = []
         for istep in range(num_steps):
-            group = source[f'exp_step{istep}']
-            num_plaq = group['num_plaq'][()]
-            num_vtx = group['num_vtx'][()]
-            exp_plaq_data.append(np.unpackbits(group['plaq_data'][()], axis=-1)[..., :num_plaq])
-            exp_vtx_data.append(np.unpackbits(group['vtx_data'][()], axis=-1)[..., :num_vtx])
+            dataset = source[f'exp_step{istep}/plaq_data']
+            exp_plaq_data.append(
+                np.unpackbits(dataset[()], axis=-1)[..., :dataset.attrs['num_bits']]
+            )
+            dataset = source[f'exp_step{istep}/vtx_data']
+            exp_vtx_data.append(
+                np.unpackbits(dataset[()], axis=-1)[..., :dataset.attrs['num_bits']]
+            )
 
-        raw_states = np.unpackbits(source['skqd_raw/sqd_states'][()], axis=-1)[:, :num_plaq]
+        shots, num_vtx = exp_vtx_data[0].shape[-2:]
+
+        dataset = source['skqd_raw/sqd_states']
+        raw_states = np.unpackbits(dataset[()], axis=-1)[:, :dataset.attrs['num_bits']]
         raw_eigvec = source['skqd_raw/eigvec'][()]
 
         models = []
@@ -173,8 +172,8 @@ def main(
             pass
 
         group = out.create_group(groupname)
-        group.create_dataset('num_plaq', data=num_plaq)
-        group.create_dataset('sqd_states', data=np.packbits(sqd_states, axis=1))
+        dataset = group.create_dataset('sqd_states', data=np.packbits(sqd_states, axis=1))
+        dataset.attrs['num_bits'] = lattice.num_plaquettes
         group.create_dataset('energy', data=energy)
         group.create_dataset('eigvec', data=eigvec)
         group.create_dataset('energies', data=energies)

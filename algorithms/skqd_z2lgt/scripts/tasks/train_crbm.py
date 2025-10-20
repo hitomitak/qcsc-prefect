@@ -1,4 +1,6 @@
 """Train the CRBM for configuration recovery."""
+# TODO: Align bit ordering in CRBM training to big endian
+# (and perhaps change to pre-padding everywhere)
 import os
 import argparse
 import logging
@@ -23,18 +25,11 @@ def main(
     out_filename: Optional[str] = None
 ):
     with h5py.File(filename, 'r', swmr=True) as source:
-        configuration = {}
-        for key in source['configuration'].keys():
-            record = source[f'configuration/{key}'][()]
-            if isinstance(record, bytes):
-                record = record.decode()
-            configuration[key] = record
-
         group = source[f'ref_step{istep}']
-        num_plaq = group['num_plaq'][()]
-        num_vtx = group['num_vtx'][()]
-        vtx_data = np.unpackbits(group['vtx_data'], axis=-1)[..., :num_vtx]
-        plaq_data = np.unpackbits(group['plaq_data'], axis=-1)[..., :num_plaq]
+        dataset = group['vtx_data']
+        vtx_data = np.unpackbits(dataset[()], axis=-1)[..., :dataset.attrs['num_bits']]
+        dataset = group['plaq_data']
+        plaq_data = np.unpackbits(dataset[()], axis=-1)[..., :dataset.attrs['num_bits']]
         train_u = vtx_data[:80_000]
         train_v = plaq_data[:80_000]
         test_u = vtx_data[80_000:]
@@ -43,6 +38,9 @@ def main(
     mean_activation = np.mean(train_v, axis=0)
     mean_activation = np.where(np.isclose(mean_activation, 0.), 1.e-6, mean_activation)
     bias_init = np.log(mean_activation / (1. - mean_activation))
+
+    num_vtx = vtx_data.shape[-1]
+    num_plaq = plaq_data.shape[-1]
 
     rngs = nnx.Rngs(params=0, sample=1)
     model = ConditionalRBM(num_vtx, num_plaq, model_params['num_h'], rngs=rngs)

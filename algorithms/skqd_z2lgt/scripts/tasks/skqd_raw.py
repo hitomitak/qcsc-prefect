@@ -14,18 +14,11 @@ LOG = logging.getLogger(__name__)
 
 def main(filename: str, multi_gpu: bool = False):
     with h5py.File(filename, 'r') as source:
-        configuration = {}
-        for key in source['configuration'].keys():
-            record = source[f'configuration/{key}'][()]
-            if isinstance(record, bytes):
-                record = record.decode()
-            configuration[key] = record
-
+        configuration = dict(source.attrs)
         plaq_data = []
         for istep in range(configuration['num_steps']):
-            group = source[f'exp_step{istep}']
-            num_plaq = group['num_plaq'][()]
-            plaq_data.append(np.unpackbits(group['plaq_data'][()], axis=1)[..., :num_plaq])
+            dataset = source[f'exp_step{istep}/plaq_data']
+            plaq_data.append(np.unpackbits(dataset[()], axis=1)[..., :dataset.attrs['num_bits']])
 
     dual_lattice = TriangularZ2Lattice(configuration['lattice']).plaquette_dual()
     ising_hamiltonian = dual_lattice.make_hamiltonian(configuration['plaquette_energy'])
@@ -41,8 +34,8 @@ def main(filename: str, multi_gpu: bool = False):
             pass
 
         group = out.create_group('skqd_raw')
-        group.create_dataset('num_plaq', data=num_plaq)
-        group.create_dataset('sqd_states', data=np.packbits(sqd_states, axis=1))
+        dataset = group.create_dataset('sqd_states', data=np.packbits(sqd_states, axis=1))
+        dataset.attrs['num_bits'] = dual_lattice.num_plaquettes
         group.create_dataset('energy', data=energy)
         group.create_dataset('eigvec', data=eigvec)
         subgroup = group.create_group('ham_proj')
