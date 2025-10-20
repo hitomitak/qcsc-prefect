@@ -12,7 +12,7 @@ from skqd_z2lgt.circuits import make_step_circuits, compose_trotter_circuits
 LOG = logging.getLogger(__name__)
 
 
-def main(filename: str, job_id: Optional[str] = None):
+def main(filename: str, sampler_options: Optional[dict] = None, job_id: Optional[str] = None):
     with h5py.File(filename, 'r', swmr=True) as source:
         configuration = dict(source.attrs)
 
@@ -42,8 +42,8 @@ def main(filename: str, job_id: Optional[str] = None):
         LOG.info('Transpilation and composition of the circuits took %.2f seconds.',
                  time.time() - start)
 
-        sampler = Sampler(backend)
-        job = sampler.run(exp_circuits + ref_circuits, shots=configuration['shots'])
+        sampler = Sampler(backend, options=sampler_options)
+        job = sampler.run(exp_circuits + ref_circuits)
         LOG.info('Submitted job %s to %s.', job.job_id(), configuration['backend'])
 
     result = job.result()
@@ -71,10 +71,14 @@ def main(filename: str, job_id: Optional[str] = None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('filename')
+    parser.add_argument('--shots')
     parser.add_argument('--job-id')
     parser.add_argument('--log-level', default='INFO')
     options = parser.parse_args()
 
     logging.basicConfig(level=getattr(logging, options.log_level.upper()))
 
-    main(options.filename, job_id=options.job_id)
+    primitive_options = {}
+    if options.shots:
+        primitive_options['default_shots'] = options.shots
+    main(options.filename, sampler_options=primitive_options, job_id=options.job_id)
