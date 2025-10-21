@@ -1,7 +1,9 @@
 """Definition of the main Prefect flow for Z2LGT SKQD."""
 
 import os
+from pathlib import Path
 from enum import Enum
+import logging
 import asyncio
 import tempfile
 from typing import Optional
@@ -19,7 +21,7 @@ from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.circuits import make_step_circuits, compose_trotter_circuits
 from skqd_z2lgt.recovery_learning import preprocess
 
-TASK_SCRIPT_DIR = os.path.dirname(os.path.dirname(__file__)) / 'tasks'
+TASK_SCRIPT_DIR = Path(__file__).parents[1] / 'tasks'
 
 
 class Basis2Q(str, Enum):
@@ -86,6 +88,7 @@ async def main(
             will be deleted at the end of the workflow.
     """
     logger = get_run_logger()
+    logger.setLevel(logging.INFO)
 
     output_filename, cleanup_output = open_output(configuration, output_filename)
     logger.info('Running the quantum job to obtain bitstrings')
