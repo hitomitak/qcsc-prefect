@@ -21,10 +21,10 @@ def main(filename: str, multi_gpu: bool = False):
             plaq_data.append(np.unpackbits(dataset[()], axis=1)[..., :dataset.attrs['num_bits']])
 
     dual_lattice = TriangularZ2Lattice(configuration['lattice']).plaquette_dual()
-    ising_hamiltonian = dual_lattice.make_hamiltonian(configuration['plaquette_energy'])
+    hamiltonian = dual_lattice.make_hamiltonian(configuration['plaquette_energy'])
 
     states = np.concatenate(plaq_data, axis=0)[:, ::-1]
-    energy, eigvec, sqd_states, ham_proj = sqd(ising_hamiltonian, states,
+    energy, eigvec, sqd_states, ham_proj = sqd(hamiltonian, states,
                                                jax_device_id=-1 if multi_gpu else None)
 
     with h5py.File(filename, 'r+') as out:

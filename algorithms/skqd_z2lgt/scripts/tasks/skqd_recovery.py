@@ -53,6 +53,25 @@ def make_batch_generator(num_gen):
     return generate_fn
 
 
+def write_skqd_result(out, group_name, sqd_states, energy, eigvec, ham_proj=None):
+    try:
+        del out[group_name]
+    except KeyError:
+        pass
+
+    group = out.create_group(group_name)
+    dataset = group.create_dataset('sqd_states', data=np.packbits(sqd_states, axis=1))
+    dataset.attrs['num_bits'] = sqd_states.shape[-1]
+    group.create_dataset('energy', data=energy)
+    group.create_dataset('eigvec', data=eigvec)
+    if ham_proj is not None:
+        subgroup = group.create_group('ham_proj')
+        subgroup.create_dataset('data', data=ham_proj.data)
+        subgroup.create_dataset('indices', data=ham_proj.indices)
+        subgroup.create_dataset('indptr', data=ham_proj.indptr)
+    return group
+
+
 def main(
     filename: str,
     gen_batch_size: int = 10_000,
@@ -68,23 +87,27 @@ def main(
 
         plaq_group = source['data/plaq']
         vtx_group = source['data/vtx']
-        exp_plaq_data = []
-        exp_vtx_data = []
+        plaq_data = []
+        vtx_data = []
         for istep in range(num_steps):
             dataset = plaq_group[f'exp_step{istep}']
-            exp_plaq_data.append(
+            plaq_data.append(
                 np.unpackbits(dataset[()], axis=-1)[..., :dataset.attrs['num_bits']]
             )
             dataset = vtx_group[f'exp_step{istep}']
-            exp_vtx_data.append(
+            vtx_data.append(
                 np.unpackbits(dataset[()], axis=-1)[..., :dataset.attrs['num_bits']]
             )
 
-        shots, num_vtx = exp_vtx_data[0].shape
+        shots, num_vtx = vtx_data[0].shape
 
-        dataset = source['skqd_raw/sqd_states']
-        raw_states = np.unpackbits(dataset[()], axis=-1)[:, :dataset.attrs['num_bits']]
-        raw_eigvec = source['skqd_raw/eigvec'][()]
+        try:
+            dataset = source['skqd_raw/sqd_states']
+            raw_states = np.unpackbits(dataset[()], axis=-1)[:, :dataset.attrs['num_bits']]
+            raw_eigvec = source['skqd_raw/eigvec'][()]
+            compute_raw = False
+        except KeyError:
+            compute_raw = True
 
         models = []
         for istep in range(num_steps):
@@ -102,6 +125,14 @@ def main(
     lattice = TriangularZ2Lattice(configuration['lattice'])
     dual_lattice = lattice.plaquette_dual()
     hamiltonian = dual_lattice.make_hamiltonian(configuration['plaquette_energy'])
+
+    jax_device_id = -1 if multi_gpu else None
+
+    if compute_raw:
+        LOG.info('Performing SQD with observed (charge-corrected) plaquette states')
+        states = np.concatenate(plaq_data, axis=0)[:, ::-1]
+        raw_energy, raw_eigvec, raw_states, raw_ham_proj = sqd(hamiltonian, states,
+                                                               jax_device_id=jax_device_id)
 
     relevant_states = raw_states[np.square(np.abs(raw_eigvec)) > 1.e-20]
     exp_data_size = num_steps * shots
@@ -127,7 +158,7 @@ def main(
         with ThreadPoolExecutor() as executor:
             futures = [
                 executor.submit(generate_states,
-                                models[istep], exp_vtx_data[istep], exp_plaq_data[istep],
+                                models[istep], vtx_data[istep], plaq_data[istep],
                                 generate_fn, gen_batch_size)
                 for istep in range(num_steps)
             ]
@@ -140,8 +171,8 @@ def main(
             LOG.info('Updated maximum array size to %d', max_size)
         LOG.info('Diagonalizing the Hamiltonian projected onto %d states..', states.shape[0])
         start = time.time()
-        sqd_result = sqd(hamiltonian, states, jax_device_id=-1 if multi_gpu else None,
-                         states_size=max_size, return_hproj=is_last)
+        sqd_result = sqd(hamiltonian, states, jax_device_id=jax_device_id, states_size=max_size,
+                         return_hproj=is_last)
         energy, eigvec, sqd_states = sqd_result[:3]
         energies.append(energy)
         subspace_dims.append(sqd_states.shape[0])
@@ -167,24 +198,13 @@ def main(
 
     ham_proj = sqd_result[-1]
 
-    groupname = 'skqd_rcv'  # pylint: disable=invalid-name
     with h5py.File(filename, 'r+') as out:
-        try:
-            del out[groupname]
-        except KeyError:
-            pass
+        if compute_raw:
+            write_skqd_result(out, 'skqd_raw', raw_states, raw_energy, raw_eigvec, raw_ham_proj)
 
-        group = out.create_group(groupname)
-        dataset = group.create_dataset('sqd_states', data=np.packbits(sqd_states, axis=1))
-        dataset.attrs['num_bits'] = lattice.num_plaquettes
-        group.create_dataset('energy', data=energy)
-        group.create_dataset('eigvec', data=eigvec)
+        group = write_skqd_result(out, 'skqd_rcv', sqd_states, energy, eigvec, ham_proj)
         group.create_dataset('energies', data=energies)
         group.create_dataset('subspace_dims', data=subspace_dims)
-        subgroup = group.create_group('ham_proj')
-        subgroup.create_dataset('data', data=ham_proj.data)
-        subgroup.create_dataset('indices', data=ham_proj.indices)
-        subgroup.create_dataset('indptr', data=ham_proj.indptr)
 
 
 if __name__ == '__main__':
