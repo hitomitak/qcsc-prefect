@@ -513,41 +513,44 @@ async def train_crbm(
     conf = parameters.crbm
 
     job_block = await MiyabiJobBlock.load(cuda_scriptjob_name)
-    with job_block.get_executor() as executor:
-        tasks = []
-        async with asyncio.TaskGroup() as taskgroup:
-            for istep in steps:
-                tempname = Path(executor.work_dir) / f'crbm_step{istep}.h5'
-                arguments = [
-                    TASK_SCRIPT_DIR / 'train_crbm.py',
-                    output_filename,
-                    f'{istep}',
-                    '--out-filename', tempname,
-                    '--num-h', f'{conf.num_h}',
-                    '--l2w-weights', f'{conf.l2w_weights}',
-                    '--l2w-biases', f'{conf.l2w_biases}',
-                    '--init-h-sparsity', f'{conf.init_h_sparsity}',
-                    '--batch-size', f'{conf.batch_size}',
-                    '--learning-rate', f'{conf.learning_rate}',
-                    '--num-epochs', f'{conf.num_epochs}',
-                    '--rtol', f'{conf.rtol}'
-                ]
-                atask = taskgroup.create_task(
-                    executor.execute_job(
-                        arguments=arguments,
-                        **job_block.get_job_variables()
-                    )
-                )
-                tasks.append((istep, atask, tempname))
 
-        with h5py.File(output_filename, 'r+') as out:
-            group = out['crbm']
-            for istep, atask, tempname in tasks:
-                if (code := atask.result()) != 0:
-                    raise RuntimeError(f'CRBM training return code {code} for Trotter step {istep}')
+    async def run_train_job(istep, data_dir):
+        with job_block.get_executor() as executor:
+            arguments = [
+                TASK_SCRIPT_DIR / 'train_crbm.py',
+                output_filename,
+                f'{istep}',
+                '--out-filename', data_dir / 'out.h5',
+                '--num-h', f'{conf.num_h}',
+                '--l2w-weights', f'{conf.l2w_weights}',
+                '--l2w-biases', f'{conf.l2w_biases}',
+                '--init-h-sparsity', f'{conf.init_h_sparsity}',
+                '--batch-size', f'{conf.batch_size}',
+                '--learning-rate', f'{conf.learning_rate}',
+                '--num-epochs', f'{conf.num_epochs}',
+                '--rtol', f'{conf.rtol}'
+            ]
+            executor.execute_job(
+                arguments=arguments,
+                **job_block.get_job_variables()
+            )
 
-                with h5py.File(tempname, 'r') as source:
-                    source.copy(f'crbm/step{istep}', group)
+    tasks = []
+    async with asyncio.TaskGroup() as taskgroup:
+        for istep in steps:
+            data_dir = Path(tempfile.mkdtemp(prefix='data_', dir=job_block.work_root))
+            logger.info('Trained model for step %d will be written to %s', istep, data_dir)
+            atask = taskgroup.create_task(run_train_job(istep, data_dir))
+            tasks.append((istep, atask, data_dir))
+
+    with h5py.File(output_filename, 'r+') as out:
+        group = out['crbm']
+        for istep, atask, data_dir in tasks:
+            if (code := atask.result()) != 0:
+                raise RuntimeError(f'CRBM training return code {code} for Trotter step {istep}')
+
+            with h5py.File(data_dir / 'out.h5', 'r') as source:
+                source.copy(f'crbm/step{istep}', group)
 
 
 @task
