@@ -439,14 +439,23 @@ async def preprocess_bitstrings(
     dual_lattice = lattice.plaquette_dual()
     batch_size = bit_arrays[0][0].array.shape[0] // 20
 
-    tasks = []
+    running = []
+    done = [None] * (parameters.skqd.n_trotter_steps * 2)
+
+    def callback(atask):
+        idx = next(i for i, t in running if t == atask)
+        running.pop(idx)
+        done[idx] = atask
+
     async with asyncio.TaskGroup() as taskgroup:
-        for bit_array in bit_arrays[0] + bit_arrays[1]:
-            tasks.append(
-                taskgroup.create_task(
-                    job_block.run(preprocess, bit_array, dual_lattice, batch_size=batch_size)
-                )
+        for idx, bit_array in enumerate(bit_arrays[0] + bit_arrays[1]):
+            atask = taskgroup.create_task(
+                job_block.run(preprocess, bit_array, dual_lattice, batch_size=batch_size)
             )
+            running.append((idx, atask))
+            atask.add_done_callback(callback)
+            while len(running) == 4:
+                await asyncio.sleep(1.)
 
     with h5py.File(output_filename, 'r+') as out:
         lengths = [lattice.num_vertices, lattice.num_plaquettes]
@@ -454,7 +463,7 @@ async def preprocess_bitstrings(
         groups = [data_group.get(gname) or data_group.create_group(gname)
                   for gname in ['vtx', 'plaq']]
 
-        for idx, atask in enumerate(tasks):
+        for idx, atask in enumerate(done):
             arrays = atask.result()
             if idx < parameters.skqd.n_trotter_steps:
                 etype = 'exp'
