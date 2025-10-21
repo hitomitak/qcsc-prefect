@@ -1,91 +1,66 @@
 """Functions to pre- and postprocess data for correction learning."""
 from concurrent.futures import ProcessPoolExecutor
 import numpy as np
+from qiskit.primitives import BitArray
 from heavyhex_qft.plaquette_dual import PlaquetteDual
 from skqd_z2lgt.mwpm import make_matching, mwpm_correct
 
 
 def preprocess(
-    counts: dict[str, int] | tuple[np.ndarray, np.ndarray],
+    bit_array: BitArray,
     dual_lattice: PlaquetteDual,
-    as_counts: bool = False,
-    shuffle: bool = True,
+    shuffle: bool = False,
     batch_size: int = 0
-) -> dict[tuple[tuple[int, ...], tuple[int, ...]], int] | tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Convert the counts dict to input data for correction learning."""
-    if isinstance(counts, dict):
-        shots = sum(counts.values())
-        generator = counts.items()
-    else:
-        shots = np.sum(counts[1])
-        generator = zip(*counts)
+    array = bit_array.array
+    num_bits = bit_array.num_bits
+    shots = array.shape[0]
 
     if batch_size <= 0:
-        out = _batch_process(generator, dual_lattice, as_counts, shots=shots)
+        out = _batch_process(array, num_bits, dual_lattice)
     else:
         with ProcessPoolExecutor() as executor:
-            geniter = iter(generator)
             futures = []
-            while True:
-                batch = []
-                try:
-                    for _ in range(batch_size):
-                        batch.append(next(geniter))
-                except StopIteration:
-                    break
-                finally:
-                    fut = executor.submit(_batch_process, batch, dual_lattice, as_counts)
-                    futures.append(fut)
+            start = 0
+            while start < shots:
+                end = start + batch_size
+                fut = executor.submit(_batch_process, array[start:end], num_bits, dual_lattice)
+                futures.append((start, end, fut))
+                start = end
+        out = (
+            np.empty((shots, dual_lattice.primal.num_vertices), dtype=np.uint8),
+            np.empty((shots, dual_lattice.num_plaquettes), dtype=np.uint8)
+        )
 
-        if as_counts:
-            out = {}
-        else:
-            out = (
-                np.empty((shots, dual_lattice.primal.num_vertices), dtype=np.uint8),
-                np.empty((shots, dual_lattice.num_plaquettes), dtype=np.uint8)
-            )
-
-        pos = 0
-        for fut in futures:
+        for start, end, fut in futures:
             batch_out = fut.result()
-            if as_counts:
-                out.update(batch_out)
-            else:
-                batch_counts = batch_out[0].shape[0]
-                out[0][pos:pos + batch_counts] = batch_out[0]
-                out[1][pos:pos + batch_counts] = batch_out[1]
-                pos += batch_counts
+            out[0][start:end] = batch_out[0]
+            out[1][start:end] = batch_out[1]
 
-    if not as_counts and shuffle:
-        indices = np.arange(pos)
+    if shuffle:
+        indices = np.arange(shots)
         np.random.default_rng().shuffle(indices)
         out = (out[0][indices], out[1][indices])
 
     return out
 
 
-def _batch_process(batch, dual_lattice, as_counts, shots=None):
+def _batch_process(batch_array, num_bits, dual_lattice):
     lattice = dual_lattice.primal
     matching = make_matching(lattice)
-    if as_counts:
-        out = {}
-    else:
-        if shots is None:
-            shots = sum((cnt for _, cnt in batch))
-        out = (
-            np.empty((shots, lattice.num_vertices), dtype=np.uint8),
-            np.empty((shots, lattice.num_plaquettes), dtype=np.uint8)
-        )
+    out = (
+        np.empty((batch_array.shape[0], lattice.num_vertices), dtype=np.uint8),
+        np.empty((batch_array.shape[0], lattice.num_plaquettes), dtype=np.uint8)
+    )
 
-    pos = 0
-    for link_state, count in batch:
-        link_state, syndrome = mwpm_correct(link_state, lattice, matching)
-        plaquette_state = dual_lattice.map_link_state(link_state)
-        if as_counts:
-            out[(tuple(syndrome.tolist()), tuple(plaquette_state.tolist()))] = int(count)
-        else:
-            out[0][pos:pos + count] = syndrome[None, :]
-            out[1][pos:pos + count] = plaquette_state[None, :]
-            pos += count
+    # heavyhex_qft uses a little endian convention for some reason -> ::-1
+    link_states = np.unpackbits(batch_array, axis=1)[:, -num_bits:][:, ::-1]
+
+    for ishot, link_state in enumerate(link_states):
+        corrected_link_state, syndrome = mwpm_correct(link_state, lattice, matching)
+        plaquette_state = dual_lattice.map_link_state(corrected_link_state)
+        out[0][ishot] = syndrome
+        out[1][ishot] = plaquette_state
 
     return out

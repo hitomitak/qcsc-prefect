@@ -50,21 +50,20 @@ def main(filename: str, sampler_options: Optional[dict] = None, job_id: Optional
 
     with h5py.File(filename, 'r+') as out:
         try:
-            del out['experiment']
+            del out['data/raw']
         except KeyError:
             pass
-        group = out.create_group('experiment')
+        group = out.create_group('data/raw')
         group.attrs['job_id'] = job.job_id()
         group.attrs['layout'] = layout
         for ires, res in enumerate(result):
             if ires < configuration['num_steps']:
-                dataset = 'exp'
-                istep = ires
+                etype = 'exp'
             else:
-                dataset = 'ref'
-                istep -= configuration['num_steps']
-            # Note: Qiskit BitArray is packed in big endian
-            dataset = group.create_dataset(f'{dataset}_step{istep}', data=res.data.c.array)
+                etype = 'ref'
+            istep = ires % configuration['num_steps']
+            # Note: Qiskit BitArray is packed in right-aligned big endian
+            dataset = group.create_dataset(f'{etype}_step{istep}', data=res.data.c.array)
             dataset.attrs['num_bits'] = res.data.c.num_bits
 
 
