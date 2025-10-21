@@ -190,7 +190,7 @@ class Parameters(BaseModel):
 
 
 @flow
-async def main(
+async def skqd_z2lgt(
     parameters: Parameters,
     runner_name: str = 'ibm-runner',
     option_name: str = 'sampler_options',
@@ -552,3 +552,16 @@ async def project_and_diagonalize(
             arguments=arguments,
             **job_block.get_job_variables()
         )
+
+
+def deploy():
+    """Deploy workflow with a local worker."""
+    # Prefect deploys with relative path.
+    # Workflow is now installed in site-packages.
+    os.chdir(Path(__file__).parent)
+
+    # Deploy the workflow with specified options.
+    skqd_z2lgt.with_options(version=os.getenv("WF_VERSION", "unknown")).serve(
+        name="skqd_z2lgt",
+        description="SKQD experiment for Z2 LGT."
+    )
