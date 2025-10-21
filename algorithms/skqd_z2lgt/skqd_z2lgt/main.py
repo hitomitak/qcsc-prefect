@@ -34,6 +34,7 @@ class LGTParameters(BaseModel):
         title='Lattice Configuration'
     )
     plaquette_energy: float = Field(
+        default=1.,
         description='Plaquette energy in the Hamiltonian (transverse field strength in the dual'
                     ' Ising model).',
         title='Plaquette Energy',
@@ -142,21 +143,25 @@ class SKQDParameters(BaseModel):
         ge=0,
     )
     max_subspace_dim: int = Field(
+        default=1_000_000,
         description="Maximum subspace dimension in iterative configuration recovery.",
         title="Maximum Subspace Dimension",
-        ge=1,
+        ge=1
     )
     num_gen: int = Field(
+        default=3,
         description="Number of bitstrings to generate in each iteration of configuration recovery.",
         title="Generated Samples",
-        ge=3,
+        ge=1
     )
     max_iterations: int = Field(
+        default=10,
         description="Number of configuration recovery iterations.",
         title="Max Iteration",
-        ge=10,
+        ge=0
     )
     delta_e: float = Field(
+        default=0.005,
         description="Convergence condition (change in energy value between configuration recovery"
                     "iterations)",
         title="Energy Convergence",
@@ -191,13 +196,13 @@ class Parameters(BaseModel):
         title='SKQD',
     )
 
-    runtime_job_id: str = Field(
+    runtime_job_id: str | None = Field(
         default=None,
         description='ID of an existing IBM Quantum workload.',
         title='Runtime Job ID'
     )
 
-    output_filename: str = Field(
+    output_filename: str | None = Field(
         default=None,
         description='Name of the HDF5 file where intermediate output are stored.',
         title='Output File Name'
