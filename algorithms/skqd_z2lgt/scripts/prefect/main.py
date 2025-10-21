@@ -347,14 +347,12 @@ async def train_crbm(
         tasks = []
         async with asyncio.TaskGroup() as taskgroup:
             for istep in steps:
-                with tempfile.NamedTemporaryFile(dir=executor.work_dir) as tfile:
-                    pass
-
+                tempname = Path(executor.work_dir) / f'crbm_step{istep}.h5'
                 arguments = [
                     TASK_SCRIPT_DIR / 'train_crbm.py',
                     output_filename,
                     f'{istep}',
-                    '--out-filename', tfile.name,
+                    '--out-filename', tempname,
                     '--num-epochs', '100',
                     '--rtol', '2.'
                 ]
@@ -364,9 +362,9 @@ async def train_crbm(
                         **job_block.get_job_variables()
                     )
                 )
-                tasks.append((istep, atask, tfile.name))
+                tasks.append((istep, atask, tempname))
 
-                logger.info('Step %d will write trained model to %s', istep, tfile.name)
+                logger.info('Step %d will write trained model to %s', istep, tempname)
 
         with h5py.File(output_filename, 'r+') as out:
             for istep, atask, tempname in tasks:
