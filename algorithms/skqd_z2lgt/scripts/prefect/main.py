@@ -9,8 +9,10 @@ from typing import Optional
 import numpy as np
 import h5py
 from qiskit.circuit import QuantumCircuit
-from qiskit.transpiler import Target, generate_preset_pass_manager
+from qiskit.transpiler import Target, PassManager, generate_preset_pass_manager
+from qiskit.transpiler.passes import Optimize1qGatesDecomposition, RemoveIdentityEquivalent
 from qiskit.primitives import BitArray
+from qiskit_ibm_runtime.transpiler.passes import FoldRzzAngle
 from prefect import flow, task, get_run_logger
 from prefect.variables import Variable
 from pydantic import BaseModel, Field
@@ -174,6 +176,13 @@ def get_trotter_circuits(
         optimization_level=optimization_level,
         target=target,
         initial_layout=layout,
+    )
+    pm.post_optimization = PassManager(
+        [
+            FoldRzzAngle(),
+            Optimize1qGatesDecomposition(target=target),  # Cancel added local gates
+            RemoveIdentityEquivalent(target=target),  # Remove GlobalPhaseGate
+        ]
     )
     circuits = make_step_circuits(lattice, configuration.plaquette_energy,
                                   configuration.delta_t, configuration.basis_2q)
