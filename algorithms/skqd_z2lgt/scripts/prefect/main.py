@@ -240,7 +240,8 @@ async def sample_krylov_bitstrings(
         except KeyError:
             pass
         group = out.create_group('data/raw')
-        group.attrs['layout'] = layout
+        if layout:
+            group.attrs['layout'] = layout
         for ires, res in enumerate(pub_result):
             if ires < configuration.num_steps:
                 etype = 'exp'
@@ -284,11 +285,11 @@ async def preprocess_bitstrings(
 
         for idx, atask in enumerate(tasks):
             arrays = atask.result()
-            if idx < configuration['num_steps']:
+            if idx < configuration.num_steps:
                 etype = 'exp'
             else:
                 etype = 'ref'
-            istep = idx % configuration['num_steps']
+            istep = idx % configuration.num_steps
             dname = f'{etype}_step{istep}'
             for group, array, num_bits in zip(groups, arrays, lengths):
                 try:
