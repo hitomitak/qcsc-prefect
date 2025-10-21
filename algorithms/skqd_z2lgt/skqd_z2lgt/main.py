@@ -530,7 +530,7 @@ async def train_crbm(
                 '--num-epochs', f'{conf.num_epochs}',
                 '--rtol', f'{conf.rtol}'
             ]
-            executor.execute_job(
+            await executor.execute_job(
                 arguments=arguments,
                 **job_block.get_job_variables()
             )
