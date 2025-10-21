@@ -500,8 +500,7 @@ async def train_crbm(
     steps = []
     with h5py.File(output_filename, 'r+') as out:
         group = out.get('crbm') or out.create_group('crbm')
-        num_steps = int(out.attrs['num_steps'])
-        for istep in range(num_steps):
+        for istep in range(parameters.skqd.n_trotter_steps):
             if f'step{istep}' not in group:
                 steps.append(istep)
 
