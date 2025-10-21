@@ -64,8 +64,8 @@ async def main(
     configuration: Configuration,
     runner_name: str = 'ibm-runner',
     option_name: str = 'sampler_options',
-    pyfuncjob_name: str = 'pyfunc-qii-miyabi-kawasaki',
-    scriptjob_name: str = 'script-qii-miyabi-kawasaki',
+    cpu_pyfuncjob_name: str = 'pyfunc-qii-miyabi-kawasaki',
+    cuda_scriptjob_name: str = 'script-qii-miyabi-kawasaki',
     runtime_job_id: Optional[str] = None,
     output_filename: Optional[str] = None
 ) -> float:
@@ -75,10 +75,10 @@ async def main(
         configuration: SKQD configuration.
         runner_name: Name of QuantumRunner block.
         option_name: Name of the Variable for QuantumRunner sampler options.
-        pyfuncjob_name: Name of the PyFunctionJob block that runs a python function in an
+        cpu_pyfuncjob_name: Name of the PyFunctionJob block that runs a python function in an
             interpreter in the current environment.
-        scriptjob_name: Name of the MiyabiJobBlock that executes the python interpreter in the
-            current environment.
+        cuda_scriptjob_name: Name of the MiyabiJobBlock that executes the python interpreter in a
+            CUDA environment.
         output_filename: If specified, the name of the HDF5 file where intermediate and final output
             of the workflow are written. If left unspecified, the file is considered temporary and
             will be deleted at the end of the workflow.
@@ -91,11 +91,11 @@ async def main(
     bit_arrays = await sample_krylov_bitstrings(configuration, runner_name, option_name,
                                                 runtime_job_id, output_filename)
     logger.info('Correcting and converting link states to plaquette states')
-    await preprocess_bitstrings(configuration, pyfuncjob_name, bit_arrays, output_filename)
+    await preprocess_bitstrings(configuration, cpu_pyfuncjob_name, bit_arrays, output_filename)
     logger.info('Training conditional restricted Boltzmann machines')
-    await train_crbm(configuration, scriptjob_name, output_filename)
+    await train_crbm(cuda_scriptjob_name, output_filename)
     logger.info('Performing SQD with configuration recovery')
-    await project_and_diagonalize(scriptjob_name, output_filename)
+    await project_and_diagonalize(cuda_scriptjob_name, output_filename)
 
     with h5py.File(output_filename) as source:
         energy = source['skqd_rcv/energy'][()]
@@ -274,16 +274,19 @@ async def sample_krylov_bitstrings(
 @task
 async def preprocess_bitstrings(
     configuration: Configuration,
-    pyfuncjob_name: str,
+    cpu_pyfuncjob_name: str,
     bit_arrays: tuple[list[BitArray], list[BitArray]],
     output_filename: str
 ):
+    logger = get_run_logger()
+
     with h5py.File(output_filename, 'r') as source:
         data_group = source.get('data', {})
         if 'vtx' in data_group and 'plaq' in data_group:
+            logger.info('vtx and plaq data already exist.')
             return
 
-    job_block = await PyFunctionJob.load(pyfuncjob_name)
+    job_block = await PyFunctionJob.load(cpu_pyfuncjob_name)
     lattice = TriangularZ2Lattice(configuration.lattice)
     dual_lattice = lattice.plaquette_dual()
     batch_size = configuration.shots // 20
@@ -322,17 +325,28 @@ async def preprocess_bitstrings(
 
 @task
 async def train_crbm(
-    configuration: Configuration,
-    scriptjob_name: str,
+    cuda_scriptjob_name: str,
     output_filename: str
 ):
     logger = get_run_logger()
 
-    job_block = await MiyabiJobBlock.load(scriptjob_name)
+    steps = []
+    with h5py.File(output_filename, 'r+') as out:
+        group = out.get('crbm') or out.create_group('crbm')
+        num_steps = int(out.attrs['num_steps'])
+        for istep in range(num_steps):
+            if f'step{istep}' not in group:
+                steps.append(istep)
+
+    if not steps:
+        logger.info('All models already trained')
+        return
+
+    job_block = await MiyabiJobBlock.load(cuda_scriptjob_name)
     with job_block.get_executor() as executor:
         tasks = []
         async with asyncio.TaskGroup() as taskgroup:
-            for istep in range(configuration.num_steps):
+            for istep in steps:
                 with tempfile.NamedTemporaryFile(dir=executor.work_dir) as tfile:
                     pass
 
@@ -350,29 +364,30 @@ async def train_crbm(
                         **job_block.get_job_variables()
                     )
                 )
-                tasks.append((atask, tfile.name))
+                tasks.append((istep, atask, tfile.name))
 
                 logger.info('Step %d will write trained model to %s', istep, tfile.name)
 
         with h5py.File(output_filename, 'r+') as out:
-            for istep, (atask, tempname) in enumerate(tasks):
+            for istep, atask, tempname in tasks:
                 if (code := atask.result()) != 0:
                     raise RuntimeError(f'CRBM training return code {code} for Trotter step {istep}')
+                group = out['crbm']
                 try:
-                    del out[f'crbm/step{istep}']
+                    del group[f'step{istep}']
                 except KeyError:
                     pass
 
                 with h5py.File(tempname, 'r') as source:
-                    source.copy(f'crbm/step{istep}', out.get('crbm') or out.create_group('crbm'))
+                    source.copy(f'crbm/step{istep}', group)
 
 
 @task
 async def project_and_diagonalize(
-    scriptjob_name: str,
+    cuda_scriptjob_name: str,
     output_filename: str
 ):
-    job_block = await MiyabiJobBlock.load(scriptjob_name)
+    job_block = await MiyabiJobBlock.load(cuda_scriptjob_name)
     with job_block.get_executor() as executor:
         arguments = [
             TASK_SCRIPT_DIR / 'skqd_recovery.py',
