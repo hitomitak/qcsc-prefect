@@ -268,11 +268,6 @@ def open_output(parameters: Parameters) -> str:
     """
     logger = get_run_logger()
 
-    output_filename = parameters.output_filename
-    if not output_filename:
-        with tempfile.NamedTemporaryFile(delete=False) as tfile:
-            output_filename = tfile.name
-
     attrs = [
         ('lattice', parameters.lgt.lattice),
         ('plaquette_energy', parameters.lgt.plaquette_energy),
@@ -281,15 +276,20 @@ def open_output(parameters: Parameters) -> str:
         ('delta_t', parameters.skqd.dt)
     ]
 
-    try:
+    output_filename = parameters.output_filename
+    if not output_filename:
+        with tempfile.NamedTemporaryFile() as tfile:
+            output_filename = tfile.name
+
+    if os.path.exists(output_filename):
+        logger.info('Validating configurations in existing file %s', output_filename)
         with h5py.File(output_filename, 'r') as source:
-            logger.info('Validating configurations in existing file %s', output_filename)
             for key, value in attrs:
                 if ((isinstance(value, float) and not np.isclose(source.attrs[key], value))
                         or (isinstance(value, (int, str)) and source.attrs[key] != value)):
                     raise RuntimeError(f'Recorded {key} does not match the flow parameter')
 
-    except FileNotFoundError:
+    else:
         logger.info('Creating a new file %s', output_filename)
         with h5py.File(output_filename, 'w', libver='latest') as out:
             for key, value in attrs:
