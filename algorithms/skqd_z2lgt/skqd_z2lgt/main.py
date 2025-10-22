@@ -423,6 +423,10 @@ async def sample_krylov_bitstrings(
             [res.data.c for res in pub_result[num_steps:]])
 
 
+def convert_bit_arrays(bit_arrays, dual_lattice, batch_size):
+    return [convert_link_to_plaq(bit_array, dual_lattice, batch_size) for bit_array in bit_arrays]
+
+
 @task
 async def preprocess_bitstrings(
     parameters: Parameters,
@@ -453,23 +457,12 @@ async def preprocess_bitstrings(
     dual_lattice = lattice.plaquette_dual()
     batch_size = bit_arrays[0][0].array.shape[0] // 20
 
-    running = []
-    done = [None] * (parameters.skqd.n_trotter_steps * 2)
-
-    def callback(atask):
-        idx = next(i for i, t in running if t == atask)
-        running.remove((idx, atask))
-        done[idx] = atask
-
+    tasks = []
     async with asyncio.TaskGroup() as taskgroup:
-        for idx, bit_array in enumerate(bit_arrays[0] + bit_arrays[1]):
-            atask = taskgroup.create_task(
-                job_block.run(convert_link_to_plaq, bit_array, dual_lattice, batch_size=batch_size)
-            )
-            running.append((idx, atask))
-            atask.add_done_callback(callback)
-            while len(running) == 4:
-                await asyncio.sleep(1.)
+        for arrays in bit_arrays:
+            tasks.append(taskgroup.create_task(
+                job_block.run(convert_bit_arrays, arrays, dual_lattice, batch_size)
+            ))
 
     with h5py.File(output_filename, 'r+') as out:
         lengths = [lattice.num_vertices, lattice.num_plaquettes]
@@ -477,21 +470,16 @@ async def preprocess_bitstrings(
         groups = [data_group.get(gname) or data_group.create_group(gname)
                   for gname in ['vtx', 'plaq']]
 
-        for idx, atask in enumerate(done):
-            arrays = atask.result()
-            if idx < parameters.skqd.n_trotter_steps:
-                etype = 'exp'
-            else:
-                etype = 'ref'
-            istep = idx % parameters.skqd.n_trotter_steps
-            dname = f'{etype}_step{istep}'
-            for group, array, num_bits in zip(groups, arrays, lengths):
-                try:
-                    del group[dname]
-                except KeyError:
-                    pass
-                dataset = group.create_dataset(dname, data=np.packbits(array, axis=1))
-                dataset.attrs['num_bits'] = num_bits
+        for etype, atask in zip(['exp', 'ref'], tasks):
+            for istep, arrays in enumerate(atask.result()):
+                dname = f'{etype}_step{istep}'
+                for group, array, num_bits in zip(groups, arrays, lengths):
+                    try:
+                        del group[dname]
+                    except KeyError:
+                        pass
+                    dataset = group.create_dataset(dname, data=np.packbits(array, axis=1))
+                    dataset.attrs['num_bits'] = num_bits
 
 
 @task
