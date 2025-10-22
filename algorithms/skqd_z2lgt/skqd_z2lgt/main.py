@@ -584,6 +584,13 @@ async def project_and_diagonalize(
         output_filename: Name of the HDF5 file where intermediate and final output of the workflow
             are written.
     """
+    logger = get_run_logger()
+
+    with h5py.File(output_filename, 'r') as source:
+        if 'skqd_rcv' in source:
+            logger.info('SQD result already exists')
+            return
+
     job_block = await MiyabiJobBlock.load(cuda_scriptjob_name)
     with job_block.get_executor() as executor:
         arguments = [
