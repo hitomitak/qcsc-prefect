@@ -52,10 +52,10 @@ async def skqd_z2lgt(
 
     output_filename = open_output(parameters)
     logger.info('Running a quantum job to obtain the bitstrings')
-    bit_arrays = await sample_quantum(parameters, runner_name, option_name, output_filename)
+    await sample_quantum(parameters, runner_name, option_name, output_filename)
 
     logger.info('Correcting and converting link states to plaquette states')
-    await preprocess_bitstrings(parameters, cpu_pyfuncjob_name, bit_arrays, output_filename)
+    await preprocess_bitstrings(parameters, cpu_pyfuncjob_name, output_filename)
     logger.info('Training conditional restricted Boltzmann machines')
     await train_crbm(parameters, cuda_scriptjob_name, output_filename)
     logger.info('Performing SQD with configuration recovery')
@@ -139,7 +139,6 @@ def convert_bit_arrays(bit_arrays, dual_lattice, batch_size):
 async def preprocess_bitstrings(
     parameters: Parameters,
     cpu_pyfuncjob_name: str,
-    bit_arrays: tuple[list[BitArray], list[BitArray]],
     output_filename: str
 ):
     """Correct the link-state bitstrings with MWPM and convert to plaquette-state bitstrings.
@@ -154,10 +153,10 @@ async def preprocess_bitstrings(
     """
     logger = get_run_logger()
 
-    def convert_fn(_bit_arrays, dual_lattice):
+    def convert_fn(bit_arrays, dual_lattice):
         async def fn():
             job_block = await PyFunctionJob.load(cpu_pyfuncjob_name)
-            batch_size = _bit_arrays[0][0].array.shape[0] // 20
+            batch_size = bit_arrays[0][0].array.shape[0] // 20
             tasks = []
             async with asyncio.TaskGroup() as taskgroup:
                 for arrays in bit_arrays:
@@ -169,7 +168,7 @@ async def preprocess_bitstrings(
         with ThreadPoolExecutor(1) as executor:
             return executor.submit(lambda: asyncio.run(fn())).result()
 
-    return preprocess_flow(parameters, bit_arrays, output_filename, convert_fn, logger)
+    return preprocess_flow(parameters, output_filename, convert_fn, logger)
 
 
 @task

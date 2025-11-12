@@ -37,6 +37,19 @@ def check_saved_reco(
     return None
 
 
+def load_raw(parameters: Parameters, output_filename: str):
+    def read_bit_array(dataset):
+        return BitArray(dataset[()], int(dataset.attrs['num_bits']))
+
+    num_steps = parameters.skqd.n_trotter_steps
+
+    with h5py.File(output_filename, 'r') as source:
+        return tuple(
+            [read_bit_array(source[f'data/raw/{etype}_step{istep}']) for istep in range(num_steps)]
+            for etype in ['exp', 'ref']
+        )
+
+
 def save_reco(reco_data: tuple[RecoData, RecoData], output_filename: str):
     with h5py.File(output_filename, 'r+') as out:
         data_group = out['data']
@@ -57,7 +70,6 @@ def save_reco(reco_data: tuple[RecoData, RecoData], output_filename: str):
 
 def preprocess_flow(
     parameters: Parameters,
-    bit_arrays: tuple[list[BitArray], list[BitArray]],
     output_filename: str,
     convert_fn: Callable,
     logger: Optional[logging.Logger] = None
@@ -78,11 +90,13 @@ def preprocess_flow(
     if reco_data:
         return reco_data
 
+    raw_data = load_raw(parameters, output_filename)
+
     lattice = TriangularZ2Lattice(parameters.lgt.lattice)
     base_link_state = minimum_weight_link_state(parameters.lgt.charged_vertices, lattice)
     dual_lattice = lattice.plaquette_dual(base_link_state)
 
-    reco_data = convert_fn(bit_arrays, dual_lattice)
+    reco_data = convert_fn(raw_data, dual_lattice)
 
     save_reco(reco_data, output_filename)
 
@@ -91,16 +105,15 @@ def preprocess_flow(
 
 def preprocess(
     parameters: Parameters,
-    bit_arrays: tuple[list[BitArray], list[BitArray]],
     output_filename: str,
     logger: Optional[logging.Logger] = None
 ):
-    def convert_fn(_bit_arrays, dual_lattice):
+    def convert_fn(bit_arrays, dual_lattice):
         reco_data = []
-        for arrays in _bit_arrays:
+        for arrays in bit_arrays:
             reco_data.append([])
             for array in arrays:
                 reco_data[-1].append(convert_link_to_plaq(array, dual_lattice))
         return tuple(reco_data)
 
-    return preprocess_flow(parameters, bit_arrays, output_filename, convert_fn, logger)
+    return preprocess_flow(parameters, output_filename, convert_fn, logger)
