@@ -1,34 +1,52 @@
 """Functions for minimum-distance correction of observed link bitstrings."""
 from concurrent.futures import ProcessPoolExecutor
+from typing import Optional
 import numpy as np
-from scipy.sparse import csc_matrix, csr_array
+from scipy.sparse import csc_matrix
 from pymatching import Matching
 from qiskit.primitives import BitArray
+from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from heavyhex_qft.utils import as_bitarray
 from heavyhex_qft.plaquette_dual import PlaquetteDual
 
 
-def make_matching(lattice):
-    indices = []
-    indptr = [0]
-    for vertex in range(lattice.num_vertices):
-        indices += lattice.vertex_links(vertex)
-        indptr.append(len(indices))
-    csr_graph = csr_array((np.ones(len(indices), dtype=int), indices, indptr),
-                          shape=(lattice.num_vertices, lattice.num_links))
-    return Matching(csc_matrix(csr_graph))
+def make_matching(lattice: TriangularZ2Lattice) -> Matching:
+    nv = lattice.num_vertices
+    nl = lattice.num_links
+    matching_matrix = np.zeros((nv, nl), dtype=int)
+    for iv in range(lattice.num_vertices):
+        matching_matrix[iv, lattice.vertex_links(iv)] = 1
+    return Matching(csc_matrix(matching_matrix[::-1, ::-1]))
 
 
-def mwpm_correct(link_state, lattice, matching=None):
+def mwpm_correct(
+    link_state: np.ndarray,
+    lattice: TriangularZ2Lattice,
+    matching: Optional[Matching] = None
+) -> tuple[np.ndarray, np.ndarray]:
     if not matching:
         matching = make_matching(lattice)
+    return _mwpm_correct(as_bitarray(link_state), lattice, matching)
 
-    link_state = as_bitarray(link_state)
+
+def _mwpm_correct(link_state, lattice, matching):
     syndrome = lattice.get_syndrome(link_state)
     correction = matching.decode(syndrome).astype(bool)
-    link_state[correction] = 1 - link_state[correction]
-
+    link_state[correction] ^= 1
     return link_state, syndrome
+
+
+def minimum_weight_link_state(
+    charged_vertices: list[int],
+    lattice: TriangularZ2Lattice,
+    matching: Optional[Matching] = None
+) -> np.ndarray:
+    """Return a link state with minimal excitations corresponding to the charge distribution."""
+    if matching is None:
+        matching = make_matching(lattice)
+    charge_config = np.zeros(lattice.num_vertices, dtype=int)
+    charge_config[::-1][charged_vertices] = 1
+    return matching.decode(charge_config)
 
 
 def convert_link_to_plaq(
@@ -43,14 +61,14 @@ def convert_link_to_plaq(
     shots = array.shape[0]
 
     if batch_size <= 0:
-        out = _batch_process(array, num_bits, dual_lattice)
+        out = _batch_convert(array, num_bits, dual_lattice)
     else:
         with ProcessPoolExecutor() as executor:
             futures = []
             start = 0
             while start < shots:
                 end = start + batch_size
-                fut = executor.submit(_batch_process, array[start:end], num_bits, dual_lattice)
+                fut = executor.submit(_batch_convert, array[start:end], num_bits, dual_lattice)
                 futures.append((start, end, fut))
                 start = end
         out = (
@@ -71,7 +89,7 @@ def convert_link_to_plaq(
     return out
 
 
-def _batch_process(batch_array, num_bits, dual_lattice):
+def _batch_convert(batch_array, num_bits, dual_lattice):
     lattice = dual_lattice.primal
     matching = make_matching(lattice)
     out = (
@@ -79,11 +97,10 @@ def _batch_process(batch_array, num_bits, dual_lattice):
         np.empty((batch_array.shape[0], lattice.num_plaquettes), dtype=np.uint8)
     )
 
-    # heavyhex_qft uses a little endian convention for some reason -> ::-1
-    link_states = np.unpackbits(batch_array, axis=1)[:, -num_bits:][:, ::-1]
+    link_states = np.unpackbits(batch_array, axis=1)[:, -num_bits:]
 
     for ishot, link_state in enumerate(link_states):
-        corrected_link_state, syndrome = mwpm_correct(link_state, lattice, matching)
+        corrected_link_state, syndrome = _mwpm_correct(link_state, lattice, matching)
         plaquette_state = dual_lattice.map_link_state(corrected_link_state)
         out[0][ishot] = syndrome
         out[1][ishot] = plaquette_state

@@ -18,10 +18,11 @@ from prefect_qiskit.runtime import QuantumRuntime
 from prefect_qiskit.primitives import PrimitiveJobRun
 from prefect_miyabi import MiyabiJobBlock, PyFunctionJob
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
-from skqd_z2lgt.mwpm import convert_link_to_plaq, minimum_weight_link_state
+from skqd_z2lgt.mwpm import convert_link_to_plaq
 from skqd_z2lgt.parameters import Parameters
 from skqd_z2lgt.tasks.open_output import open_output as _open_output
 from skqd_z2lgt.tasks.sample_quantum import sample_quantum_flow
+from skqd_z2lgt.tasks.preprocess import preprocess_flow
 
 
 TASK_SCRIPT_DIR = Path(__file__).parents[0] / 'tasks'
@@ -153,41 +154,22 @@ async def preprocess_bitstrings(
     """
     logger = get_run_logger()
 
-    with h5py.File(output_filename, 'r') as source:
-        data_group = source.get('data', {})
-        if 'vtx' in data_group and 'plaq' in data_group:
-            logger.info('Using existing vertex and plaquette data')
-            return
+    def convert_fn(_bit_arrays, dual_lattice):
+        async def fn():
+            job_block = await PyFunctionJob.load(cpu_pyfuncjob_name)
+            batch_size = _bit_arrays[0][0].array.shape[0] // 20
+            tasks = []
+            async with asyncio.TaskGroup() as taskgroup:
+                for arrays in bit_arrays:
+                    tasks.append(taskgroup.create_task(
+                        job_block.run(convert_bit_arrays, arrays, dual_lattice, batch_size)
+                    ))
+            return tuple(atask.result() for atask in tasks)
 
-    job_block = await PyFunctionJob.load(cpu_pyfuncjob_name)
-    lattice = TriangularZ2Lattice(parameters.lgt.lattice)
-    base_link_state = minimum_weight_link_state(parameters.lgt.charged_vertices, lattice)
-    dual_lattice = lattice.plaquette_dual(base_link_state)
-    batch_size = bit_arrays[0][0].array.shape[0] // 20
+        with ThreadPoolExecutor(1) as executor:
+            return executor.submit(lambda: asyncio.run(fn())).result()
 
-    tasks = []
-    async with asyncio.TaskGroup() as taskgroup:
-        for arrays in bit_arrays:
-            tasks.append(taskgroup.create_task(
-                job_block.run(convert_bit_arrays, arrays, dual_lattice, batch_size)
-            ))
-
-    with h5py.File(output_filename, 'r+') as out:
-        lengths = [lattice.num_vertices, lattice.num_plaquettes]
-        data_group = out['data']
-        groups = [data_group.get(gname) or data_group.create_group(gname)
-                  for gname in ['vtx', 'plaq']]
-
-        for etype, atask in zip(['exp', 'ref'], tasks):
-            for istep, arrays in enumerate(atask.result()):
-                dname = f'{etype}_step{istep}'
-                for group, array, num_bits in zip(groups, arrays, lengths):
-                    try:
-                        del group[dname]
-                    except KeyError:
-                        pass
-                    dataset = group.create_dataset(dname, data=np.packbits(array, axis=1))
-                    dataset.attrs['num_bits'] = num_bits
+    return preprocess_flow(parameters, bit_arrays, output_filename, convert_fn, logger)
 
 
 @task
