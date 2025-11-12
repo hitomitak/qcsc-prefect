@@ -1,213 +1,30 @@
 """Definition of the main Prefect flow for Z2LGT SKQD."""
-
 import os
 from pathlib import Path
 import logging
 import asyncio
 import tempfile
 import shutil
+from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
 import numpy as np
 import h5py
 from qiskit.circuit import QuantumCircuit
-from qiskit.transpiler import Target, PassManager, generate_preset_pass_manager
-from qiskit.transpiler.passes import Optimize1qGatesDecomposition, RemoveIdentityEquivalent
+from qiskit.transpiler import Target
 from qiskit.primitives import BitArray
-from qiskit_ibm_runtime.transpiler.passes import FoldRzzAngle
 from prefect import flow, task, get_run_logger
 from prefect.variables import Variable
-from pydantic import BaseModel, Field
 from prefect_qiskit.runtime import QuantumRuntime
 from prefect_qiskit.primitives import PrimitiveJobRun
 from prefect_miyabi import MiyabiJobBlock, PyFunctionJob
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
-from skqd_z2lgt.circuits import make_step_circuits, compose_trotter_circuits
-from skqd_z2lgt.mwpm import convert_link_to_plaq
+from skqd_z2lgt.mwpm import convert_link_to_plaq, minimum_weight_link_state
+from skqd_z2lgt.parameters import Parameters
+from skqd_z2lgt.tasks.open_output import open_output as _open_output
+from skqd_z2lgt.tasks.sample_quantum import sample_quantum_flow
+
 
 TASK_SCRIPT_DIR = Path(__file__).parents[0] / 'tasks'
-
-
-class LGTParameters(BaseModel):
-    """Parameters to specify the Z2 LGT."""
-
-    lattice: str = Field(
-        default='full_156q',
-        description='Two-dimensional lattice configuration.',
-        title='Lattice Configuration'
-    )
-    plaquette_energy: float = Field(
-        default=1.,
-        description='Plaquette energy in the Hamiltonian (transverse field strength in the dual'
-                    ' Ising model).',
-        title='Plaquette Energy',
-        ge=0.
-    )
-
-    def model_post_init(self, _):  # pylint: disable=arguments-differ
-        if self.lattice == 'full_156q':
-            self.lattice = '''
-            *-*-*-*-*╷
-             * * * * *
-            * * * * *╎
-             * * * * *
-            * * * * *╎
-             * * * * *
-            * * * * *╎
-             * * * * *
-            *-*-*-*-*╵
-            '''
-
-
-class CircuitParameters(BaseModel):
-    """Configuration for circuit."""
-
-    basis_2q: str = Field(
-        default='rzz',
-        description='Two-qubit gate used in the Trotter circuit ("cx", "cz", or "rzz"). Note that'
-                    ' the selection "rzz" will utilize CZ gates together with Rzz.',
-        title='Base two-qubit gate'
-    )
-    optimization_level: int = Field(
-        default=3,
-        description="Transpile: Optimization level of transpiler",
-        title="Optimization Level",
-        ge=0,
-        le=3,
-    )
-
-
-class CRBMParameters(BaseModel):
-    """Configuration for conditional restricted Boltzmann machine used in configuration recovery."""
-
-    num_h: int = Field(
-        default=256,
-        description='Number of hidden units of the restricted Boltzmann machine.',
-        title='Number of Hidden Units',
-        ge=1
-    )
-    l2w_weights: float = Field(
-        default=1.,
-        description='Weight of the L2 regularization term for weight parameters of the model.',
-        title='L2 Weight (W)',
-        ge=0.
-    )
-    l2w_biases: float = Field(
-        default=0.2,
-        description='Weight of the L2 regularization term for bias parameters of the model.',
-        title='L2 Weight (B)',
-        ge=0.
-    )
-    batch_size: int = Field(
-        default=32,
-        description='Batch size for stochastic gradient descent.',
-        title='Training Batch Size',
-        ge=1
-    )
-    learning_rate: float = Field(
-        default=0.001,
-        description='Learning rate for the Adam optimizer with weight decay',
-        title='Learning Rate',
-        gt=0.
-    )
-    init_h_sparsity: float = Field(
-        default=0.01,
-        description='Sparsity parameter for initializing the bias parameters of the hidden units.',
-        title='Initial Hidden Unit Sparsity',
-        ge=0.
-    )
-    num_epochs: int = Field(
-        default=10,
-        description='Maximum number of epochs to train.',
-        title='Maximum Epochs',
-        ge=1
-    )
-    rtol: float = Field(
-        default=2.,
-        description='Convergence condition (max|loss - mean| of the last 5 epochs < rtol * stddev)',
-        title='Convergence Relative Tolerance',
-        ge=0.
-    )
-
-
-class SKQDParameters(BaseModel):
-    """Configuration for SKQD algorithm execution."""
-
-    n_trotter_steps: int = Field(
-        default=8,
-        description="Number of Trotter steps (Krylov dimension).",
-        title="Trotter Steps",
-        ge=1,
-    )
-    dt: float = Field(
-        default=0.02,
-        description="Time Interval for Trotterization.",
-        title="Time Interval",
-        ge=0,
-    )
-    max_subspace_dim: int = Field(
-        default=1_000_000,
-        description="Maximum subspace dimension in iterative configuration recovery.",
-        title="Maximum Subspace Dimension",
-        ge=1
-    )
-    num_gen: int = Field(
-        default=3,
-        description="Number of bitstrings to generate in each iteration of configuration recovery.",
-        title="Generated Samples",
-        ge=1
-    )
-    max_iterations: int = Field(
-        default=10,
-        description="Number of configuration recovery iterations.",
-        title="Max Iteration",
-        ge=0
-    )
-    delta_e: float = Field(
-        default=0.005,
-        description="Convergence condition (change in energy value between configuration recovery"
-                    "iterations)",
-        title="Energy Convergence",
-        ge=0.
-    )
-
-
-class Parameters(BaseModel):
-    """Workflow configuration parameters."""
-
-    lgt: LGTParameters = Field(
-        default_factory=LGTParameters,
-        description='Lattice gauge theory definition.',
-        title='Lattice Gauge Theory'
-    )
-
-    circuit: CircuitParameters = Field(
-        default_factory=CircuitParameters,
-        description='Trotter circuit parameters and transpiler settings.',
-        title='Circuit'
-    )
-
-    crbm: CRBMParameters = Field(
-        default_factory=CRBMParameters,
-        description='Settings for conditional restricted Boltzmann machine.',
-        title='CRBM'
-    )
-
-    skqd: SKQDParameters = Field(
-        default_factory=SKQDParameters,
-        description='Control of SKQD algorithm execution and solver parameters.',
-        title='SKQD',
-    )
-
-    runtime_job_id: str | None = Field(
-        default=None,
-        description='ID of an existing IBM Quantum workload.',
-        title='Runtime Job ID'
-    )
-
-    output_filename: str | None = Field(
-        default=None,
-        description='Name of the HDF5 file where intermediate output are stored.',
-        title='Output File Name'
-    )
 
 
 @flow
@@ -234,8 +51,7 @@ async def skqd_z2lgt(
 
     output_filename = open_output(parameters)
     logger.info('Running a quantum job to obtain the bitstrings')
-    bit_arrays = await sample_krylov_bitstrings(parameters, runner_name, option_name,
-                                                output_filename)
+    bit_arrays = await sample_quantum(parameters, runner_name, option_name, output_filename)
 
     logger.info('Correcting and converting link states to plaquette states')
     await preprocess_bitstrings(parameters, cpu_pyfuncjob_name, bit_arrays, output_filename)
@@ -258,94 +74,11 @@ async def skqd_z2lgt(
 
 @task
 def open_output(parameters: Parameters) -> str:
-    """Open a new output HDF5 file and set it up for the workflow, or validate an existing file.
-
-    Args:
-        parameters: Workflow parameters.
-
-    Returns:
-        The name of the output file.
-    """
-    logger = get_run_logger()
-
-    attrs = [
-        ('lattice', parameters.lgt.lattice),
-        ('plaquette_energy', parameters.lgt.plaquette_energy),
-        ('basis_2q', parameters.circuit.basis_2q),
-        ('num_steps', parameters.skqd.n_trotter_steps),
-        ('delta_t', parameters.skqd.dt)
-    ]
-
-    output_filename = parameters.output_filename
-    if not output_filename:
-        with tempfile.NamedTemporaryFile() as tfile:
-            output_filename = tfile.name
-
-    if os.path.exists(output_filename):
-        logger.info('Validating configurations in existing file %s', output_filename)
-        with h5py.File(output_filename, 'r') as source:
-            for key, value in attrs:
-                if ((isinstance(value, float) and not np.isclose(source.attrs[key], value))
-                        or (isinstance(value, (int, str)) and source.attrs[key] != value)):
-                    raise RuntimeError(f'Recorded {key} does not match the flow parameter')
-
-    else:
-        logger.info('Creating a new file %s', output_filename)
-        with h5py.File(output_filename, 'w', libver='latest') as out:
-            for key, value in attrs:
-                out.attrs[key] = value
-
-    return output_filename
+    return _open_output(parameters, get_run_logger())
 
 
 @task
-def get_trotter_circuits(
-    parameters: Parameters,
-    target: Target
-) -> tuple[list[int], list[QuantumCircuit], list[QuantumCircuit]]:
-    """Compose full Trotter simulation circuits.
-
-    We first generate single-step circuit elements for the given lattice and base two-qubit gate,
-    compile them, then compose the resulting ISA circuits into multi-step Trotter simulation
-    circuits. Both the forward-evolution (Krylov) circuits and forward-backward (reference) circuits
-    are returned.
-
-    Args:
-        parameters: Workflow parameters.
-        target: Backend target.
-
-    Returns:
-        Physical qubit layout and lists (length configuration.num_steps) of forward-evolution and
-        forward-backward circuits.
-    """
-    lattice = TriangularZ2Lattice(parameters.lgt.lattice)
-    layout = lattice.layout_heavy_hex(target=target, basis_2q=parameters.circuit.basis_2q)
-
-    pm = generate_preset_pass_manager(
-        optimization_level=parameters.circuit.optimization_level,
-        target=target,
-        initial_layout=layout,
-    )
-    pm.post_optimization = PassManager(
-        [
-            FoldRzzAngle(),
-            Optimize1qGatesDecomposition(target=target),  # Cancel added local gates
-            RemoveIdentityEquivalent(target=target),  # Remove GlobalPhaseGate
-        ]
-    )
-    circuits = make_step_circuits(lattice, parameters.lgt.plaquette_energy,
-                                  parameters.skqd.dt, parameters.circuit.basis_2q)
-    # Somehow the combination of multiprocessing pm.run + prefect task causes the former to hang
-    full_step, fwd_step, bkd_step, measure = [pm.run(circuit) for circuit in circuits]
-
-    id_step = fwd_step.compose(bkd_step)
-    exp_circuits = compose_trotter_circuits(full_step, measure, parameters.skqd.n_trotter_steps)
-    ref_circuits = compose_trotter_circuits(id_step, measure, parameters.skqd.n_trotter_steps)
-    return layout, exp_circuits, ref_circuits
-
-
-@task
-async def sample_krylov_bitstrings(
+async def sample_quantum(
     parameters: Parameters,
     runner_name: str,
     option_name: str,
@@ -364,63 +97,37 @@ async def sample_krylov_bitstrings(
         Lists of BitArrays for forward-evolution and forward-backward circuits.
     """
     logger = get_run_logger()
-    num_steps = parameters.skqd.n_trotter_steps
+    async with asyncio.TaskGroup() as tg:
+        runtime_task = tg.create_task(QuantumRuntime.load(runner_name))
+        options_task = tg.create_task(Variable.get(option_name))
 
-    with h5py.File(output_filename, 'r') as source:
-        try:
-            group = source['data/raw']
-        except KeyError:
-            pass
-        else:
-            logger.info('Loading existing raw data from output file')
-            dlists = ([], [])
-            for etype, dlist in zip(['exp', 'ref'], dlists):
-                for istep in range(num_steps):
-                    dataset = group[f'{etype}_step{istep}']
-                    dlist.append(BitArray(dataset[()], int(dataset.attrs['num_bits'])))
+    runtime = runtime_task.result()
+    options = options_task.result()
 
-            return dlists
+    def fetch_result_fn():
+        def fn():
+            job = PrimitiveJobRun(job_id=parameters.runtime_job_id, credentials=runtime.credentials)
+            return asyncio.run(job.fetch_result())
 
-    runtime = await QuantumRuntime.load(runner_name)
+        with ThreadPoolExecutor(1) as executor:
+            return executor.submit(fn).result()
 
-    if parameters.runtime_job_id:
-        logger.info('Fetching result of workload %s', parameters.runtime_job_id)
-        job = PrimitiveJobRun(job_id=parameters.runtime_job_id, credentials=runtime.credentials)
-        pub_result = await job.fetch_result()
-        layout = None
-    else:
-        options = await Variable.get(option_name)
+    def get_target_fn():
+        def fn():
+            return asyncio.run(runtime.get_target())
 
-        # Transpile and compose the circuits
-        target = await runtime.get_target()
-        layout, exp_circuits, ref_circuits = get_trotter_circuits(parameters, target)
+        with ThreadPoolExecutor(1) as executor:
+            return executor.submit(fn).result()
 
-        # Run primitive
-        pub_result = await runtime.sampler(
-            sampler_pubs=exp_circuits + ref_circuits,
-            options=options,
-        )
+    def sample_fn(pubs):
+        def fn(pubs):
+            return asyncio.run(runtime.sampler(sampler_pubs=pubs, options=options))
 
-    with h5py.File(output_filename, 'r+') as out:
-        try:
-            del out['data/raw']
-        except KeyError:
-            pass
-        group = out.create_group('data/raw')
-        if layout:
-            group.attrs['layout'] = np.array(layout)
-        for ires, res in enumerate(pub_result):
-            if ires < num_steps:
-                etype = 'exp'
-            else:
-                etype = 'ref'
-            istep = ires % num_steps
-            bit_array = res.data.c
-            dataset = group.create_dataset(f'{etype}_step{istep}', data=bit_array.array)
-            dataset.attrs['num_bits'] = bit_array.num_bits
+        with ThreadPoolExecutor(1) as executor:
+            return executor.submit(fn, pubs).result()
 
-    return ([res.data.c for res in pub_result[:num_steps]],
-            [res.data.c for res in pub_result[num_steps:]])
+    return sample_quantum_flow(parameters, output_filename, fetch_result_fn, get_target_fn,
+                               sample_fn, logger)
 
 
 def convert_bit_arrays(bit_arrays, dual_lattice, batch_size):
@@ -454,7 +161,8 @@ async def preprocess_bitstrings(
 
     job_block = await PyFunctionJob.load(cpu_pyfuncjob_name)
     lattice = TriangularZ2Lattice(parameters.lgt.lattice)
-    dual_lattice = lattice.plaquette_dual()
+    base_link_state = minimum_weight_link_state(parameters.lgt.charged_vertices, lattice)
+    dual_lattice = lattice.plaquette_dual(base_link_state)
     batch_size = bit_arrays[0][0].array.shape[0] // 20
 
     tasks = []
