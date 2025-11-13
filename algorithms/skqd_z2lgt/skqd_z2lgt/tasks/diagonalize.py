@@ -1,7 +1,6 @@
 # pylint: disable=no-member
-"""SKQD with random bit flips."""
-import os
-import argparse
+"""SKQD with configuration recovery."""
+from collections.abc import Callable
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
@@ -20,10 +19,11 @@ from skqd_z2lgt.parameters import Parameters
 
 
 def check_saved_result(
-    parameters: Parameters
+    parameters: Parameters,
+    group_name: str
 ) -> tuple[float, np.ndarray] | None:
     with h5py.File(parameters.output_filename, 'r') as source:
-        if (group := source.get('skqd_rcv')) is None:
+        if (group := source.get(group_name)) is None:
             return None
         return group['energy'][()], group['eigvec'][()]
 
@@ -89,6 +89,57 @@ def make_batch_generator(num_gen):
     return generate_fn
 
 
+def generate_with_crbm(
+    parameters: Parameters,
+    exp_data: list[tuple[np.ndarray, np.ndarray]],
+    crbm_models: list[ConditionalRBM],
+    generate_fn: Callable,
+    logger: Optional[logging.Logger] = None
+) -> list[np.ndarray]:
+    logger = logger or logging.getLogger(__name__)
+    num_steps = len(exp_data)
+    shots = exp_data[0][0].shape[0]
+
+    logger.info('Generating for %d steps, %d shots, %d samples per shot',
+                num_steps, shots, parameters.skqd.num_gen)
+    start = time.time()
+    with ThreadPoolExecutor() as executor:
+        futures = [
+            executor.submit(generate_states,
+                            crbm_models[istep], exp_data[istep][0], exp_data[istep][1],
+                            generate_fn, parameters.crbm.gen_batch_size)
+            for istep in range(len(exp_data))
+        ]
+    gen_states = [future.result() for future in futures]
+    logger.info('Generation took %.2f seconds.', time.time() - start)
+    return gen_states
+
+
+def generate_random(
+    parameters: Parameters,
+    exp_data: list[tuple[np.ndarray, np.ndarray]],
+    mean_activation: list[np.ndarray],
+    seed: int,
+    logger: Optional[logging.Logger] = None
+) -> list[np.ndarray]:
+    logger = logger or logging.getLogger(__name__)
+    num_steps = len(exp_data)
+    shots = exp_data[0][0].shape[0]
+    num_plaq = exp_data[0][1].shape[1]
+
+    logger.info('Generating random bitflips for %d steps, %d shots, %d samples per shot',
+                num_steps, shots, parameters.skqd.num_gen)
+    start = time.time()
+    rng = np.random.default_rng(seed)
+    uniform = rng.random((num_steps, shots, parameters.skqd.num_gen, num_plaq))
+    flips = [np.asarray(uniform[istep] < act[None, None, :], dtype=np.uint8)
+             for istep, act in enumerate(mean_activation)]
+    gen_states = [(plaq_data[:, None, :] ^ fl).reshape((-1, num_plaq))
+                  for (_, plaq_data), fl in zip(exp_data, flips)]
+    logger.info('Generation took %.2f seconds.', time.time() - start)
+    return gen_states
+
+
 def load_skqd_result(group):
     dataset = group['sqd_states']
     sqd_states = np.unpackbits(dataset[()], axis=1)[:, :dataset.attrs['num_bits']]
@@ -126,13 +177,18 @@ def save_skqd_result(out, group_name, sqd_states, energy, eigvec, ham_proj=None)
 
 def diagonalize(
     parameters: Parameters,
-    exp_data: list[tuple[np.ndarray, np.ndarray]],
-    crbm_models: list[ConditionalRBM],
+    reco_data: list[tuple[np.ndarray, np.ndarray]],
+    crbm_models: list[ConditionalRBM] | None,
     logger: Optional[logging.Logger] = None
 ) -> tuple[float, np.ndarray]:
     logger = logger or logging.getLogger(__name__)
 
-    saved_result = check_saved_result(parameters)
+    if crbm_models:
+        group_name = 'skqd_rcv'
+    else:
+        group_name = 'skqd_rnd'
+
+    saved_result = check_saved_result(parameters, group_name)
     if saved_result:
         logger.info('There is already an SKQD result saved in the file.')
         return saved_result
@@ -140,6 +196,8 @@ def diagonalize(
     lattice = TriangularZ2Lattice(parameters.lgt.lattice)
     dual_lattice = lattice.plaquette_dual()
     hamiltonian = dual_lattice.make_hamiltonian(parameters.lgt.plaqette_energy)
+
+    exp_data = reco_data[0]
 
     init = load_init(parameters)
     if init is None:
@@ -153,15 +211,18 @@ def diagonalize(
 
     num_steps = parameters.skqd.n_trotter_steps
     shots = parameters.runtime.shots
-    num_gen = parameters.skqd.num_gen
 
     relevant_states = init_states[np.square(np.abs(init_eigvec)) > 1.e-20]
     exp_data_size = num_steps * shots
-    gen_data_size = exp_data_size * num_gen
+    gen_data_size = exp_data_size * parameters.skqd.num_gen
     max_size = gen_data_size + min(exp_data_size, 10 * relevant_states.shape[0])
     logger.info('Set maximum array size to %d', max_size)
 
-    generate_fn = make_batch_generator(num_gen)
+    if crbm_models:
+        generate_fn = make_batch_generator(parameters.skqd.num_gen)
+    else:
+        ref_data = reco_data[1]
+        mean_activation = [np.mean(plaq_data, axis=0) for _, plaq_data in ref_data]
 
     energies = []
     subspace_dims = []
@@ -172,18 +233,10 @@ def diagonalize(
         logger.info('Iteration %d: %d relevant states', it, relevant_states.shape[0])
         is_last = it == parameters.skqd.max_iterations - 1
 
-        logger.info('Generating for %d steps, %d shots, %d samples per shot',
-                    num_steps, shots, num_gen)
-        start = time.time()
-        with ThreadPoolExecutor() as executor:
-            futures = [
-                executor.submit(generate_states,
-                                crbm_models[istep], exp_data[istep][0], exp_data[istep][1],
-                                generate_fn, parameters.crbm.gen_batch_size)
-                for istep in range(num_steps)
-            ]
-        gen_states = [future.result() for future in futures]
-        logger.info('Generation took %.2f seconds.', time.time() - start)
+        if crbm_models:
+            gen_states = generate_with_crbm(parameters, exp_data, crbm_models, generate_fn, logger)
+        else:
+            gen_states = generate_random(parameters, exp_data, mean_activation, 12345 + it, logger)
 
         states = np.concatenate([relevant_states] + gen_states, axis=0)
         if (excess := states.shape[0] - max_size) > 0:
@@ -217,7 +270,7 @@ def diagonalize(
     ham_proj = sqd_result[-1]
 
     with h5py.File(parameters.output_filename, 'r+') as out:
-        group = save_skqd_result(out, 'skqd_rcv', sqd_states, energy, eigvec, ham_proj)
+        group = save_skqd_result(out, group_name, sqd_states, energy, eigvec, ham_proj)
         group.create_dataset('energies', data=energies)
         group.create_dataset('subspace_dims', data=subspace_dims)
 
@@ -225,6 +278,8 @@ def diagonalize(
 
 
 if __name__ == '__main__':
+    import os
+    import argparse
     from skqd_z2lgt.tasks.preprocess import load_reco
     from skqd_z2lgt.tasks.train_generator import load_model
 
@@ -233,6 +288,7 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', nargs='+')
     parser.add_argument('--num-gen', type=int, default=5)
     parser.add_argument('--gen-batch-size', type=int, default=10_000)
+    parser.add_argument('--random', action='store_true')
     parser.add_argument('--niter', type=int, default=1)
     parser.add_argument('--terminate-deltae', type=float, default=0.005)
     parser.add_argument('--terminate-ndim', type=int, default=1_000_000)
@@ -252,24 +308,27 @@ if __name__ == '__main__':
         params.lgt.plaquette_energy = src.attrs['plaquette_energy']
         params.lgt.charged_vertices = src.attrs['charged_vertices']
         params.skqd.n_trotter_steps = src.attrs['num_steps']
+        params.runtime.shots = src.attrs['shots']
     params.skqd.num_gen = options.num_gen
     params.skqd.max_iterations = options.niter
     params.crbm.gen_batch_size = options.gen_batch_size
     params.skqd.delta_e = options.terminate_deltae
     params.skqd.max_subspace_dim = options.terminate_ndim
 
-    edata = load_reco(params, etype='exp')
-    params.runtime.shots = edata[0][0].shape[0]
-    models = [load_model(istep, params.output_filename, istep % jax.device_count())
-              for istep in range(params.skqd.n_trotter_steps)]
+    rdata = load_reco(params)
+    if options.random:
+        models = None
+    else:
+        models = [load_model(istep, params.output_filename, istep % jax.device_count())
+                  for istep in range(params.skqd.n_trotter_steps)]
 
-    for istep, crbm in enumerate(models):
-        LOG.info('Compiling CRBM for Trotter step %d', istep)
-        with jax.default_device(crbm.weights_vu.value.device):
-            crbm.sample(
-                jnp.zeros((params.crbm.gen_batch_size, crbm.weights_vu.shape[1]),
-                          dtype=np.uint8),
-                size=params.skqd.num_gen
-            )
+        for istep, crbm in enumerate(models):
+            LOG.info('Compiling CRBM for Trotter step %d', istep)
+            with jax.default_device(crbm.weights_vu.value.device):
+                crbm.sample(
+                    jnp.zeros((params.crbm.gen_batch_size, crbm.weights_vu.shape[1]),
+                              dtype=np.uint8),
+                    size=params.skqd.num_gen
+                )
 
-    diagonalize(params, edata, models)
+    diagonalize(params, rdata, models)

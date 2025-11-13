@@ -24,7 +24,8 @@ def open_output(parameters: Parameters, logger: Optional[logging.Logger] = None)
         ('charged_vertices', parameters.lgt.charged_vertices),
         ('basis_2q', parameters.circuit.basis_2q),
         ('num_steps', parameters.skqd.n_trotter_steps),
-        ('delta_t', parameters.skqd.dt)
+        ('delta_t', parameters.skqd.dt),
+        ('shots', parameters.runtime.shots)
     ]
 
     if os.path.exists(parameters.output_filename):
