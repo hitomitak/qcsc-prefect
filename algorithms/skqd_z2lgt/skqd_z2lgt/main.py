@@ -6,25 +6,19 @@ import asyncio
 import tempfile
 import shutil
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
 import numpy as np
 import h5py
-from qiskit.circuit import QuantumCircuit
-from qiskit.transpiler import Target
-from qiskit.primitives import BitArray
 from prefect import flow, task, get_run_logger
 from prefect.variables import Variable
 from prefect_qiskit.runtime import QuantumRuntime
 from prefect_qiskit.primitives import PrimitiveJobRun
 from prefect_miyabi import MiyabiJobBlock, PyFunctionJob
-from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.mwpm import convert_link_to_plaq
 from skqd_z2lgt.parameters import Parameters
 from skqd_z2lgt.tasks.open_output import open_output as _open_output
 from skqd_z2lgt.tasks.sample_quantum import sample_quantum_flow, load_raw
 from skqd_z2lgt.tasks.preprocess import preprocess_flow
 from skqd_z2lgt.tasks.train_generator import train_generator_flow, load_model, save_model
-from skqd_z2lgt.tasks.diagonalize import diagonalize_flow
 
 
 TASK_SCRIPT_DIR = Path(__file__).parents[0] / 'tasks'
@@ -62,7 +56,7 @@ async def skqd_z2lgt(
     logger.info('Training conditional restricted Boltzmann machines')
     crbm_models = await train_generator(parameters, reco_data[1], cuda_scriptjob_name)
     logger.info('Performing SQD with configuration recovery')
-    energy, eigvec = await diagonalize(parameters, reco_data, crbm_models, cuda_scriptjob_name)
+    energy, eigvec = await diagonalize(parameters, reco_data[0], crbm_models, cuda_scriptjob_name)
 
     logger.info('Estimated ground-state energy is %f', energy)
 
@@ -238,40 +232,40 @@ async def train_generator(
 @task
 async def diagonalize(
     parameters: Parameters,
-    cuda_scriptjob_name: str,
-    output_filename: str
-):
+    _data: None,
+    _crbm_models: None,
+    cuda_scriptjob_name: str
+) -> tuple[float, np.ndarray]:
     """Perform SQD with iterative configuration recovery.
 
     Args:
         parameters: Configuration parameters.
         cuda_scriptjob_name: Name of the MiyabiJobBlock that executes the python interpreter in a
             CUDA environment.
-        output_filename: Name of the HDF5 file where intermediate and final output of the workflow
-            are written.
     """
-    logger = get_run_logger()
-
-    with h5py.File(output_filename, 'r') as source:
-        if 'skqd_rcv' in source:
-            logger.info('SQD result already exists')
-            return
-
     job_block = await MiyabiJobBlock.load(cuda_scriptjob_name)
     with job_block.get_executor() as executor:
         arguments = [
             TASK_SCRIPT_DIR / 'skqd_recovery.py',
-            output_filename,
+            parameters.output_filename,
             '--gpu', 'all',
             '--num-gen', f'{parameters.skqd.num_gen}',
+            '--gen-batch-size', f'{parameters.crbm.gen_batch_size}',
             '--niter', f'{parameters.skqd.max_iterations}',
-            '--terminate', f'diff={parameters.skqd.delta_e}',
-            f'dim={parameters.skqd.max_subspace_dim}'
+            '--terminate-deltae', f'{parameters.skqd.delta_e}',
+            '--terminate-ndim', f'{parameters.skqd.max_subspace_dim}'
         ]
         await executor.execute_job(
             arguments=arguments,
             **job_block.get_job_variables()
         )
+
+    with h5py.File(parameters.output_filename, 'r') as source:
+        if parameters.skqd.max_iterations == 0:
+            group = source['skqd_init']
+        else:
+            group = source['skqd_rcv']
+        return group['energy'][()], group['eigvec'][()]
 
 
 def deploy():
