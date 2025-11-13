@@ -9,8 +9,8 @@ the sub-Hilbert space spanned by the sample bitstrings.
 
 Before starting, make sure:
 
-- You have completed [How to Set Up IBM Quantum Access Credentials for Prefect](../howto/setup_prefect_qiskit.md).
-- You have completed [How to Set Up the MDX Workflow Server for QCSC Execution](../howto/setup_mdx_server.md).
+- You have completed [How to Set Up IBM Quantum Access Credentials for Prefect](../../docs/howto/howto_setup_prefect_qiskit.md).
+- You have completed [How to Set Up the MDX Workflow Server for QCSC Execution](../../docs/howto/howto_setup_mdx_server.md).
 
 The workflow for SKQD utilizes both Miyabi-C and Miyabi-G resources (in principle we only need the
 latter, but using Miyabi-C is more economical if GPU is not required). You would therefore need to
