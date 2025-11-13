@@ -21,18 +21,18 @@ def make_matching(lattice: TriangularZ2Lattice) -> Matching:
 
 def mwpm_correct(
     link_state: np.ndarray,
-    lattice: TriangularZ2Lattice,
+    dual_lattice: TriangularZ2Lattice,
     matching: Optional[Matching] = None
 ) -> tuple[np.ndarray, np.ndarray]:
     if not matching:
-        matching = make_matching(lattice)
-    return _mwpm_correct(as_bitarray(link_state), lattice, matching)
+        matching = make_matching(dual_lattice.primal)
+    return _mwpm_correct(as_bitarray(link_state), dual_lattice, matching)
 
 
-def _mwpm_correct(link_state, lattice, matching):
-    syndrome = lattice.get_syndrome(link_state)
-    correction = matching.decode(syndrome).astype(bool)
-    link_state[correction] ^= 1
+def _mwpm_correct(link_state, dual_lattice, matching):
+    syndrome = dual_lattice.primal.get_syndrome(link_state)
+    correction = matching.decode(syndrome) ^ dual_lattice.base_link_state
+    link_state ^= correction
     return link_state, syndrome
 
 
@@ -100,7 +100,7 @@ def _batch_convert(batch_array, num_bits, dual_lattice):
     link_states = np.unpackbits(batch_array, axis=1)[:, -num_bits:]
 
     for ishot, link_state in enumerate(link_states):
-        corrected_link_state, syndrome = _mwpm_correct(link_state, lattice, matching)
+        corrected_link_state, syndrome = _mwpm_correct(link_state, dual_lattice, matching)
         plaquette_state = dual_lattice.map_link_state(corrected_link_state)
         out[0][ishot] = syndrome
         out[1][ishot] = plaquette_state

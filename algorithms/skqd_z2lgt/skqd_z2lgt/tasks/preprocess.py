@@ -124,11 +124,13 @@ def preprocess(
     logger: Optional[logging.Logger] = None
 ) -> tuple[RecoData, RecoData]:
     def convert_fn(bit_arrays, dual_lattice):
+        batch_size = parameters.runtime.shots // 20
         reco_data = []
         for arrays in bit_arrays:
             reco_data.append([])
             for array in arrays:
-                reco_data[-1].append(convert_link_to_plaq(array, dual_lattice))
+                reco_data[-1].append(convert_link_to_plaq(array, dual_lattice,
+                                                          batch_size=batch_size))
         return tuple(reco_data)
 
     return preprocess_flow(parameters, raw_data, convert_fn, logger)
