@@ -198,7 +198,7 @@ def sample_quantum(
     def sample_fn(pubs):
         backend = service.backend(parameters.runtime.backend, use_fractional_gates=True)
         options = dict(parameters.runtime.options)
-        options['shots'] = parameters.runtime.shots
+        options['default_shots'] = parameters.runtime.shots
         sampler = Sampler(backend, options=options)
         job = sampler.run(pubs)
         logger.info('Sampler job: %s', job.job_id())

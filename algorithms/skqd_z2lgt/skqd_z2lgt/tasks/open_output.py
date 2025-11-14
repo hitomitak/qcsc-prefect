@@ -38,6 +38,6 @@ def open_output(parameters: Parameters, logger: Optional[logging.Logger] = None)
 
     else:
         logger.info('Creating a new file %s', parameters.output_filename)
-        with h5py.File(parameters.output_filename, 'w', libver='latest') as out:
+        with h5py.File(parameters.output_filename, 'w') as out:
             for key, value in attrs:
                 out.attrs[key] = value

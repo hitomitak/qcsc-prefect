@@ -37,8 +37,11 @@ def check_saved_reco(
 
 def save_reco(
     parameters: Parameters,
-    reco_data: tuple[RecoData, RecoData]
+    reco_data: tuple[RecoData, RecoData],
+    logger: Optional[logging.Logger] = None
 ):
+    logger = logger or logging.getLogger(__name__)
+    logger.info('Saving vertex and plaquette data')
     with h5py.File(parameters.output_filename, 'r+') as out:
         data_group = out['data']
         groups = [data_group.get(gname) or data_group.create_group(gname)
@@ -73,7 +76,7 @@ def load_reco(
     else:
         isteps = list(range(parameters.skqd.n_trotter_steps))
 
-    with h5py.File(parameters.output_filename, 'r', swmr=True) as source:
+    with h5py.File(parameters.output_filename, 'r') as source:
         group = source['data']
         result = tuple(
             [(read_bits(group[f'vtx/{etype}_step{istep}']),
@@ -106,6 +109,9 @@ def preprocess_flow(
     reco_data = check_saved_reco(parameters, logger)
     if reco_data:
         return reco_data
+
+    logger.info('Correcting the charge sector of link-state bitstrings and converting them to '
+                'vertex and plaquette data')
 
     lattice = TriangularZ2Lattice(parameters.lgt.lattice)
     base_link_state = minimum_weight_link_state(parameters.lgt.charged_vertices, lattice)

@@ -14,9 +14,6 @@ from skqd_z2lgt.train_crbm import DefaultCallback, make_l2_loss_fn, cd_meanloss,
 from skqd_z2lgt.parameters import Parameters
 from skqd_z2lgt.tasks.preprocess import load_reco
 
-logging.basicConfig(level=logging.INFO)
-LOG = logging.getLogger('train_crbm')
-
 
 def load_model(
     istep: int,
@@ -42,7 +39,7 @@ def save_model(
     records: dict[str, np.ndarray],
     output_filename: str
 ):
-    with h5py.File(output_filename, 'a', libver='latest') as out:
+    with h5py.File(output_filename, 'a') as out:
         groupname = f'crbm/step{istep}'
         try:
             del out[groupname]
@@ -127,8 +124,11 @@ def train_step_model(
     plaq_data: np.ndarray,
     model_params: dict[str, Any],
     train_params: dict[str, Any],
-    out_filename: Optional[str] = None
+    out_filename: Optional[str] = None,
+    logger: Optional[logging.Logger] = None
 ):
+    logger = logger or logging.getLogger(__name__)
+
     train_u = vtx_data[:80_000]
     train_v = plaq_data[:80_000]
     test_u = vtx_data[80_000:]
@@ -148,7 +148,7 @@ def train_step_model(
 
     model.pregenerate = True
 
-    LOG.info('Start training model for step %d', istep)
+    logger.info('Start training model for step %d', istep)
 
     loss_fn = make_l2_loss_fn(cd_meanloss, train_params['l2w_weights'], train_params['l2w_biases'])
     best_model, records = train_crbm(model, train_u, train_v, test_u, test_v,
