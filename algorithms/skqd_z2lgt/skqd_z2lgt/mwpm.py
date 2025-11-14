@@ -8,6 +8,7 @@ from qiskit.primitives import BitArray
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from heavyhex_qft.utils import as_bitarray
 from heavyhex_qft.plaquette_dual import PlaquetteDual
+from skqd_z2lgt.utils import read_bits
 
 
 def make_matching(lattice: TriangularZ2Lattice) -> Matching:
@@ -30,8 +31,21 @@ def mwpm_correct(
 
 
 def _mwpm_correct(link_state, dual_lattice, matching):
+    """Get the syndrome of the link state and apply the MWPM correction.
+
+    When the base link state of the dual lattice is nonzero, we have two ways to correct:
+    - Compute the syndrome, apply MWPM, XOR with the base state, correct
+    - Compute the syndrome, XOR with the base syndrome, apply MWPM, correct
+    Either way results in a unique (independent of the true link state) map from link bit-flip
+    errors to Wilson loops, but the obtained loops will be different. For our purpose of learning
+    the association between errors and loops (more specifically conditional probability of loops for
+    given error syndromes), there is likely no real difference in the outcome between the two
+    approaches. We choose the second approach ("neutralize" the syndrome) here. Possibly this allows
+    reusing the generative model trained for circuits with different initial states.
+    """
     syndrome = dual_lattice.primal.get_syndrome(link_state)
-    correction = matching.decode(syndrome) ^ dual_lattice.base_link_state
+    syndrome ^= dual_lattice.base_syndrome
+    correction = matching.decode(syndrome)
     link_state ^= correction
     return link_state, syndrome
 
@@ -97,7 +111,7 @@ def _batch_convert(batch_array, num_bits, dual_lattice):
         np.empty((batch_array.shape[0], lattice.num_plaquettes), dtype=np.uint8)
     )
 
-    link_states = np.unpackbits(batch_array, axis=1)[:, -num_bits:]
+    link_states = read_bits(batch_array, num_bits=num_bits, align='right')
 
     for ishot, link_state in enumerate(link_states):
         corrected_link_state, syndrome = _mwpm_correct(link_state, dual_lattice, matching)
