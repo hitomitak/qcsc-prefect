@@ -191,7 +191,7 @@ async def train_generator(
                 '--l2w-weights', f'{conf.l2w_weights}',
                 '--l2w-biases', f'{conf.l2w_biases}',
                 '--init-h-sparsity', f'{conf.init_h_sparsity}',
-                '--batch-size', f'{conf.batch_size}',
+                '--batch-size', f'{conf.train_batch_size}',
                 '--learning-rate', f'{conf.learning_rate}',
                 '--num-epochs', f'{conf.num_epochs}',
                 '--rtol', f'{conf.rtol}'
