@@ -1,9 +1,18 @@
 """Utility functions."""
 from typing import Any, Optional
 import numpy as np
+import h5py
 import jax
 import jax.numpy as jnp
 from jax.sharding import NamedSharding, PartitionSpec
+
+
+def read_bits(dataset: np.ndarray | h5py.Dataset, num_bits: Optional[int] = None, align='left'):
+    bits = np.unpackbits(dataset, axis=-1)
+    num_bits = num_bits or dataset.attrs['num_bits']
+    if align == 'left':
+        return bits[..., :num_bits]
+    return bits[..., -num_bits:]
 
 
 def shard_array_1d(array: jax.Array, fill_value: Optional[Any] = None) -> jax.Array:

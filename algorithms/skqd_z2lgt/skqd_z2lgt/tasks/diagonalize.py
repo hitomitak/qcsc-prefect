@@ -16,6 +16,7 @@ from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.sqd import sqd, to_bcoo, bcoo_to_csr
 from skqd_z2lgt.crbm import ConditionalRBM
 from skqd_z2lgt.parameters import Parameters
+from skqd_z2lgt.utils import read_bits
 
 
 def check_saved_result(
@@ -141,8 +142,7 @@ def generate_random(
 
 
 def load_skqd_result(group):
-    dataset = group['sqd_states']
-    sqd_states = np.unpackbits(dataset[()], axis=1)[:, :dataset.attrs['num_bits']]
+    sqd_states = read_bits(group['sqd_states'])
     energy = group['energy'][()]
     eigvec = group['eigvec'][()]
     if (subgroup := group.get('ham_proj')) is None:

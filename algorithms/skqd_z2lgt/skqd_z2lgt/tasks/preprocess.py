@@ -7,6 +7,7 @@ import h5py
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.parameters import Parameters
 from skqd_z2lgt.mwpm import convert_link_to_plaq, minimum_weight_link_state
+from skqd_z2lgt.utils import read_bits
 
 RecoData = list[tuple[np.ndarray, np.ndarray]]  # [(vertex data, plaquette data)] * steps
 
@@ -64,9 +65,6 @@ def load_reco(
     etype: Optional[str] = None,
     istep: Optional[int] = None
 ) -> tuple[RecoData, RecoData] | RecoData | tuple[np.ndarray, np.ndarray]:
-    def read_bits(dataset):
-        return np.unpackbits(dataset[()], axis=-1)[..., :dataset.attrs['num_bits']]
-
     if etype:
         etypes = [etype]
     else:

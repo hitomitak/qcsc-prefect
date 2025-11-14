@@ -14,7 +14,7 @@ from qiskit.quantum_info import SparsePauliOp
 from qiskit_addon_sqd.qubit import sort_and_remove_duplicates, project_operator_to_subspace
 from skqd_z2lgt.jax_experimental_sparse_linalg import lobpcg_standard
 from skqd_z2lgt.pauli import op_to_arrays, _subspace_pauli_map_nondiagonal
-from skqd_z2lgt.utils import shard_array_1d
+from skqd_z2lgt.utils import shard_array_1d, read_bits
 
 LOG = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ def sqd(
 
         retval = (float(eigval), np.array(eigvec))
         if return_states:
-            states = np.unpackbits(states, axis=1)[:, :hamiltonian.num_qubits]
+            states = read_bits(states, num_bits=hamiltonian.num_qubits)
             retval += (states,)
         if return_hproj:
             retval += (bcoo_to_csr(hproj),)
