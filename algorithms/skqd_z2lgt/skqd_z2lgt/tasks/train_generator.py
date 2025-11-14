@@ -25,7 +25,7 @@ def load_model(
     else:
         device = jax.devices()[jax_device_id]
 
-    with h5py.File(source_filename, 'r') as out:
+    with h5py.File(source_filename, 'r', libver='latest') as out:
         group = out[f'crbm/step{istep}']
         with jax.default_device(device):
             model = ConditionalRBM.load(group)
@@ -39,12 +39,8 @@ def save_model(
     records: dict[str, np.ndarray],
     output_filename: str
 ):
-    with h5py.File(output_filename, 'a') as out:
+    with h5py.File(output_filename, 'a', libver='latest') as out:
         groupname = f'crbm/step{istep}'
-        try:
-            del out[groupname]
-        except KeyError:
-            pass
         group = out.create_group(groupname)
         model.save(group)
         group = group.create_group('records')

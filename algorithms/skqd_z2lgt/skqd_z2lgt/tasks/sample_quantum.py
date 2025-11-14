@@ -23,7 +23,7 @@ def check_saved_raw(
 
     num_steps = parameters.skqd.n_trotter_steps
 
-    with h5py.File(parameters.output_filename, 'r') as source:
+    with h5py.File(parameters.output_filename, 'r', libver='latest') as source:
         try:
             group = source['data/raw']
         except KeyError:
@@ -100,7 +100,7 @@ def save_raw(
 
     num_steps = parameters.skqd.n_trotter_steps
 
-    with h5py.File(parameters.output_filename, 'r+') as out:
+    with h5py.File(parameters.output_filename, 'r+', libver='latest') as out:
         try:
             del out['data/raw']
         except KeyError:
@@ -128,7 +128,7 @@ def load_raw(
 
     num_steps = parameters.skqd.n_trotter_steps
 
-    with h5py.File(parameters.output_filename, 'r') as source:
+    with h5py.File(parameters.output_filename, 'r', libver='latest') as source:
         group = source['data/raw']
         if etype is None:
             return tuple(

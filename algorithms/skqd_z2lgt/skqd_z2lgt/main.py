@@ -260,7 +260,7 @@ async def diagonalize(
             **job_block.get_job_variables()
         )
 
-    with h5py.File(parameters.output_filename, 'r') as source:
+    with h5py.File(parameters.output_filename, 'r', libver='latest') as source:
         if parameters.skqd.max_iterations == 0:
             group = source['skqd_init']
         else:

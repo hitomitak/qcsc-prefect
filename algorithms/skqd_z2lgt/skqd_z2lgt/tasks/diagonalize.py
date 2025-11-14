@@ -22,7 +22,7 @@ def check_saved_result(
     parameters: Parameters,
     group_name: str
 ) -> tuple[float, np.ndarray] | None:
-    with h5py.File(parameters.output_filename, 'r') as source:
+    with h5py.File(parameters.output_filename, 'r', libver='latest') as source:
         if (group := source.get(group_name)) is None:
             return None
         return group['energy'][()], group['eigvec'][()]
@@ -31,7 +31,7 @@ def check_saved_result(
 def load_init(
     parameters: Parameters
 ):
-    with h5py.File(parameters.output_filename, 'r') as source:
+    with h5py.File(parameters.output_filename, 'r', libver='latest') as source:
         if (group := source.get('skqd_init')) is None:
             return None
         sqd_result = load_skqd_result(group)
@@ -48,7 +48,7 @@ def diagonalize_init(
     logger.info('Performing SQD with observed (charge-corrected) plaquette states')
     states = np.concatenate([pdata for _, pdata in exp_data], axis=0)[:, ::-1]
     energy, eigvec, states, ham_proj = sqd(hamiltonian, states)
-    with h5py.File(parameters.output_filename, 'r+') as out:
+    with h5py.File(parameters.output_filename, 'r+', libver='latest') as out:
         save_skqd_result(out, 'skqd_init', states, energy, eigvec, ham_proj)
 
     return states, energy, eigvec
@@ -195,7 +195,7 @@ def diagonalize(
 
     lattice = TriangularZ2Lattice(parameters.lgt.lattice)
     dual_lattice = lattice.plaquette_dual()
-    hamiltonian = dual_lattice.make_hamiltonian(parameters.lgt.plaqette_energy)
+    hamiltonian = dual_lattice.make_hamiltonian(parameters.lgt.plaquette_energy)
 
     exp_data = reco_data[0]
 
@@ -269,7 +269,7 @@ def diagonalize(
 
     ham_proj = sqd_result[-1]
 
-    with h5py.File(parameters.output_filename, 'r+') as out:
+    with h5py.File(parameters.output_filename, 'r+', libver='latest') as out:
         group = save_skqd_result(out, group_name, sqd_states, energy, eigvec, ham_proj)
         group.create_dataset('energies', data=energies)
         group.create_dataset('subspace_dims', data=subspace_dims)
@@ -303,7 +303,7 @@ if __name__ == '__main__':
 
     params = Parameters()
     params.output_filename = options.filename
-    with h5py.File(options.filename, 'r') as src:
+    with h5py.File(options.filename, 'r', libver='latest') as src:
         params.lgt.lattice = src.attrs['lattice']
         params.lgt.plaquette_energy = src.attrs['plaquette_energy']
         params.lgt.charged_vertices = src.attrs['charged_vertices']

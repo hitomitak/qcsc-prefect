@@ -30,7 +30,7 @@ def open_output(parameters: Parameters, logger: Optional[logging.Logger] = None)
 
     if os.path.exists(parameters.output_filename):
         logger.info('Validating configurations in existing file %s', parameters.output_filename)
-        with h5py.File(parameters.output_filename, 'r') as source:
+        with h5py.File(parameters.output_filename, 'r', libver='latest') as source:
             for key, value in attrs:
                 if ((isinstance(value, float) and not np.isclose(source.attrs[key], value))
                         or (isinstance(value, (int, str)) and source.attrs[key] != value)):
@@ -38,6 +38,6 @@ def open_output(parameters: Parameters, logger: Optional[logging.Logger] = None)
 
     else:
         logger.info('Creating a new file %s', parameters.output_filename)
-        with h5py.File(parameters.output_filename, 'w') as out:
+        with h5py.File(parameters.output_filename, 'w', libver='latest') as out:
             for key, value in attrs:
                 out.attrs[key] = value

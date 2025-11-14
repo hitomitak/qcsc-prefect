@@ -12,7 +12,7 @@ LOG = logging.getLogger(__name__)
 
 
 def main(filename: str):
-    with h5py.File(filename, 'r', swmr=True) as source:
+    with h5py.File(filename, 'r', libver='latest') as source:
         configuration = dict(source.attrs)
 
     dual_lattice = TriangularZ2Lattice(configuration['lattice']).plaquette_dual()
@@ -26,7 +26,7 @@ def main(filename: str):
     states, probs = get_mps_probs(filename, julia_bin=JULIA_BIN)
     os.unlink(filename)
 
-    with h5py.File(filename, 'r+') as out:
+    with h5py.File(filename, 'r+', libver='latest') as out:
         try:
             del out['dmrg']
         except KeyError:

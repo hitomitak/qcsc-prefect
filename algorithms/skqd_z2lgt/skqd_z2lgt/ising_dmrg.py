@@ -42,7 +42,7 @@ def ising_dmrg(
         with tempfile.NamedTemporaryFile() as tfile:
             filename = tfile.name
 
-    with h5py.File(filename, 'w') as out:
+    with h5py.File(filename, 'w', libver='latest') as out:
         out.create_dataset('num_qubits', data=hamiltonian.num_qubits)
         out.create_dataset('zz_indices', data=np.array(zz_indices))
         out.create_dataset('zz_coeffs', data=np.array(zz_coeffs))
@@ -69,7 +69,7 @@ def ising_dmrg(
         sys.stderr.write(proc.stderr)
         sys.stderr.flush()
 
-    with h5py.File(filename, 'r') as source:
+    with h5py.File(filename, 'r', libver='latest') as source:
         energy = source['energy'][()]
 
     if is_tempfile:
@@ -102,7 +102,7 @@ def get_mps_probs(
         sys.stderr.write(proc.stderr)
         sys.stderr.flush()
 
-    with h5py.File(filename, 'r') as source:
+    with h5py.File(filename, 'r', libver='latest') as source:
         states = source['states'][()]
         probs = source['probs'][()]
 
@@ -141,7 +141,7 @@ def get_mps_coverage(
         sys.stderr.write(proc.stderr)
         sys.stderr.flush()
 
-    with h5py.File(out_filename, 'r') as source:
+    with h5py.File(out_filename, 'r', libver='latest') as source:
         prob = source['prob'][()]
 
     os.unlink(out_filename)

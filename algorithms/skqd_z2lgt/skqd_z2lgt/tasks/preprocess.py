@@ -19,7 +19,7 @@ def check_saved_reco(
 
     num_steps = parameters.skqd.n_trotter_steps
 
-    with h5py.File(parameters.output_filename, 'r') as source:
+    with h5py.File(parameters.output_filename, 'r', libver='latest') as source:
         data_group = source.get('data', {})
         if 'vtx' in data_group and 'plaq' in data_group:
             logger.info('Loading existing reco data from output file')
@@ -42,7 +42,7 @@ def save_reco(
 ):
     logger = logger or logging.getLogger(__name__)
     logger.info('Saving vertex and plaquette data')
-    with h5py.File(parameters.output_filename, 'r+') as out:
+    with h5py.File(parameters.output_filename, 'r+', libver='latest') as out:
         data_group = out['data']
         groups = [data_group.get(gname) or data_group.create_group(gname)
                   for gname in ['vtx', 'plaq']]
@@ -76,7 +76,7 @@ def load_reco(
     else:
         isteps = list(range(parameters.skqd.n_trotter_steps))
 
-    with h5py.File(parameters.output_filename, 'r') as source:
+    with h5py.File(parameters.output_filename, 'r', libver='latest') as source:
         group = source['data']
         result = tuple(
             [(read_bits(group[f'vtx/{etype}_step{istep}']),
