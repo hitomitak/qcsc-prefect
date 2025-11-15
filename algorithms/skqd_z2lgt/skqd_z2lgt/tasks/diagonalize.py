@@ -14,6 +14,7 @@ from flax import nnx
 from qiskit.quantum_info import SparsePauliOp
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.sqd import sqd, to_bcoo, bcoo_to_csr
+from skqd_z2lgt.mwpm import minimum_weight_link_state
 from skqd_z2lgt.crbm import ConditionalRBM
 from skqd_z2lgt.parameters import Parameters
 from skqd_z2lgt.utils import read_bits
@@ -178,7 +179,7 @@ def save_skqd_result(out, group_name, sqd_states, energy, eigvec, ham_proj=None)
 def diagonalize(
     parameters: Parameters,
     exp_data: list[tuple[np.ndarray, np.ndarray]],
-    crbm_models: list[ConditionalRBM] | None,
+    crbm_models: Optional[list[ConditionalRBM]] = None,
     ref_data: Optional[list[tuple[np.ndarray, np.ndarray]]] = None,
     logger: Optional[logging.Logger] = None
 ) -> tuple[float, np.ndarray]:
@@ -195,7 +196,8 @@ def diagonalize(
         return saved_result
 
     lattice = TriangularZ2Lattice(parameters.lgt.lattice)
-    dual_lattice = lattice.plaquette_dual()
+    base_link_state = minimum_weight_link_state(parameters.lgt.charged_vertices, lattice)
+    dual_lattice = lattice.plaquette_dual(base_link_state)
     hamiltonian = dual_lattice.make_hamiltonian(parameters.lgt.plaquette_energy)
 
     init = load_init(parameters)
@@ -204,6 +206,8 @@ def diagonalize(
                                                                  logger)
     else:
         init_states, init_energy, init_eigvec = init
+
+    logger.info('SKQD ground state energy with no configuration recovery: %f', init_energy)
 
     if parameters.skqd.max_iterations == 0:
         return init_energy, init_eigvec
