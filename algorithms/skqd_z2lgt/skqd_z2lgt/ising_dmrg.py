@@ -12,7 +12,7 @@ from qiskit.quantum_info import SparsePauliOp
 def ising_dmrg(
     hamiltonian: SparsePauliOp,
     filename: Optional[str] = None,
-    num_sweeps: int = 5,
+    nsweeps: int = 5,
     maxdim: Optional[list[int]] = None,
     cutoff: float = 1.e-10,
     julia_bin: str | list[str] = 'julia'
@@ -40,8 +40,8 @@ def ising_dmrg(
             raise RuntimeError(pstr)
 
     maxdim = maxdim or [10, 20, 100, 100]
-    if num_sweeps > 4 and len(maxdim) < num_sweeps:
-        maxdim += [200] * (num_sweeps - 4)
+    if nsweeps > 4 and len(maxdim) < nsweeps:
+        maxdim += [200] * (nsweeps - 4)
 
     is_tempfile = False
     if not filename:
@@ -57,7 +57,7 @@ def ising_dmrg(
         out.create_dataset('z_coeffs', data=np.array(z_coeffs))
         out.create_dataset('x_indices', data=np.array(x_indices))
         out.create_dataset('x_coeffs', data=np.array(x_coeffs))
-        out.create_dataset('num_sweeps', data=num_sweeps)
+        out.create_dataset('nsweeps', data=nsweeps)
         out.create_dataset('maxdim', data=maxdim)
         out.create_dataset('cutoff', data=cutoff)
 

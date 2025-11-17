@@ -57,7 +57,7 @@ def dmrg(parameters: Parameters, logger: Optional[logging.Logger] = None) -> flo
 
     def dmrg_fn(hamiltonian, filename):
         return ising_dmrg(hamiltonian, filename=filename,
-                          num_sweeps=dmrg_params.num_sweeps, maxdim=dmrg_params.maxdim,
+                          nsweeps=dmrg_params.nsweeps, maxdim=dmrg_params.maxdim,
                           cutoff=dmrg_params.cutoff, julia_bin=julia_bin)
 
     def mps_probs_fn(filename):

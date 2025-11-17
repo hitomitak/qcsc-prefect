@@ -49,7 +49,7 @@ class LGTParameters(BaseModel):
 class DMRGParameters(BaseModel):
     """Configuration for DMRG."""
 
-    num_sweeps: int = Field(
+    nsweeps: int = Field(
         default=5,
         description='Number of DMRG sweeps.',
         title='Number of sweeps'

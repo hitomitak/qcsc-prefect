@@ -25,14 +25,14 @@ function ising_dmrg(filename)
         os += coeffs[iop], "X", indices[iop] + 1
     end
 
-    num_sweeps = read(fp["num_sweeps"])
+    nsweeps = read(fp["nsweeps"])
     maxdim = read(fp["maxdim"])
     cutoff = read(fp["cutoff"])
 
     H = MPO(os, sites)
     psi0 = random_mps(sites, linkdims=2)
 
-    energy, psi = dmrg(H, psi0; num_sweeps, maxdim, cutoff)
+    energy, psi = dmrg(H, psi0; nsweeps, maxdim, cutoff)
     zexp = expect(psi, "Z")
 
     write(fp, "energy", energy)

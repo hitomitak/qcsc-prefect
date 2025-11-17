@@ -103,7 +103,7 @@ async def dmrg(
     def dmrg_fn(hamiltonian, filename):
         async def fn():
             return await job_block.run(ising_dmrg, hamiltonian, filename=filename,
-                                       num_sweeps=dmrg_params.num_sweeps,
+                                       nsweeps=dmrg_params.nsweeps,
                                        maxdim=dmrg_params.maxdim, cutoff=dmrg_params.cutoff,
                                        julia_bin=julia_bin)
 
