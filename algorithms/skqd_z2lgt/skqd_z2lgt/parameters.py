@@ -210,12 +210,6 @@ class SKQDParameters(BaseModel):
         title="Time Interval",
         ge=0,
     )
-    max_subspace_dim: int = Field(
-        default=1_000_000,
-        description="Maximum subspace dimension in iterative configuration recovery.",
-        title="Maximum Subspace Dimension",
-        ge=1
-    )
     num_gen: int = Field(
         default=3,
         description="Number of bitstrings to generate in each iteration of configuration recovery.",
@@ -227,6 +221,19 @@ class SKQDParameters(BaseModel):
         description="Number of configuration recovery iterations.",
         title="Max Iteration",
         ge=0
+    )
+    probability_cutoff: float = Field(
+        default=1.e-20,
+        description="Cutoff for probability of computational basis state to be kept for the next"
+                    " round of iterative configuration recovery.",
+        title="State probability cutoff",
+        ge=0.
+    )
+    max_subspace_dim: int = Field(
+        default=1_000_000,
+        description="Maximum subspace dimension in iterative configuration recovery.",
+        title="Maximum Subspace Dimension",
+        ge=1
     )
     delta_e: float = Field(
         default=0.005,

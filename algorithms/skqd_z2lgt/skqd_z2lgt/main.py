@@ -6,16 +6,17 @@ import asyncio
 import tempfile
 import shutil
 from concurrent.futures import ThreadPoolExecutor
-import numpy as np
 import h5py
 from prefect import flow, task, get_run_logger
 from prefect.variables import Variable
 from prefect_qiskit.runtime import QuantumRuntime
 from prefect_qiskit.primitives import PrimitiveJobRun
 from prefect_miyabi import MiyabiJobBlock, PyFunctionJob
+from skqd_z2lgt.ising_dmrg import ising_dmrg, get_mps_probs
 from skqd_z2lgt.mwpm import convert_link_to_plaq
 from skqd_z2lgt.parameters import Parameters
 from skqd_z2lgt.tasks.open_output import open_output as _open_output
+from skqd_z2lgt.tasks.dmrg import dmrg_flow
 from skqd_z2lgt.tasks.sample_quantum import sample_quantum_flow, load_raw
 from skqd_z2lgt.tasks.preprocess import preprocess_flow
 from skqd_z2lgt.tasks.train_generator import train_generator_flow, load_model, save_model
@@ -44,31 +45,80 @@ async def skqd_z2lgt(
     logger = get_run_logger()
     logger.setLevel(logging.INFO)
 
-    if (is_temp := not parameters.pkgpath):
-        with tempfile.NamedTemporaryFile() as tfile:
-            parameters.pkgpath = tfile.name
+    tmpdir = None
+    if not parameters.pkgpath:
+        tmpdir = tempfile.TemporaryDirectory()
+        parameters.pkgpath = tmpdir.name
 
     open_output(parameters)
+    if parameters.dmrg:
+        logger.info('Estimating ground-state energy via DMRG')
+        dmrg_energy = await dmrg(parameters, cpu_pyfuncjob_name)
     logger.info('Running a quantum job to obtain the bitstrings')
     raw_data = await sample_quantum(parameters)
     logger.info('Correcting and converting link states to plaquette states')
     reco_data = await preprocess(parameters, raw_data, cpu_pyfuncjob_name)
     logger.info('Training conditional restricted Boltzmann machines')
     crbm_models = await train_generator(parameters, reco_data[1], cuda_scriptjob_name)
+    logger.info('Performing SQD with random bit flips')
+    energy_random, _ = await diagonalize(parameters, reco_data[0], None,
+                                         cuda_scriptjob_name=cuda_scriptjob_name)
     logger.info('Performing SQD with configuration recovery')
-    energy, eigvec = await diagonalize(parameters, reco_data[0], crbm_models, cuda_scriptjob_name)
+    energy_norecov, energy = await diagonalize(parameters, reco_data[0], crbm_models,
+                                               cuda_scriptjob_name=cuda_scriptjob_name)
 
+    if tmpdir:
+        tmpdir.cleanup()
+
+    if parameters.dmrg:
+        logger.info('DMRG energy: %f', dmrg_energy)
+    logger.info('SKQD energy (no conf. recovery): %f', energy_norecov)
+    logger.info('DMRG energy (random bit flips): %f', energy_random)
+    logger.info('DMRG energy: %f', energy)
     logger.info('Estimated ground-state energy is %f', energy)
 
-    if is_temp:
-        shutil.rmtree(parameters.pkgpath)
-
-    return energy, eigvec
+    return energy
 
 
 @task
 def open_output(parameters: Parameters):
     return _open_output(parameters, get_run_logger())
+
+
+@task
+async def dmrg(
+    parameters: Parameters,
+    cpu_pyfuncjob_name: str
+) -> float:
+    """Run DMRG and MPS sampling."""
+    logger = get_run_logger()
+
+    job_block = await PyFunctionJob.load(cpu_pyfuncjob_name)
+
+    dmrg_params = parameters.dmrg
+    julia_bin = 'julia'
+    if dmrg_params.julia_sysimage:
+        julia_bin = ['julia', '--sysimage', dmrg_params.julia_sysimage]
+
+    def dmrg_fn(hamiltonian, filename):
+        async def fn():
+            return await job_block.run(ising_dmrg, hamiltonian, filename=filename,
+                                       num_sweeps=dmrg_params.num_sweeps,
+                                       maxdim=dmrg_params.maxdim, cutoff=dmrg_params.cutoff,
+                                       julia_bin=julia_bin)
+
+        with ThreadPoolExecutor(1) as executor:
+            return executor.submit(lambda: asyncio.run(fn())).result()
+
+    def mps_probs_fn(filename):
+        async def fn():
+            return await job_block.run(get_mps_probs, filename, num_samples=dmrg_params.num_samples,
+                                       julia_bin=julia_bin)
+
+        with ThreadPoolExecutor(1) as executor:
+            return executor.submit(lambda: asyncio.run(fn())).result()
+
+    return dmrg_flow(parameters, dmrg_fn, mps_probs_fn, logger)
 
 
 @task
@@ -233,9 +283,9 @@ async def train_generator(
 async def diagonalize(
     parameters: Parameters,
     _data: None,
-    _crbm_models: None,
+    crbm_models: list[None] | None,
     cuda_scriptjob_name: str
-) -> tuple[float, np.ndarray]:
+) -> tuple[float, float]:
     """Perform SQD with iterative configuration recovery.
 
     Args:
@@ -246,26 +296,30 @@ async def diagonalize(
     job_block = await MiyabiJobBlock.load(cuda_scriptjob_name)
     with job_block.get_executor() as executor:
         arguments = [
-            TASK_SCRIPT_DIR / 'skqd_recovery.py',
+            TASK_SCRIPT_DIR / 'diagonalize.py',
             parameters.pkgpath,
-            '--gpu', 'all',
-            '--num-gen', f'{parameters.skqd.num_gen}',
-            '--gen-batch-size', f'{parameters.crbm.gen_batch_size}',
-            '--niter', f'{parameters.skqd.max_iterations}',
-            '--terminate-deltae', f'{parameters.skqd.delta_e}',
-            '--terminate-ndim', f'{parameters.skqd.max_subspace_dim}'
+            '--gpu', 'all'
         ]
+        if isinstance(crbm_models, list):
+            arguments += ['--mode', 'full']
+        else:
+            arguments += ['--mode', 'random']
         await executor.execute_job(
             arguments=arguments,
             **job_block.get_job_variables()
         )
 
-    with h5py.File(parameters.pkgpath, 'r', libver='latest') as source:
-        if parameters.skqd.max_iterations == 0:
-            group = source['skqd_init']
-        else:
-            group = source['skqd_rcv']
-        return group['energy'][()], group['eigvec'][()]
+    with h5py.File(Path(parameters.pkgpath) / 'skqd_init.h5', 'r', libver='latest') as source:
+        energy_init = source['energy'][()]
+
+    if isinstance(crbm_models, list):
+        filename = 'skqd_rcv.h5'
+    else:
+        filename = 'skqd_rnd.h5'
+    with h5py.File(Path(parameters.pkgpath) / filename, 'r', libver='latest') as source:
+        energy = source['energy'][()]
+
+    return energy, energy_init
 
 
 def deploy():

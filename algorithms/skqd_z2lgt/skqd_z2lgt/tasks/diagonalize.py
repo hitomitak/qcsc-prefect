@@ -13,52 +13,12 @@ import h5py
 import jax
 import jax.numpy as jnp
 from flax import nnx
-from qiskit.quantum_info import SparsePauliOp
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.sqd import sqd, to_bcoo, bcoo_to_csr
 from skqd_z2lgt.mwpm import minimum_weight_link_state
 from skqd_z2lgt.crbm import ConditionalRBM
 from skqd_z2lgt.parameters import Parameters
 from skqd_z2lgt.utils import read_bits
-
-
-def check_saved_result(
-    parameters: Parameters,
-    group_name: str
-) -> tuple[float, np.ndarray] | None:
-    path = Path(parameters.pkgpath) / f'{group_name}.h5'
-    if os.path.exists(path):
-        with h5py.File(path, 'r', libver='latest') as source:
-            return source['energy'][()], source['eigvec'][()]
-    return None
-
-
-def load_init(
-    parameters: Parameters
-):
-    path = Path(parameters.pkgpath) / 'skqd_init.h5'
-    if os.path.exists(path):
-        with h5py.File(path, 'r', libver='latest') as source:
-            sqd_result = load_skqd_result(source)
-            return sqd_result[:3]
-    return None
-
-
-def diagonalize_init(
-    parameters: Parameters,
-    exp_data: list[tuple[np.ndarray, np.ndarray]],
-    hamiltonian: SparsePauliOp,
-    logger: Optional[logging.Logger] = None
-):
-    logger = logger or logging.getLogger(__name__)
-    logger.info('Performing SQD with observed (charge-corrected) plaquette states')
-    states = np.concatenate([pdata for _, pdata in exp_data], axis=0)[:, ::-1]
-    energy, eigvec, states, ham_proj = sqd(hamiltonian, states)
-    path = Path(parameters.pkgpath) / 'skqd_init.h5'
-    with h5py.File(path, 'w', libver='latest') as out:
-        save_skqd_result(out, states, energy, eigvec, ham_proj)
-
-    return states, energy, eigvec
 
 
 def generate_states(model, vtx_data, plaq_data, generate_fn, batch_size):
@@ -147,6 +107,22 @@ def generate_random(
     return gen_states
 
 
+def get_relevant_states(states: np.ndarray, eigvec: np.ndarray, cutoff: float) -> np.ndarray:
+    return states[np.square(np.abs(eigvec)) > cutoff]
+
+
+def check_saved_result(
+    parameters: Parameters,
+    result_name: str
+) -> tuple[np.ndarray, float, np.ndarray] | None:
+    path = Path(parameters.pkgpath) / f'{result_name}.h5'
+    if os.path.exists(path):
+        with h5py.File(path, 'r', libver='latest') as source:
+            states, energy, eigvec, _ = load_skqd_result(source)
+            return states, energy, eigvec
+    return None
+
+
 def load_skqd_result(group):
     sqd_states = read_bits(group['sqd_states'])
     energy = group['energy'][()]
@@ -174,13 +150,46 @@ def save_skqd_result(out, sqd_states, energy, eigvec, ham_proj=None):
         group.create_dataset('indptr', data=ham_proj.indptr)
 
 
+def diagonalize_init(
+    parameters: Parameters,
+    exp_data: list[tuple[np.ndarray, np.ndarray]],
+    logger: Optional[logging.Logger] = None
+) -> tuple[float, np.ndarray]:
+    logger = logger or logging.getLogger(__name__)
+
+    saved_result = check_saved_result(parameters, 'skqd_init')
+    if saved_result:
+        logger.info('There is already an SKQD result saved in the file.')
+        states, energy, eigvec = saved_result[:3]
+        relevant_states = get_relevant_states(states, eigvec, parameters.skqd.probability_cutoff)
+        return energy, relevant_states
+
+    logger.info('Performing SQD with observed (charge-corrected) plaquette states')
+
+    lattice = TriangularZ2Lattice(parameters.lgt.lattice)
+    base_link_state = minimum_weight_link_state(parameters.lgt.charged_vertices, lattice)
+    dual_lattice = lattice.plaquette_dual(base_link_state)
+    hamiltonian = dual_lattice.make_hamiltonian(parameters.lgt.plaquette_energy)
+
+    states = np.concatenate([pdata for _, pdata in exp_data], axis=0)[:, ::-1]
+    energy, eigvec, states, ham_proj = sqd(hamiltonian, states)
+    path = Path(parameters.pkgpath) / 'skqd_init.h5'
+    with h5py.File(path, 'w', libver='latest') as out:
+        save_skqd_result(out, states, energy, eigvec, ham_proj)
+
+    relevant_states = get_relevant_states(states, eigvec, parameters.skqd.probability_cutoff)
+
+    return energy, relevant_states
+
+
 def diagonalize(
     parameters: Parameters,
     exp_data: list[tuple[np.ndarray, np.ndarray]],
+    states_init: np.ndarray,
     crbm_models: Optional[list[ConditionalRBM]] = None,
     ref_data: Optional[list[tuple[np.ndarray, np.ndarray]]] = None,
     logger: Optional[logging.Logger] = None
-) -> tuple[float, np.ndarray]:
+) -> float:
     logger = logger or logging.getLogger(__name__)
 
     if crbm_models:
@@ -191,32 +200,19 @@ def diagonalize(
     saved_result = check_saved_result(parameters, group_name)
     if saved_result:
         logger.info('There is already an SKQD result saved in the file.')
-        return saved_result
+        return saved_result[1]
 
     lattice = TriangularZ2Lattice(parameters.lgt.lattice)
     base_link_state = minimum_weight_link_state(parameters.lgt.charged_vertices, lattice)
     dual_lattice = lattice.plaquette_dual(base_link_state)
     hamiltonian = dual_lattice.make_hamiltonian(parameters.lgt.plaquette_energy)
 
-    init = load_init(parameters)
-    if init is None:
-        init_states, init_energy, init_eigvec = diagonalize_init(parameters, exp_data, hamiltonian,
-                                                                 logger)
-    else:
-        init_states, init_energy, init_eigvec = init
-
-    logger.info('SKQD ground state energy with no configuration recovery: %f', init_energy)
-
-    if parameters.skqd.max_iterations == 0:
-        return init_energy, init_eigvec
-
     num_steps = parameters.skqd.n_trotter_steps
     shots = parameters.runtime.shots
 
-    relevant_states = init_states[np.square(np.abs(init_eigvec)) > 1.e-20]
     exp_data_size = num_steps * shots
     gen_data_size = exp_data_size * parameters.skqd.num_gen
-    max_size = gen_data_size + min(exp_data_size, 10 * relevant_states.shape[0])
+    max_size = gen_data_size + min(exp_data_size, 10 * states_init.shape[0])
     logger.info('Set maximum array size to %d', max_size)
 
     if crbm_models:
@@ -231,6 +227,7 @@ def diagonalize(
 
     energies = []
     subspace_dims = []
+    relevant_states = states_init
     prev_energy = None
 
     is_last = False
@@ -270,7 +267,8 @@ def diagonalize(
         if is_last:
             break
 
-        relevant_states = sqd_states[np.square(np.abs(eigvec)) > 1.e-20]
+        relevant_states = get_relevant_states(sqd_states, eigvec,
+                                              parameters.skqd.probability_cutoff)
 
     ham_proj = sqd_result[-1]
 
@@ -280,10 +278,11 @@ def diagonalize(
         out.create_dataset('energies', data=energies)
         out.create_dataset('subspace_dims', data=subspace_dims)
 
-    return energy, eigvec
+    return energy
 
 
 if __name__ == '__main__':
+    import sys
     import argparse
     from skqd_z2lgt.tasks.preprocess import load_reco
     from skqd_z2lgt.tasks.train_generator import load_model
@@ -291,7 +290,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('pkgpath')
     parser.add_argument('--gpu', nargs='+')
-    parser.add_argument('--random', action='store_true')
+    parser.add_argument('--mode', default='full')
     options = parser.parse_args()
 
     LOG = logging.getLogger(__name__)
@@ -304,10 +303,17 @@ if __name__ == '__main__':
     with os.open(Path(options.pkgpath) / 'parameters.json', 'r', encoding='utf-8') as src:
         params = Parameters.model_validate_json(src.read())
 
-    rdata = load_reco(params)
-    if options.random:
+    edata = load_reco(params, 'exp')
+    _, st_init = diagonalize_init(params, edata)
+
+    if options.mode == 'init':
+        sys.exit(0)
+
+    if options.mode == 'random':
         models = None  # pylint: disable=invalid-name
+        rdata = load_reco(params, 'ref')
     else:
+        rdata = None  # pylint: disable=invalid-name
         models = [load_model(istep, params.pkgpath, istep % jax.device_count())
                   for istep in range(params.skqd.n_trotter_steps)]
 
@@ -320,4 +326,4 @@ if __name__ == '__main__':
                     size=params.skqd.num_gen
                 )
 
-    diagonalize(params, rdata, models)
+    diagonalize(params, edata, st_init, crbm_models=models, ref_data=rdata)
