@@ -55,7 +55,7 @@ class DMRGParameters(BaseModel):
         title='Number of sweeps'
     )
     maxdim: list[int] = Field(
-        default_factory=lambda: [10, 20, 100, 100, 200],
+        default=[10, 20, 100, 100, 200],
         description='Maximum size allowed for the bond dimension or rank of the MPS.',
         title='Maximum bond dimensions'
     )
@@ -123,11 +123,6 @@ class RuntimeParameters(BaseModel):
         default_factory=dict,
         description='Runtime options (except for shots).',
         title='Runtime Options'
-    )
-    runtime_block_name: str | None = Field(
-        default=None,
-        description='Quantum Runtime Prefect block name.',
-        title='Quantum Runtime Block Name'
     )
     options_name: str | None = Field(
         default=None,
@@ -285,6 +280,6 @@ class Parameters(BaseModel):
 
     pkgpath: str | None = Field(
         default=None,
-        description='Name of the HDF5 file where intermediate output are stored.',
-        title='Output File Name'
+        description='Path of the directory tree where intermediate and final output are stored.',
+        title='Output package name'
     )
