@@ -1,5 +1,5 @@
 """Workflow parameters."""
-from typing import Any
+from typing import Any, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -44,6 +44,38 @@ class LGTParameters(BaseModel):
              * * * * *
             *-*-*-*-*╵
             '''
+
+
+class DMRGParameters(BaseModel):
+    """Configuration for DMRG."""
+
+    num_sweeps: int = Field(
+        default=5,
+        description='Number of DMRG sweeps.',
+        title='Number of sweeps'
+    )
+    maxdim: list[int] = Field(
+        default_factory=lambda: [10, 20, 100, 100, 200],
+        description='Maximum size allowed for the bond dimension or rank of the MPS.',
+        title='Maximum bond dimensions'
+    )
+    cutoff: float = Field(
+        default=1.e-10,
+        description='Truncation error cutoff or threshold to use for truncating the bond dimension'
+                    ' or rank of the MPS.',
+        title='Truncation error cutoff'
+    )
+    num_samples: int = Field(
+        default=100_000,
+        description='Number of times to sample the MPS to estimate the probability distribution of'
+                    ' the ground state.',
+        title='MPS sampling number'
+    )
+    julia_sysimage: Optional[str] = Field(
+        default=None,
+        description='Path to the precompiled ITensors sysimage.',
+        title='ITensors.jl sysimage path'
+    )
 
 
 class CircuitParameters(BaseModel):
@@ -212,6 +244,12 @@ class Parameters(BaseModel):
         default_factory=LGTParameters,
         description='Lattice gauge theory definition.',
         title='Lattice Gauge Theory'
+    )
+
+    dmrg: Optional[DMRGParameters] = Field(
+        default=None,
+        description='DMRG and MPS sampling parameters.',
+        title='DMRG'
     )
 
     circuit: CircuitParameters = Field(

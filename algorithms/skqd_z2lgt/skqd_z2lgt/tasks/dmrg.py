@@ -10,8 +10,6 @@ from skqd_z2lgt.ising_dmrg import ising_dmrg, get_mps_probs
 from skqd_z2lgt.mwpm import minimum_weight_link_state
 from skqd_z2lgt.parameters import Parameters
 
-JULIA_BIN = ['julia', '--sysimage', '/opt/julia/iiyama/sysimages/sys_itensors.so']
-
 
 def dmrg(parameters: Parameters, logger: Optional[logging.Logger] = None) -> float:
     """Run DMRG on the dual Ising hamiltonian."""
@@ -28,12 +26,22 @@ def dmrg(parameters: Parameters, logger: Optional[logging.Logger] = None) -> flo
     dual_lattice = lattice.plaquette_dual(base_link_state)
     ising_hamiltonian = dual_lattice.make_hamiltonian(parameters.lgt.plaquette_energy)
 
+    dmrg_params = parameters.dmrg
+
     logger.info('Invoking ITensorMPS DMRG function')
     with tempfile.NamedTemporaryFile() as tfile:
         filename = tfile.name
-    dmrg_energy = ising_dmrg(ising_hamiltonian, filename=filename, julia_bin=JULIA_BIN)
+
+    julia_bin = 'julia'
+    if dmrg_params.julia_sysimage:
+        julia_bin = ['julia', '--sysimage', dmrg_params.julia_sysimage]
+
+    dmrg_energy = ising_dmrg(ising_hamiltonian, filename=filename,
+                             num_sweeps=dmrg_params.num_sweeps, maxdim=dmrg_params.maxdim,
+                             cutoff=dmrg_params.cutoff, julia_bin=julia_bin)
     logger.info('Sampling the MPS for probability distribution over the computational basis')
-    states, probs = get_mps_probs(filename, julia_bin=JULIA_BIN)
+    states, probs = get_mps_probs(filename, num_samples=dmrg_params.num_samples,
+                                  julia_bin=julia_bin)
     os.unlink(filename)
 
     with h5py.File(path, 'w', libver='latest') as out:
@@ -46,8 +54,6 @@ def dmrg(parameters: Parameters, logger: Optional[logging.Logger] = None) -> flo
 
 if __name__ == '__main__':
     import argparse
-    import yaml
-
     parser = argparse.ArgumentParser()
     parser.add_argument('parameters')
     parser.add_argument('--log-level', default='INFO')
@@ -56,6 +62,6 @@ if __name__ == '__main__':
     logging.basicConfig(level=getattr(logging, options.log_level.upper()))
 
     with open(options.parameters, 'r', encoding='utf-8') as src:
-        params = Parameters(**yaml.load(src, yaml.Loader))
+        params = Parameters.model_validate_json(src.read())
 
     dmrg(params)
