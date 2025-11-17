@@ -17,9 +17,9 @@ def open_output(parameters: Parameters, logger: Optional[logging.Logger] = None)
     """
     logger = logger or logging.getLogger(__name__)
 
-    path = Path(parameters.output_filename) / 'parameters.json'
-    if os.path.isdir(parameters.output_filename):
-        logger.info('Validating configurations in existing file %s', parameters.output_filename)
+    path = Path(parameters.pkgpath) / 'parameters.json'
+    if os.path.isdir(parameters.pkgpath):
+        logger.info('Validating configurations in existing file %s', parameters.pkgpath)
         with open(path, 'r', encoding='utf-8') as source:
             params = Parameters.model_validate_json(source.read())
 
@@ -27,8 +27,8 @@ def open_output(parameters: Parameters, logger: Optional[logging.Logger] = None)
             raise RuntimeError('Saved parameters do not match')  # Should show where
 
     else:
-        logger.info('Creating a new file %s', parameters.output_filename)
-        os.makedirs(parameters.output_filename)
-        path = Path(parameters.output_filename) / 'parameters.json'
+        logger.info('Creating a new file %s', parameters.pkgpath)
+        os.makedirs(parameters.pkgpath)
+        path = Path(parameters.pkgpath) / 'parameters.json'
         with open(path, 'w', encoding='utf-8') as out:
             out.write(parameters.model_dump_json())

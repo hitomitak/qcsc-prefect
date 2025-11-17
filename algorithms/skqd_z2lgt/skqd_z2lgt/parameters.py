@@ -238,7 +238,7 @@ class Parameters(BaseModel):
         title='SKQD',
     )
 
-    output_filename: str | None = Field(
+    pkgpath: str | None = Field(
         default=None,
         description='Name of the HDF5 file where intermediate output are stored.',
         title='Output File Name'

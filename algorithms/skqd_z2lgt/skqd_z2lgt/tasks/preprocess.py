@@ -21,7 +21,7 @@ def save_reco(
     logger = logger or logging.getLogger(__name__)
     logger.info('Saving vertex and plaquette data')
     for igroup, group in enumerate(['vtx', 'plaq']):
-        path = Path(parameters.output_filename) / 'data' / f'{group}.h5'
+        path = Path(parameters.pkgpath) / 'data' / f'{group}.h5'
         with h5py.File(path, 'w', libver='latest') as out:
             for etype, step_data in zip(['exp', 'ref'], reco_data):
                 group = out.create_group(etype)
@@ -46,7 +46,7 @@ def load_reco(
 
     group_data = {}
     for group in ['vtx', 'plaq']:
-        path = Path(parameters.output_filename) / 'data' / f'{group}.h5'
+        path = Path(parameters.pkgpath) / 'data' / f'{group}.h5'
         with h5py.File(path, 'r', libver='latest', swmr=True) as source:
             group_data[group] = {
                 et: {ist: read_bits(source[f'{et}/step{ist}']) for ist in isteps}

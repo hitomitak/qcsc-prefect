@@ -17,7 +17,7 @@ def dmrg(parameters: Parameters, logger: Optional[logging.Logger] = None) -> flo
     """Run DMRG on the dual Ising hamiltonian."""
     logger = logger or logging.getLogger(__name__)
 
-    path = Path(parameters.output_filename) / 'dmrg.h5'
+    path = Path(parameters.pkgpath) / 'dmrg.h5'
     if os.path.exists(path):
         logger.info('DMRG result already exists in the output file.')
         with h5py.File(path, 'r', libver='latest') as source:

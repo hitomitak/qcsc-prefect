@@ -25,7 +25,7 @@ def check_saved_raw(
 
     num_steps = parameters.skqd.n_trotter_steps
 
-    path = Path(parameters.output_filename) / 'data' / 'raw.h5'
+    path = Path(parameters.pkgpath) / 'data' / 'raw.h5'
     if os.path.exists(path):
         logger.info('Loading existing raw data from output file')
         with h5py.File(path, 'r', libver='latest') as source:
@@ -100,7 +100,7 @@ def save_raw(
 
     num_steps = parameters.skqd.n_trotter_steps
 
-    path = Path(parameters.output_filename) / 'data' / 'raw.h5'
+    path = Path(parameters.pkgpath) / 'data' / 'raw.h5'
     try:
         os.makedirs(path.parent)
     except FileExistsError:
@@ -130,7 +130,7 @@ def load_raw(
 
     num_steps = parameters.skqd.n_trotter_steps
 
-    path = Path(parameters.output_filename) / 'data' / 'raw.h5'
+    path = Path(parameters.pkgpath) / 'data' / 'raw.h5'
     with h5py.File(path, 'r', libver='latest') as source:
         if etype is None:
             return tuple(

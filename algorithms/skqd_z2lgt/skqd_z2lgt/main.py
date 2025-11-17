@@ -44,9 +44,9 @@ async def skqd_z2lgt(
     logger = get_run_logger()
     logger.setLevel(logging.INFO)
 
-    if (is_temp := not parameters.output_filename):
+    if (is_temp := not parameters.pkgpath):
         with tempfile.NamedTemporaryFile() as tfile:
-            parameters.output_filename = tfile.name
+            parameters.pkgpath = tfile.name
 
     open_output(parameters)
     logger.info('Running a quantum job to obtain the bitstrings')
@@ -61,7 +61,7 @@ async def skqd_z2lgt(
     logger.info('Estimated ground-state energy is %f', energy)
 
     if is_temp:
-        os.unlink(parameters.output_filename)
+        shutil.rmtree(parameters.pkgpath)
 
     return energy, eigvec
 
@@ -172,7 +172,7 @@ async def train_generator(
         parameters: Configuration parameters.
         cuda_scriptjob_name: Name of the MiyabiJobBlock that executes the python interpreter in a
             CUDA environment.
-        output_filename: Name of the HDF5 file where intermediate and final output of the workflow
+        pkgpath: Name of the HDF5 file where intermediate and final output of the workflow
             are written.
     """
     logger = get_run_logger()
@@ -184,7 +184,7 @@ async def train_generator(
         with job_block.get_executor() as executor:
             arguments = [
                 TASK_SCRIPT_DIR / 'train_generator.py',
-                parameters.output_filename,
+                parameters.pkgpath,
                 f'{istep}',
                 '--out-filename', data_dir / 'out.h5',
                 '--num-h', f'{conf.num_h}',
@@ -215,7 +215,7 @@ async def train_generator(
             if (code := atask.result()) != 0:
                 raise RuntimeError(f'CRBM training return code {code} for Trotter step {istep}')
             model, records = load_model(istep, data_dir / 'out.h5')
-            save_model(istep, model, records, parameters.output_filename)
+            save_model(istep, model, records, parameters.pkgpath)
             shutil.rmtree(data_dir)
             models.append(model)
 
@@ -247,7 +247,7 @@ async def diagonalize(
     with job_block.get_executor() as executor:
         arguments = [
             TASK_SCRIPT_DIR / 'skqd_recovery.py',
-            parameters.output_filename,
+            parameters.pkgpath,
             '--gpu', 'all',
             '--num-gen', f'{parameters.skqd.num_gen}',
             '--gen-batch-size', f'{parameters.crbm.gen_batch_size}',
@@ -260,7 +260,7 @@ async def diagonalize(
             **job_block.get_job_variables()
         )
 
-    with h5py.File(parameters.output_filename, 'r', libver='latest') as source:
+    with h5py.File(parameters.pkgpath, 'r', libver='latest') as source:
         if parameters.skqd.max_iterations == 0:
             group = source['skqd_init']
         else:

@@ -26,7 +26,7 @@ def check_saved_result(
     parameters: Parameters,
     group_name: str
 ) -> tuple[float, np.ndarray] | None:
-    path = Path(parameters.output_filename) / f'{group_name}.h5'
+    path = Path(parameters.pkgpath) / f'{group_name}.h5'
     if os.path.exists(path):
         with h5py.File(path, 'r', libver='latest') as source:
             return source['energy'][()], source['eigvec'][()]
@@ -36,7 +36,7 @@ def check_saved_result(
 def load_init(
     parameters: Parameters
 ):
-    path = Path(parameters.output_filename) / 'skqd_init.h5'
+    path = Path(parameters.pkgpath) / 'skqd_init.h5'
     if os.path.exists(path):
         with h5py.File(path, 'r', libver='latest') as source:
             sqd_result = load_skqd_result(source)
@@ -54,7 +54,7 @@ def diagonalize_init(
     logger.info('Performing SQD with observed (charge-corrected) plaquette states')
     states = np.concatenate([pdata for _, pdata in exp_data], axis=0)[:, ::-1]
     energy, eigvec, states, ham_proj = sqd(hamiltonian, states)
-    path = Path(parameters.output_filename) / 'skqd_init.h5'
+    path = Path(parameters.pkgpath) / 'skqd_init.h5'
     with h5py.File(path, 'w', libver='latest') as out:
         save_skqd_result(out, states, energy, eigvec, ham_proj)
 
@@ -274,7 +274,7 @@ def diagonalize(
 
     ham_proj = sqd_result[-1]
 
-    path = Path(parameters.output_filename) / f'{group_name}.h5'
+    path = Path(parameters.pkgpath) / f'{group_name}.h5'
     with h5py.File(path, 'w', libver='latest') as out:
         save_skqd_result(out, sqd_states, energy, eigvec, ham_proj)
         out.create_dataset('energies', data=energies)
@@ -289,7 +289,7 @@ if __name__ == '__main__':
     from skqd_z2lgt.tasks.train_generator import load_model
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('filename')
+    parser.add_argument('pkgname')
     parser.add_argument('--gpu', nargs='+')
     parser.add_argument('--random', action='store_true')
     options = parser.parse_args()
@@ -301,14 +301,14 @@ if __name__ == '__main__':
     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     jax.config.update('jax_enable_x64', True)
 
-    with os.open(Path(options.filename) / 'parameters.json', 'r', encoding='utf-8') as src:
+    with os.open(Path(options.pkgname) / 'parameters.json', 'r', encoding='utf-8') as src:
         params = Parameters.model_validate_json(src.read())
 
     rdata = load_reco(params)
     if options.random:
         models = None  # pylint: disable=invalid-name
     else:
-        models = [load_model(istep, params.output_filename, istep % jax.device_count())
+        models = [load_model(istep, params.pkgpath, istep % jax.device_count())
                   for istep in range(params.skqd.n_trotter_steps)]
 
         for istep, crbm in enumerate(models):
