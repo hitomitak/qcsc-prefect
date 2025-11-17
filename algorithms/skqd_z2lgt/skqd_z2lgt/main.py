@@ -333,3 +333,22 @@ def deploy():
         name="skqd_z2lgt",
         description="SKQD experiment for Z2 LGT."
     )
+
+
+if __name__ == '__main__':
+    from argparse import ArgumentParser
+    import yaml
+
+    parser = ArgumentParser(prog='skqd_z2lgt')
+    parser.add_argument('parameters', metavar='PATH',
+                        help='Path to a yaml file containing the workflow parameters.')
+    parser.add_argument('--log-level', metavar='LEVEL', default='INFO', help='Logging level.')
+    options = parser.parse_args()
+
+    logging.basicConfig(level=getattr(logging, options.log_level.upper())),
+                        format='%(asctime)s:%(name)s:%(levelname)s %(message)s')
+
+    with open(options.parameters, 'r', encoding='utf-8') as source:
+        parameters = Parameters(**yaml.load(source, yaml.Loader))
+
+    asyncio.run(skqd_z2lgt(parameters))
