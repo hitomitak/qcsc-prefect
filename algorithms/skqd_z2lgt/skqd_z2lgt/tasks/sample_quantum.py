@@ -1,6 +1,8 @@
 """Compose the Krylov circuits and run the quantum runtime sampler."""
+import os
 from collections.abc import Callable
 import logging
+from pathlib import Path
 from typing import Optional
 import numpy as np
 import h5py
@@ -23,20 +25,18 @@ def check_saved_raw(
 
     num_steps = parameters.skqd.n_trotter_steps
 
-    with h5py.File(parameters.output_filename, 'r', libver='latest') as source:
-        try:
-            group = source['data/raw']
-        except KeyError:
-            return None
-
+    path = Path(parameters.output_filename) / 'data' / 'raw.h5'
+    if os.path.exists(path):
         logger.info('Loading existing raw data from output file')
-        dlists = ([], [])
-        for etype, dlist in zip(['exp', 'ref'], dlists):
-            for istep in range(num_steps):
-                dataset = group[f'{etype}_step{istep}']
-                dlist.append(BitArray(dataset[()], int(dataset.attrs['num_bits'])))
+        with h5py.File(path, 'r', libver='latest') as source:
+            dlists = ([], [])
+            for etype, dlist in zip(['exp', 'ref'], dlists):
+                for istep in range(num_steps):
+                    dataset = source[f'{etype}/step{istep}']
+                    dlist.append(BitArray(dataset[()], int(dataset.attrs['num_bits'])))
 
         return dlists
+    return None
 
 
 def get_trotter_circuits(
@@ -100,14 +100,16 @@ def save_raw(
 
     num_steps = parameters.skqd.n_trotter_steps
 
-    with h5py.File(parameters.output_filename, 'r+', libver='latest') as out:
-        try:
-            del out['data/raw']
-        except KeyError:
-            pass
-        group = out.create_group('data/raw')
+    path = Path(parameters.output_filename) / 'data' / 'raw.h5'
+    try:
+        os.makedirs(path.parent)
+    except FileExistsError:
+        pass
+    with h5py.File(path, 'w', libver='latest') as out:
         if layout:
-            group.attrs['layout'] = np.array(layout)
+            out.attrs['layout'] = np.array(layout)
+        for etype in ['exp', 'ref']:
+            out.create_group(etype)
         for ires, res in enumerate(pub_result):
             if ires < num_steps:
                 etype = 'exp'
@@ -115,7 +117,7 @@ def save_raw(
                 etype = 'ref'
             istep = ires % num_steps
             bit_array = res.data.c
-            dataset = group.create_dataset(f'{etype}_step{istep}', data=bit_array.array)
+            dataset = out[etype].create_dataset(f'step{istep}', data=bit_array.array)
             dataset.attrs['num_bits'] = bit_array.num_bits
 
 
@@ -128,15 +130,14 @@ def load_raw(
 
     num_steps = parameters.skqd.n_trotter_steps
 
-    with h5py.File(parameters.output_filename, 'r', libver='latest') as source:
-        group = source['data/raw']
+    path = Path(parameters.output_filename) / 'data' / 'raw.h5'
+    with h5py.File(path, 'r', libver='latest') as source:
         if etype is None:
             return tuple(
-                [read_bit_array(group[f'{et}_step{istep}']) for istep in range(num_steps)]
+                [read_bit_array(source[f'{et}/step{istep}']) for istep in range(num_steps)]
                 for et in ['exp', 'ref']
             )
-        else:
-            return [read_bit_array(group[f'{etype}_step{istep}']) for istep in range(num_steps)]
+        return [read_bit_array(source[f'{etype}/step{istep}']) for istep in range(num_steps)]
 
 
 def sample_quantum_flow(

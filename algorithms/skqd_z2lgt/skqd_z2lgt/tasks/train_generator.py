@@ -1,14 +1,13 @@
 """Train the CRBM for configuration recovery."""
 import os
 import sys
-from collections import namedtuple
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 import logging
 import pathlib
 import subprocess
-import tempfile
-from typing import Any, Optional
+from pathlib import Path
+from typing import Optional
 import numpy as np
 import h5py
 import jax
@@ -16,7 +15,7 @@ import jax.numpy as jnp
 from flax import nnx
 from skqd_z2lgt.crbm import ConditionalRBM
 from skqd_z2lgt.train_crbm import DefaultCallback, make_l2_loss_fn, cd_meanloss, train_crbm
-from skqd_z2lgt.parameters import Parameters
+from skqd_z2lgt.parameters import Parameters, CRBMParameters
 from skqd_z2lgt.tasks.preprocess import load_reco
 
 
@@ -30,11 +29,11 @@ def load_model(
     else:
         device = jax.devices()[jax_device_id]
 
-    with h5py.File(source_filename, 'r', libver='latest') as out:
-        group = out[f'crbm/step{istep}']
+    path = Path(source_filename) / f'step{istep}.h5'
+    with h5py.File(path, 'r', libver='latest') as source:
         with jax.default_device(device):
-            model = ConditionalRBM.load(group)
-        records = {key: dataset[()] for key, dataset in group['records'].items()}
+            model = ConditionalRBM.load(source)
+        records = {key: dataset[()] for key, dataset in source['records'].items()}
     return model, records
 
 
@@ -44,11 +43,14 @@ def save_model(
     records: dict[str, np.ndarray],
     output_filename: str
 ):
-    with h5py.File(output_filename, 'a', libver='latest') as out:
-        groupname = f'crbm/step{istep}'
-        group = out.create_group(groupname)
-        model.save(group)
-        group = group.create_group('records')
+    try:
+        os.makedirs(output_filename)
+    except FileExistsError:
+        pass
+    path = Path(output_filename) / f'step{istep}.h5'
+    with h5py.File(path, 'w', libver='latest') as out:
+        model.save(out)
+        group = out.create_group('records')
         for key, array in records.items():
             group.create_dataset(key, data=array)
 
@@ -66,8 +68,9 @@ def train_generator_flow(
     for istep in range(parameters.skqd.n_trotter_steps):
         try:
             device_id = istep % jax.device_count()
-            model = load_model(istep, parameters.output_filename, device_id)[0]
-        except KeyError:
+            path = Path(parameters.output_filename) / 'crbm'
+            model = load_model(istep, path, device_id)[0]
+        except FileNotFoundError:
             models.append(None)
             steps_to_train.append(istep)
         else:
@@ -91,94 +94,74 @@ def train_generator(
     ref_data: list[tuple[np.ndarray, np.ndarray]],
     logger: Optional[logging.Logger] = None
 ) -> list[ConditionalRBM]:
-    conf = parameters.crbm
+    # def train_fn_threading(steps_to_train, _):
+    #     def train_on_device(istep, step_data, device_id):
+    #         with jax.default_device(jax.devices()[device_id]):
+    #             return train_step_model(istep, step_data[0], step_data[1], parameters.crbm)
 
-    def train_fn(steps_to_train, _):
-        # model_params = {'num_h': conf.num_h, 'init_h_sparsity': conf.init_h_sparsity}
-        # train_params = {'l2w_weights': conf.l2w_weights, 'l2w_biases': conf.l2w_biases,
-        #                 'batch_size': conf.train_batch_size, 'learning_rate': conf.learning_rate,
-        #                 'num_epochs': conf.num_epochs, 'rtol': conf.rtol}
+    #     models = {}
+    #     with ThreadPoolExecutor(jax.device_count()) as executor:
+    #         futures = []
+    #         for istep in steps_to_train:
+    #             device_id = istep % jax.device_count()
+    #             futures.append(
+    #                 executor.submit(train_on_device, istep, ref_data[istep], device_id)
+    #             )
 
-        # def train_on_device(istep, step_data, device_id):
-        #     with jax.default_device(jax.devices()[device_id]):
-        #         return train_step_model(istep, step_data[0], step_data[1], model_params,
-        #                                 train_params)
+    #     for istep, future in zip(steps_to_train, futures):
+    #         model, records = future.result()
+    #         save_model(istep, model, records, parameters.output_filename)
+    #         models[istep] = model
 
-        # models = {}
-        # with ThreadPoolExecutor(jax.device_count()) as executor:
-        #     futures = []
-        #     for istep in steps_to_train:
-        #         device_id = istep % jax.device_count()
-        #         futures.append(
-        #             executor.submit(train_on_device, istep, ref_data[istep], device_id)
-        #         )
+    #     return models
 
-        # for istep, future in zip(steps_to_train, futures):
-        #     model, records = future.result()
-        #     save_model(istep, model, records, parameters.output_filename)
-        #     models[istep] = model
+    def train_fn_subprocess(steps_to_train, _):
+        out_path = Path(parameters.output_filename) / 'crbm'
 
         def run_script(istep, idev):
-            with tempfile.NamedTemporaryFile() as tfile:
-                out_filename = tfile.name
-
             cmd = [
                 sys.executable,
                 pathlib.Path(__file__),
                 parameters.output_filename,
                 f'{istep}',
-                '--out-filename', out_filename,
-                '--num-h', f'{conf.num_h}',
-                '--l2w-weights', f'{conf.l2w_weights}',
-                '--l2w-biases', f'{conf.l2w_biases}',
-                '--init-h-sparsity', f'{conf.init_h_sparsity}',
-                '--batch-size', f'{conf.train_batch_size}',
-                '--learning-rate', f'{conf.learning_rate}',
-                '--num-epochs', f'{conf.num_epochs}',
-                '--rtol', f'{conf.rtol}'
+                '--gpu', f'{idev}',  # train on idev
+                '--out-filename', out_path,
             ]
-            # train on idev
-            jax_env = {'CUDA_VISIBLE_DEVICES': f'{idev}', 'XLA_PYTHON_CLIENT_PREALLOCATE': 'false'}
-            env = dict(os.environ, **jax_env)
-            proc = subprocess.run(cmd, capture_output=True, check=True, text=True, env=env)
+            proc = subprocess.run(cmd, capture_output=True, check=True, text=True)
             for txt, stream in zip([proc.stdout, proc.stderr], [sys.stdout, sys.stderr]):
                 stream.write(txt)
                 stream.flush()
 
             # Load the model onto istep % ndev (instead of idev)
-            model, _ = load_model(istep, out_filename, istep % jax.device_count())
-            return model, out_filename
+            model, _ = load_model(istep, out_path, istep % jax.device_count())
+            return model
+
+        try:
+            os.makedirs(out_path)
+        except FileExistsError:
+            pass
 
         models = {}
-        with h5py.File(parameters.output_filename, 'r+', libver='latest') as out:
-            out.swmr_mode = True
-            if 'crbm' not in out:
-                out.create_group('crbm')
+        with ThreadPoolExecutor(jax.device_count()) as executor:
+            futures = []
+            for iproc, istep in enumerate(steps_to_train):
+                idev = iproc % jax.device_count()
+                futures.append(executor.submit(run_script, istep, idev))
 
-            with ThreadPoolExecutor(jax.device_count()) as executor:
-                futures = []
-                for iproc, istep in enumerate(steps_to_train):
-                    idev = iproc % jax.device_count()
-                    futures.append(executor.submit(run_script, istep, idev))
-
-            for istep, future in zip(steps_to_train, futures):
-                model, out_filename = future.result()
-                models[istep] = model
-                with h5py.File(out_filename, libver='latest') as source:
-                    source.copy(f'crbm/step{istep}', out['crbm'])
-                os.unlink(out_filename)
+        for istep, future in zip(steps_to_train, futures):
+            model = future.result()
+            models[istep] = model
 
         return models
 
-    return train_generator_flow(parameters, ref_data, train_fn, logger)
+    return train_generator_flow(parameters, ref_data, train_fn_subprocess, logger)
 
 
 def train_step_model(
     istep: int,
     vtx_data: np.ndarray,
     plaq_data: np.ndarray,
-    model_params: dict[str, Any],
-    train_params: dict[str, Any],
+    crbm_params: CRBMParameters,
     out_filename: Optional[str] = None,
     logger: Optional[logging.Logger] = None
 ):
@@ -196,20 +179,20 @@ def train_step_model(
     num_plaq = plaq_data.shape[-1]
 
     rngs = nnx.Rngs(params=0, sample=1)
-    model = ConditionalRBM(num_vtx, num_plaq, model_params['num_h'], rngs=rngs)
+    model = ConditionalRBM(num_vtx, num_plaq, crbm_params.num_h, rngs=rngs)
     model.bias_v.value = bias_init
-    bias_h_val = np.log(model_params['init_h_sparsity'] / (1. - model_params['init_h_sparsity']))
-    model.bias_h.value = jnp.full(model_params['num_h'], bias_h_val)
+    bias_h_val = np.log(crbm_params.init_h_sparsity / (1. - crbm_params.init_h_sparsity))
+    model.bias_h.value = jnp.full(crbm_params.num_h, bias_h_val)
 
     model.pregenerate = True
 
     logger.info('Start training model for step %d', istep)
 
-    loss_fn = make_l2_loss_fn(cd_meanloss, train_params['l2w_weights'], train_params['l2w_biases'])
+    loss_fn = make_l2_loss_fn(cd_meanloss, crbm_params.l2w_weights, crbm_params.l2w_biases)
     best_model, records = train_crbm(model, train_u, train_v, test_u, test_v,
-                                     train_params['batch_size'], train_params['num_epochs'],
-                                     loss_fn, lr=train_params['learning_rate'],
-                                     rtol=train_params['rtol'], callback=DefaultCallback())
+                                     crbm_params.train_batch_size, crbm_params.num_epochs,
+                                     loss_fn, lr=crbm_params.learning_rate,
+                                     rtol=crbm_params.rtol, callback=DefaultCallback())
     if out_filename:
         save_model(istep, best_model, records, out_filename)
     return best_model, records
@@ -222,25 +205,15 @@ if __name__ == '__main__':
     parser.add_argument('istep', type=int)
     parser.add_argument('--gpu')
     parser.add_argument('--out-filename')
-    parser.add_argument('--num-h', type=int, default=256)
-    parser.add_argument('--l2w-weights', type=float, default=1.)
-    parser.add_argument('--l2w-biases', type=float, default=0.2)
-    parser.add_argument('--batch-size', type=int, default=32)
-    parser.add_argument('--learning-rate', type=float, default=0.001)
-    parser.add_argument('--init-h-sparsity', type=float, default=0.01)
-    parser.add_argument('--num-epochs', type=int, default=10)
-    parser.add_argument('--rtol', type=float)
     options = parser.parse_args()
 
     if options.gpu:
         os.environ['CUDA_VISIBLE_DEVICES'] = options.gpu
+    os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     jax.config.update('jax_enable_x64', True)
 
-    mparams = {'num_h': options.num_h, 'init_h_sparsity': options.init_h_sparsity}
-    tparams = {'l2w_weights': options.l2w_weights, 'l2w_biases': options.l2w_biases,
-               'batch_size': options.batch_size, 'learning_rate': options.learning_rate,
-               'num_epochs': options.num_epochs, 'rtol': options.rtol}
-    params = namedtuple('OutputFileName', ['output_filename'])(options.filename)
+    with open(Path(options.filename) / 'parameters.json', 'r', encoding='utf-8') as src:
+        params = Parameters.model_validate_json(src.read())
+
     vdata, pdata = load_reco(params, etype='ref', istep=options.istep)
-    train_step_model(options.istep, vdata, pdata, mparams, tparams,
-                     out_filename=options.out_filename)
+    train_step_model(options.istep, vdata, pdata, params.crbm, out_filename=options.out_filename)

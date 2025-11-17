@@ -2,6 +2,7 @@
 import os
 import tempfile
 import logging
+from pathlib import Path
 from typing import Optional
 import h5py
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
@@ -16,10 +17,11 @@ def dmrg(parameters: Parameters, logger: Optional[logging.Logger] = None) -> flo
     """Run DMRG on the dual Ising hamiltonian."""
     logger = logger or logging.getLogger(__name__)
 
-    with h5py.File(parameters.output_filename, 'r', libver='latest') as source:
-        if (group := source.get('dmrg')) is not None:
-            logger.info('DMRG result already exists in the output file.')
-            return group['energy'][()]
+    path = Path(parameters.output_filename) / 'dmrg.h5'
+    if os.path.exists(path):
+        logger.info('DMRG result already exists in the output file.')
+        with h5py.File(path, 'r', libver='latest') as source:
+            return source['energy'][()]
 
     lattice = TriangularZ2Lattice(parameters.lgt.lattice)
     base_link_state = minimum_weight_link_state(parameters.lgt.charged_vertices, lattice)
@@ -34,11 +36,10 @@ def dmrg(parameters: Parameters, logger: Optional[logging.Logger] = None) -> flo
     states, probs = get_mps_probs(filename, julia_bin=JULIA_BIN)
     os.unlink(filename)
 
-    with h5py.File(parameters.output_filename, 'r+', libver='latest') as out:
-        group = out.create_group('dmrg')
-        group.create_dataset('energy', data=dmrg_energy)
-        group.create_dataset('mps_states', data=states)
-        group.create_dataset('mps_probs', data=probs)
+    with h5py.File(path, 'w', libver='latest') as out:
+        out.create_dataset('energy', data=dmrg_energy)
+        out.create_dataset('mps_states', data=states)
+        out.create_dataset('mps_probs', data=probs)
 
     return dmrg_energy
 

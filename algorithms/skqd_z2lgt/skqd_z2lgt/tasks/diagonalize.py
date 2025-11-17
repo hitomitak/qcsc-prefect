@@ -1,9 +1,11 @@
 # pylint: disable=no-member
 """SKQD with configuration recovery."""
+import os
 from collections.abc import Callable
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Optional
 import numpy as np
 from scipy.sparse import csr_array
@@ -24,20 +26,22 @@ def check_saved_result(
     parameters: Parameters,
     group_name: str
 ) -> tuple[float, np.ndarray] | None:
-    with h5py.File(parameters.output_filename, 'r', libver='latest') as source:
-        if (group := source.get(group_name)) is None:
-            return None
-        return group['energy'][()], group['eigvec'][()]
+    path = Path(parameters.output_filename) / f'{group_name}.h5'
+    if os.path.exists(path):
+        with h5py.File(path, 'r', libver='latest') as source:
+            return source['energy'][()], source['eigvec'][()]
+    return None
 
 
 def load_init(
     parameters: Parameters
 ):
-    with h5py.File(parameters.output_filename, 'r', libver='latest') as source:
-        if (group := source.get('skqd_init')) is None:
-            return None
-        sqd_result = load_skqd_result(group)
-        return sqd_result[:3]
+    path = Path(parameters.output_filename) / 'skqd_init.h5'
+    if os.path.exists(path):
+        with h5py.File(path, 'r', libver='latest') as source:
+            sqd_result = load_skqd_result(source)
+            return sqd_result[:3]
+    return None
 
 
 def diagonalize_init(
@@ -50,8 +54,9 @@ def diagonalize_init(
     logger.info('Performing SQD with observed (charge-corrected) plaquette states')
     states = np.concatenate([pdata for _, pdata in exp_data], axis=0)[:, ::-1]
     energy, eigvec, states, ham_proj = sqd(hamiltonian, states)
-    with h5py.File(parameters.output_filename, 'r+', libver='latest') as out:
-        save_skqd_result(out, 'skqd_init', states, energy, eigvec, ham_proj)
+    path = Path(parameters.output_filename) / 'skqd_init.h5'
+    with h5py.File(path, 'w', libver='latest') as out:
+        save_skqd_result(out, states, energy, eigvec, ham_proj)
 
     return states, energy, eigvec
 
@@ -157,23 +162,16 @@ def load_skqd_result(group):
     return sqd_states, energy, eigvec, ham_proj
 
 
-def save_skqd_result(out, group_name, sqd_states, energy, eigvec, ham_proj=None):
-    try:
-        del out[group_name]
-    except KeyError:
-        pass
-
-    group = out.create_group(group_name)
-    dataset = group.create_dataset('sqd_states', data=np.packbits(sqd_states, axis=1))
+def save_skqd_result(out, sqd_states, energy, eigvec, ham_proj=None):
+    dataset = out.create_dataset('sqd_states', data=np.packbits(sqd_states, axis=1))
     dataset.attrs['num_bits'] = sqd_states.shape[-1]
-    group.create_dataset('energy', data=energy)
-    group.create_dataset('eigvec', data=eigvec)
+    out.create_dataset('energy', data=energy)
+    out.create_dataset('eigvec', data=eigvec)
     if ham_proj is not None:
-        subgroup = group.create_group('ham_proj')
-        subgroup.create_dataset('data', data=ham_proj.data)
-        subgroup.create_dataset('indices', data=ham_proj.indices)
-        subgroup.create_dataset('indptr', data=ham_proj.indptr)
-    return group
+        group = out.create_group('ham_proj')
+        group.create_dataset('data', data=ham_proj.data)
+        group.create_dataset('indices', data=ham_proj.indices)
+        group.create_dataset('indptr', data=ham_proj.indptr)
 
 
 def diagonalize(
@@ -276,16 +274,16 @@ def diagonalize(
 
     ham_proj = sqd_result[-1]
 
-    with h5py.File(parameters.output_filename, 'r+', libver='latest') as out:
-        group = save_skqd_result(out, group_name, sqd_states, energy, eigvec, ham_proj)
-        group.create_dataset('energies', data=energies)
-        group.create_dataset('subspace_dims', data=subspace_dims)
+    path = Path(parameters.output_filename) / f'{group_name}.h5'
+    with h5py.File(path, 'w', libver='latest') as out:
+        save_skqd_result(out, sqd_states, energy, eigvec, ham_proj)
+        out.create_dataset('energies', data=energies)
+        out.create_dataset('subspace_dims', data=subspace_dims)
 
     return energy, eigvec
 
 
 if __name__ == '__main__':
-    import os
     import argparse
     from skqd_z2lgt.tasks.preprocess import load_reco
     from skqd_z2lgt.tasks.train_generator import load_model
@@ -293,12 +291,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('filename')
     parser.add_argument('--gpu', nargs='+')
-    parser.add_argument('--num-gen', type=int, default=5)
-    parser.add_argument('--gen-batch-size', type=int, default=10_000)
     parser.add_argument('--random', action='store_true')
-    parser.add_argument('--niter', type=int, default=1)
-    parser.add_argument('--terminate-deltae', type=float, default=0.005)
-    parser.add_argument('--terminate-ndim', type=int, default=1_000_000)
     options = parser.parse_args()
 
     LOG = logging.getLogger(__name__)
@@ -308,19 +301,8 @@ if __name__ == '__main__':
     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     jax.config.update('jax_enable_x64', True)
 
-    params = Parameters()
-    params.output_filename = options.filename
-    with h5py.File(options.filename, 'r', libver='latest') as src:
-        params.lgt.lattice = src.attrs['lattice']
-        params.lgt.plaquette_energy = src.attrs['plaquette_energy']
-        params.lgt.charged_vertices = src.attrs['charged_vertices']
-        params.skqd.n_trotter_steps = src.attrs['num_steps']
-        params.runtime.shots = src.attrs['shots']
-    params.skqd.num_gen = options.num_gen
-    params.skqd.max_iterations = options.niter
-    params.crbm.gen_batch_size = options.gen_batch_size
-    params.skqd.delta_e = options.terminate_deltae
-    params.skqd.max_subspace_dim = options.terminate_ndim
+    with os.open(Path(options.filename) / 'parameters.json', 'r', encoding='utf-8') as src:
+        params = Parameters.model_validate_json(src.read())
 
     rdata = load_reco(params)
     if options.random:

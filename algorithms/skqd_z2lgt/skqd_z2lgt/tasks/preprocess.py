@@ -1,6 +1,7 @@
 """Preprocess raw data (link states with errors) and convert them to vertex and plaquette data."""
 from collections.abc import Callable
 import logging
+from pathlib import Path
 from typing import Optional
 import numpy as np
 import h5py
@@ -19,20 +20,14 @@ def save_reco(
 ):
     logger = logger or logging.getLogger(__name__)
     logger.info('Saving vertex and plaquette data')
-    with h5py.File(parameters.output_filename, 'r+', libver='latest') as out:
-        data_group = out['data']
-        groups = [data_group.get(gname) or data_group.create_group(gname)
-                  for gname in ['vtx', 'plaq']]
-
-        for etype, step_data in zip(['exp', 'ref'], reco_data):
-            for istep, arrays in enumerate(step_data):
-                dname = f'{etype}_step{istep}'
-                for group, array in zip(groups, arrays):
-                    try:
-                        del group[dname]
-                    except KeyError:
-                        pass
-                    save_bits(group, dname, array)
+    for igroup, group in enumerate(['vtx', 'plaq']):
+        path = Path(parameters.output_filename) / 'data' / f'{group}.h5'
+        with h5py.File(path, 'w', libver='latest') as out:
+            for etype, step_data in zip(['exp', 'ref'], reco_data):
+                group = out.create_group(etype)
+                for istep, arrays in enumerate(step_data):
+                    dname = f'step{istep}'
+                    save_bits(group, dname, arrays[igroup])
 
 
 def load_reco(
@@ -49,18 +44,24 @@ def load_reco(
     else:
         isteps = list(range(parameters.skqd.n_trotter_steps))
 
-    with h5py.File(parameters.output_filename, 'r', libver='latest', swmr=True) as source:
-        group = source['data']
-        result = tuple(
-            [(read_bits(group[f'vtx/{etype}_step{istep}']),
-              read_bits(group[f'plaq/{etype}_step{istep}'])) for istep in isteps]
-            for etype in etypes
-        )
+    group_data = {}
+    for group in ['vtx', 'plaq']:
+        path = Path(parameters.output_filename) / 'data' / f'{group}.h5'
+        with h5py.File(path, 'r', libver='latest', swmr=True) as source:
+            group_data[group] = {
+                et: {ist: read_bits(source[f'{et}/step{ist}']) for ist in isteps}
+                for et in etypes
+            }
+
     if etype:
-        result = result[0]
         if istep is not None:
-            result = result[0]
-    return result
+            return (group_data['vtx'][etype][istep], group_data['plaq'][etype][istep])
+        return [(group_data['vtx'][etype][ist], group_data['plaq'][etype][ist])
+                for ist in isteps]
+    return tuple(
+        [(group_data['vtx'][et][ist], group_data['plaq'][et][ist]) for ist in isteps]
+        for et in etypes
+    )
 
 
 def preprocess_flow(
@@ -81,7 +82,7 @@ def preprocess_flow(
 
     try:
         reco_data = load_reco(parameters)
-    except KeyError:
+    except FileNotFoundError:
         pass
     else:
         logger.info('Loading existing reco data from output file')
