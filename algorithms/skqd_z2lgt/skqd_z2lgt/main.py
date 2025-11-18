@@ -4,9 +4,7 @@ from pathlib import Path
 import logging
 import asyncio
 import tempfile
-import shutil
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
 import h5py
 from prefect import flow, task, get_run_logger
 from prefect.variables import Variable
@@ -20,7 +18,7 @@ from skqd_z2lgt.tasks.open_output import open_output as _open_output
 from skqd_z2lgt.tasks.dmrg import dmrg_flow
 from skqd_z2lgt.tasks.sample_quantum import sample_quantum_flow, load_raw
 from skqd_z2lgt.tasks.preprocess import preprocess_flow
-from skqd_z2lgt.tasks.train_generator import train_generator_flow, load_model, save_model
+from skqd_z2lgt.tasks.train_generator import train_generator_flow
 from skqd_z2lgt.tasks.diagonalize import check_saved_result
 
 
@@ -80,7 +78,6 @@ async def skqd_z2lgt(
     diagonalize_random_future = diagonalize.submit(parameters, 'random',
                                                    cuda_scriptjob_name=cuda_scriptjob_name,
                                                    wait_for=[diagonalize_init_future])
-    dmrg_energy = dmrg_future.result()
     energy_norecov = diagonalize_init_future.result()
     energy_random = diagonalize_random_future.result()
     energy = diagonalize_recov_future.result()
@@ -89,6 +86,7 @@ async def skqd_z2lgt(
         tmpdir.cleanup()
 
     if parameters.dmrg:
+        dmrg_energy = dmrg_future.result()
         logger.info('DMRG energy: %f', dmrg_energy)
     logger.info('SKQD energy (no conf. recovery): %f', energy_norecov)
     logger.info('SKQD energy (random bit flips): %f', energy_random)
@@ -236,7 +234,6 @@ async def train_generator(
     """
     logger = get_run_logger()
 
-    conf = parameters.crbm
     job_block = await MiyabiJobBlock.load(cuda_scriptjob_name)
 
     async def run_train_job(istep):
@@ -319,12 +316,12 @@ if __name__ == '__main__':
     parser.add_argument('parameters', metavar='PATH',
                         help='Path to a yaml file containing the workflow parameters.')
     parser.add_argument('--log-level', metavar='LEVEL', default='INFO', help='Logging level.')
-    options = parser.parse_args()
+    args = parser.parse_args()
 
-    logging.basicConfig(level=getattr(logging, options.log_level.upper()),
+    logging.basicConfig(level=getattr(logging, args.log_level.upper()),
                         format='%(asctime)s:%(name)s:%(levelname)s %(message)s')
 
-    with open(options.parameters, 'r', encoding='utf-8') as source:
-        parameters = Parameters(**yaml.load(source, yaml.Loader))
+    with open(args.parameters, 'r', encoding='utf-8') as src:
+        params = Parameters(**yaml.load(src, yaml.Loader))
 
-    asyncio.run(skqd_z2lgt(parameters))
+    asyncio.run(skqd_z2lgt(params))
