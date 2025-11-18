@@ -289,7 +289,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('pkgpath')
-    parser.add_argument('--gpu', nargs='+')
+    parser.add_argument('--gpus', help='CUDA_VISIBLE_DEVICES')
     parser.add_argument('--mode', default='full')
     parser.add_argument('--log-level', default='INFO')
     options = parser.parse_args()
@@ -297,8 +297,8 @@ if __name__ == '__main__':
     logging.basicConfig(level=getattr(logging, options.log_level.upper()))
     LOG = logging.getLogger(__name__)
 
-    if options.gpu and options.gpu[0] != 'all':
-        os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(options.gpu)
+    if options.gpus:
+        os.environ['CUDA_VISIBLE_DEVICES'] = options.gpus
     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     jax.config.update('jax_enable_x64', True)
 

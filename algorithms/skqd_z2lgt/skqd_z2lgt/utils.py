@@ -25,10 +25,19 @@ def save_bits(group: h5py.Group, name: str, bits: np.ndarray) -> h5py.Dataset:
     return dataset
 
 
-def shard_array_1d(array: jax.Array, fill_value: Optional[Any] = None) -> jax.Array:
+def shard_array_1d(
+    array: jax.Array,
+    fill_value: Optional[Any] = None,
+    device_ids: Optional[list[int]] = None
+) -> jax.Array:
     """Shard the given array along dimension 0."""
     length = array.shape[0]
-    num_dev = jax.device_count()
+    if device_ids:
+        num_dev = len(device_ids)
+        devices = [jax.devices()[did] for did in device_ids]
+    else:
+        num_dev = jax.device_count()
+        devices = None
     terms_per_device = int(np.ceil(length / num_dev).astype(int))
     residual = num_dev * terms_per_device - length
     if residual > 0:
@@ -37,5 +46,5 @@ def shard_array_1d(array: jax.Array, fill_value: Optional[Any] = None) -> jax.Ar
         else:
             padding = jnp.full((residual,) + array.shape[1:], fill_value, dtype=array.dtype)
         array = jnp.concatenate([array, padding], axis=0)
-    mesh = jax.make_mesh((num_dev,), ('device',))
+    mesh = jax.make_mesh((num_dev,), ('device',), devices=devices)
     return jax.device_put(array, NamedSharding(mesh, PartitionSpec('device')))
