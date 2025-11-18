@@ -1,5 +1,5 @@
 """Workflow parameters."""
-from typing import Any
+from typing import Any, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -44,6 +44,38 @@ class LGTParameters(BaseModel):
              * * * * *
             *-*-*-*-*╵
             '''
+
+
+class DMRGParameters(BaseModel):
+    """Configuration for DMRG."""
+
+    nsweeps: int = Field(
+        default=5,
+        description='Number of DMRG sweeps.',
+        title='Number of sweeps'
+    )
+    maxdim: list[int] = Field(
+        default=[10, 20, 100, 100, 200],
+        description='Maximum size allowed for the bond dimension or rank of the MPS.',
+        title='Maximum bond dimensions'
+    )
+    cutoff: float = Field(
+        default=1.e-10,
+        description='Truncation error cutoff or threshold to use for truncating the bond dimension'
+                    ' or rank of the MPS.',
+        title='Truncation error cutoff'
+    )
+    num_samples: int = Field(
+        default=100_000,
+        description='Number of times to sample the MPS to estimate the probability distribution of'
+                    ' the ground state.',
+        title='MPS sampling number'
+    )
+    julia_sysimage: Optional[str] = Field(
+        default=None,
+        description='Path to the precompiled ITensors sysimage.',
+        title='ITensors.jl sysimage path'
+    )
 
 
 class CircuitParameters(BaseModel):
@@ -91,11 +123,6 @@ class RuntimeParameters(BaseModel):
         default_factory=dict,
         description='Runtime options (except for shots).',
         title='Runtime Options'
-    )
-    runtime_block_name: str | None = Field(
-        default=None,
-        description='Quantum Runtime Prefect block name.',
-        title='Quantum Runtime Block Name'
     )
     options_name: str | None = Field(
         default=None,
@@ -178,12 +205,6 @@ class SKQDParameters(BaseModel):
         title="Time Interval",
         ge=0,
     )
-    max_subspace_dim: int = Field(
-        default=1_000_000,
-        description="Maximum subspace dimension in iterative configuration recovery.",
-        title="Maximum Subspace Dimension",
-        ge=1
-    )
     num_gen: int = Field(
         default=3,
         description="Number of bitstrings to generate in each iteration of configuration recovery.",
@@ -195,6 +216,19 @@ class SKQDParameters(BaseModel):
         description="Number of configuration recovery iterations.",
         title="Max Iteration",
         ge=0
+    )
+    probability_cutoff: float = Field(
+        default=1.e-20,
+        description="Cutoff for probability of computational basis state to be kept for the next"
+                    " round of iterative configuration recovery.",
+        title="State probability cutoff",
+        ge=0.
+    )
+    max_subspace_dim: int = Field(
+        default=1_000_000,
+        description="Maximum subspace dimension in iterative configuration recovery.",
+        title="Maximum Subspace Dimension",
+        ge=1
     )
     delta_e: float = Field(
         default=0.005,
@@ -212,6 +246,12 @@ class Parameters(BaseModel):
         default_factory=LGTParameters,
         description='Lattice gauge theory definition.',
         title='Lattice Gauge Theory'
+    )
+
+    dmrg: Optional[DMRGParameters] = Field(
+        default=None,
+        description='DMRG and MPS sampling parameters.',
+        title='DMRG'
     )
 
     circuit: CircuitParameters = Field(
@@ -238,8 +278,8 @@ class Parameters(BaseModel):
         title='SKQD',
     )
 
-    output_filename: str | None = Field(
+    pkgpath: str | None = Field(
         default=None,
-        description='Name of the HDF5 file where intermediate output are stored.',
-        title='Output File Name'
+        description='Path of the directory tree where intermediate and final output are stored.',
+        title='Output package name'
     )

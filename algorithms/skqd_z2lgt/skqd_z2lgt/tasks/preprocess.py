@@ -1,59 +1,33 @@
 """Preprocess raw data (link states with errors) and convert them to vertex and plaquette data."""
 from collections.abc import Callable
 import logging
+from pathlib import Path
 from typing import Optional
 import numpy as np
 import h5py
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.parameters import Parameters
 from skqd_z2lgt.mwpm import convert_link_to_plaq, minimum_weight_link_state
+from skqd_z2lgt.utils import read_bits, save_bits
 
 RecoData = list[tuple[np.ndarray, np.ndarray]]  # [(vertex data, plaquette data)] * steps
 
 
-def check_saved_reco(
-    parameters: Parameters,
-    logger: Optional[logging.Logger] = None
-) -> tuple[RecoData, RecoData] | None:
-    logger = logger or logging.getLogger(__name__)
-
-    num_steps = parameters.skqd.n_trotter_steps
-
-    with h5py.File(parameters.output_filename, 'r') as source:
-        data_group = source.get('data', {})
-        if 'vtx' in data_group and 'plaq' in data_group:
-            logger.info('Loading existing reco data from output file')
-            return tuple(
-                [
-                    (data_group[f'vtx/{etype}_step{istep}'][()],
-                     data_group[f'plaq/{etype}_step{istep}'][()])
-                    for istep in range(num_steps)
-                ]
-                for etype in ['exp', 'ref']
-            )
-
-    return None
-
-
 def save_reco(
     parameters: Parameters,
-    reco_data: tuple[RecoData, RecoData]
+    reco_data: tuple[RecoData, RecoData],
+    logger: Optional[logging.Logger] = None
 ):
-    with h5py.File(parameters.output_filename, 'r+') as out:
-        data_group = out['data']
-        groups = [data_group.get(gname) or data_group.create_group(gname)
-                  for gname in ['vtx', 'plaq']]
-
-        for etype, step_data in zip(['exp', 'ref'], reco_data):
-            for istep, arrays in enumerate(step_data):
-                dname = f'{etype}_step{istep}'
-                for group, array in zip(groups, arrays):
-                    try:
-                        del group[dname]
-                    except KeyError:
-                        pass
-                    dataset = group.create_dataset(dname, data=np.packbits(array, axis=1))
-                    dataset.attrs['num_bits'] = array.shape[1]
+    logger = logger or logging.getLogger(__name__)
+    logger.info('Saving vertex and plaquette data')
+    for igroup, group in enumerate(['vtx', 'plaq']):
+        path = Path(parameters.pkgpath) / 'data' / f'{group}.h5'
+        with h5py.File(path, 'w', libver='latest') as out:
+            for etype, step_data in zip(['exp', 'ref'], reco_data):
+                group = out.create_group(etype)
+                for istep, arrays in enumerate(step_data):
+                    dname = f'step{istep}'
+                    save_bits(group, dname, arrays[igroup])
 
 
 def load_reco(
@@ -61,9 +35,6 @@ def load_reco(
     etype: Optional[str] = None,
     istep: Optional[int] = None
 ) -> tuple[RecoData, RecoData] | RecoData | tuple[np.ndarray, np.ndarray]:
-    def read_bits(dataset):
-        return np.unpackbits(dataset[()], axis=-1)[..., :dataset.attrs['num_bits']]
-
     if etype:
         etypes = [etype]
     else:
@@ -73,18 +44,24 @@ def load_reco(
     else:
         isteps = list(range(parameters.skqd.n_trotter_steps))
 
-    with h5py.File(parameters.output_filename, 'r', swmr=True) as source:
-        group = source['data']
-        result = tuple(
-            [(read_bits(group[f'vtx/{etype}_step{istep}']),
-              read_bits(group[f'plaq/{etype}_step{istep}'])) for istep in isteps]
-            for etype in etypes
-        )
+    group_data = {}
+    for group in ['vtx', 'plaq']:
+        path = Path(parameters.pkgpath) / 'data' / f'{group}.h5'
+        with h5py.File(path, 'r', libver='latest', swmr=True) as source:
+            group_data[group] = {
+                et: {ist: read_bits(source[f'{et}/step{ist}']) for ist in isteps}
+                for et in etypes
+            }
+
     if etype:
-        result = result[0]
         if istep is not None:
-            result = result[0]
-    return result
+            return (group_data['vtx'][etype][istep], group_data['plaq'][etype][istep])
+        return [(group_data['vtx'][etype][ist], group_data['plaq'][etype][ist])
+                for ist in isteps]
+    return tuple(
+        [(group_data['vtx'][et][ist], group_data['plaq'][et][ist]) for ist in isteps]
+        for et in etypes
+    )
 
 
 def preprocess_flow(
@@ -103,9 +80,16 @@ def preprocess_flow(
     """
     logger = logger or logging.getLogger(__name__)
 
-    reco_data = check_saved_reco(parameters, logger)
-    if reco_data:
+    try:
+        reco_data = load_reco(parameters)
+    except FileNotFoundError:
+        pass
+    else:
+        logger.info('Loading existing reco data from output file')
         return reco_data
+
+    logger.info('Correcting the charge sector of link-state bitstrings and converting them to '
+                'vertex and plaquette data')
 
     lattice = TriangularZ2Lattice(parameters.lgt.lattice)
     base_link_state = minimum_weight_link_state(parameters.lgt.charged_vertices, lattice)

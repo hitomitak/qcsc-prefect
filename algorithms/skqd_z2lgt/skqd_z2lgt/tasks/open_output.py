@@ -2,9 +2,20 @@
 import os
 import logging
 from typing import Optional
-import numpy as np
-import h5py
+from pathlib import Path
+from pydantic import BaseModel
 from skqd_z2lgt.parameters import Parameters
+
+
+def compare_models(model1: BaseModel, model2: BaseModel, _current: str = ''):
+    for field in type(model1).model_fields:
+        value1 = getattr(model1, field)
+        value2 = getattr(model2, field)
+        if isinstance(value1, BaseModel):
+            if (mismatch := compare_models(value1, value2, f'{_current}{field}.')):
+                return mismatch
+        elif value1 != value2:
+            return f'{_current}{field}', value1, value2
 
 
 def open_output(parameters: Parameters, logger: Optional[logging.Logger] = None) -> str:
@@ -18,26 +29,19 @@ def open_output(parameters: Parameters, logger: Optional[logging.Logger] = None)
     """
     logger = logger or logging.getLogger(__name__)
 
-    attrs = [
-        ('lattice', parameters.lgt.lattice),
-        ('plaquette_energy', parameters.lgt.plaquette_energy),
-        ('charged_vertices', parameters.lgt.charged_vertices),
-        ('basis_2q', parameters.circuit.basis_2q),
-        ('num_steps', parameters.skqd.n_trotter_steps),
-        ('delta_t', parameters.skqd.dt),
-        ('shots', parameters.runtime.shots)
-    ]
+    path = Path(parameters.pkgpath) / 'parameters.json'
+    if os.path.isdir(parameters.pkgpath):
+        logger.info('Validating configurations in existing file %s', parameters.pkgpath)
+        with open(path, 'r', encoding='utf-8') as source:
+            params = Parameters.model_validate_json(source.read())
 
-    if os.path.exists(parameters.output_filename):
-        logger.info('Validating configurations in existing file %s', parameters.output_filename)
-        with h5py.File(parameters.output_filename, 'r') as source:
-            for key, value in attrs:
-                if ((isinstance(value, float) and not np.isclose(source.attrs[key], value))
-                        or (isinstance(value, (int, str)) and source.attrs[key] != value)):
-                    raise RuntimeError(f'Recorded {key} does not match the flow parameter')
+        if (mismatch := compare_models(params, parameters)):
+            raise RuntimeError(f'Saved parameters do not match at {mismatch[0]}:'
+                               f' {mismatch[1]} != {mismatch[2]}')
 
     else:
-        logger.info('Creating a new file %s', parameters.output_filename)
-        with h5py.File(parameters.output_filename, 'w', libver='latest') as out:
-            for key, value in attrs:
-                out.attrs[key] = value
+        logger.info('Creating a new file %s', parameters.pkgpath)
+        os.makedirs(parameters.pkgpath)
+        path = Path(parameters.pkgpath) / 'parameters.json'
+        with open(path, 'w', encoding='utf-8') as out:
+            out.write(parameters.model_dump_json())

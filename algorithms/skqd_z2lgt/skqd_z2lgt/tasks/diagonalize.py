@@ -1,9 +1,11 @@
 # pylint: disable=no-member
 """SKQD with configuration recovery."""
+import os
 from collections.abc import Callable
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Optional
 import numpy as np
 from scipy.sparse import csr_array
@@ -14,44 +16,10 @@ from flax import nnx
 from qiskit.quantum_info import SparsePauliOp
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.sqd import sqd, to_bcoo, bcoo_to_csr
+from skqd_z2lgt.mwpm import minimum_weight_link_state
 from skqd_z2lgt.crbm import ConditionalRBM
 from skqd_z2lgt.parameters import Parameters
-
-
-def check_saved_result(
-    parameters: Parameters,
-    group_name: str
-) -> tuple[float, np.ndarray] | None:
-    with h5py.File(parameters.output_filename, 'r') as source:
-        if (group := source.get(group_name)) is None:
-            return None
-        return group['energy'][()], group['eigvec'][()]
-
-
-def load_init(
-    parameters: Parameters
-):
-    with h5py.File(parameters.output_filename, 'r') as source:
-        if (group := source.get('skqd_init')) is None:
-            return None
-        sqd_result = load_skqd_result(group)
-        return sqd_result[:3]
-
-
-def diagonalize_init(
-    parameters: Parameters,
-    exp_data: list[tuple[np.ndarray, np.ndarray]],
-    hamiltonian: SparsePauliOp,
-    logger: Optional[logging.Logger] = None
-):
-    logger = logger or logging.getLogger(__name__)
-    logger.info('Performing SQD with observed (charge-corrected) plaquette states')
-    states = np.concatenate([pdata for _, pdata in exp_data], axis=0)[:, ::-1]
-    energy, eigvec, states, ham_proj = sqd(hamiltonian, states)
-    with h5py.File(parameters.output_filename, 'r+') as out:
-        save_skqd_result(out, 'skqd_init', states, energy, eigvec, ham_proj)
-
-    return states, energy, eigvec
+from skqd_z2lgt.utils import read_bits
 
 
 def generate_states(model, vtx_data, plaq_data, generate_fn, batch_size):
@@ -140,9 +108,24 @@ def generate_random(
     return gen_states
 
 
+def get_relevant_states(states: np.ndarray, eigvec: np.ndarray, cutoff: float) -> np.ndarray:
+    return states[np.square(np.abs(eigvec)) > cutoff]
+
+
+def check_saved_result(
+    parameters: Parameters,
+    result_name: str
+) -> tuple[np.ndarray, float, np.ndarray] | None:
+    path = Path(parameters.pkgpath) / f'{result_name}.h5'
+    if os.path.exists(path):
+        with h5py.File(path, 'r', libver='latest') as source:
+            states, energy, eigvec, _ = load_skqd_result(source)
+            return states, energy, eigvec
+    return None
+
+
 def load_skqd_result(group):
-    dataset = group['sqd_states']
-    sqd_states = np.unpackbits(dataset[()], axis=1)[:, :dataset.attrs['num_bits']]
+    sqd_states = read_bits(group['sqd_states'])
     energy = group['energy'][()]
     eigvec = group['eigvec'][()]
     if (subgroup := group.get('ham_proj')) is None:
@@ -156,31 +139,64 @@ def load_skqd_result(group):
     return sqd_states, energy, eigvec, ham_proj
 
 
-def save_skqd_result(out, group_name, sqd_states, energy, eigvec, ham_proj=None):
-    try:
-        del out[group_name]
-    except KeyError:
-        pass
-
-    group = out.create_group(group_name)
-    dataset = group.create_dataset('sqd_states', data=np.packbits(sqd_states, axis=1))
+def save_skqd_result(out, sqd_states, energy, eigvec, ham_proj=None):
+    dataset = out.create_dataset('sqd_states', data=np.packbits(sqd_states, axis=1))
     dataset.attrs['num_bits'] = sqd_states.shape[-1]
-    group.create_dataset('energy', data=energy)
-    group.create_dataset('eigvec', data=eigvec)
+    out.create_dataset('energy', data=energy)
+    out.create_dataset('eigvec', data=eigvec)
     if ham_proj is not None:
-        subgroup = group.create_group('ham_proj')
-        subgroup.create_dataset('data', data=ham_proj.data)
-        subgroup.create_dataset('indices', data=ham_proj.indices)
-        subgroup.create_dataset('indptr', data=ham_proj.indptr)
-    return group
+        group = out.create_group('ham_proj')
+        group.create_dataset('data', data=ham_proj.data)
+        group.create_dataset('indices', data=ham_proj.indices)
+        group.create_dataset('indptr', data=ham_proj.indptr)
+
+
+def make_hamiltonian(parameters: Parameters) -> SparsePauliOp:
+    """Return the Ising hamiltonian for the given charge sector."""
+    lattice = TriangularZ2Lattice(parameters.lgt.lattice)
+    base_link_state = minimum_weight_link_state(parameters.lgt.charged_vertices, lattice)
+    dual_lattice = lattice.plaquette_dual(base_link_state)
+    return dual_lattice.make_hamiltonian(parameters.lgt.plaquette_energy)
+
+
+def diagonalize_init(
+    parameters: Parameters,
+    exp_data: list[tuple[np.ndarray, np.ndarray]],
+    jax_device_id: int = 0,
+    logger: Optional[logging.Logger] = None
+) -> tuple[float, np.ndarray]:
+    logger = logger or logging.getLogger(__name__)
+
+    saved_result = check_saved_result(parameters, 'skqd_init')
+    if saved_result:
+        logger.info('There is already an SKQD result saved in the file.')
+        states, energy, eigvec = saved_result[:3]
+        relevant_states = get_relevant_states(states, eigvec, parameters.skqd.probability_cutoff)
+        return energy, relevant_states
+
+    logger.info('Performing SQD with observed (charge-corrected) plaquette states')
+
+    hamiltonian = make_hamiltonian(parameters)
+    states = np.concatenate([pdata for _, pdata in exp_data], axis=0)[:, ::-1]
+    energy, eigvec, states, ham_proj = sqd(hamiltonian, states, jax_device_id=jax_device_id)
+    path = Path(parameters.pkgpath) / 'skqd_init.h5'
+    with h5py.File(path, 'w', libver='latest') as out:
+        save_skqd_result(out, states, energy, eigvec, ham_proj)
+
+    relevant_states = get_relevant_states(states, eigvec, parameters.skqd.probability_cutoff)
+
+    return energy, relevant_states
 
 
 def diagonalize(
     parameters: Parameters,
-    reco_data: list[tuple[np.ndarray, np.ndarray]],
-    crbm_models: list[ConditionalRBM] | None,
+    exp_data: list[tuple[np.ndarray, np.ndarray]],
+    states_init: np.ndarray,
+    crbm_models: Optional[list[ConditionalRBM]] = None,
+    ref_data: Optional[list[tuple[np.ndarray, np.ndarray]]] = None,
+    jax_device_id: int = 0,
     logger: Optional[logging.Logger] = None
-) -> tuple[float, np.ndarray]:
+) -> float:
     logger = logger or logging.getLogger(__name__)
 
     if crbm_models:
@@ -191,41 +207,30 @@ def diagonalize(
     saved_result = check_saved_result(parameters, group_name)
     if saved_result:
         logger.info('There is already an SKQD result saved in the file.')
-        return saved_result
+        return saved_result[1]
 
-    lattice = TriangularZ2Lattice(parameters.lgt.lattice)
-    dual_lattice = lattice.plaquette_dual()
-    hamiltonian = dual_lattice.make_hamiltonian(parameters.lgt.plaqette_energy)
-
-    exp_data = reco_data[0]
-
-    init = load_init(parameters)
-    if init is None:
-        init_states, init_energy, init_eigvec = diagonalize_init(parameters, exp_data, hamiltonian,
-                                                                 logger)
-    else:
-        init_states, init_energy, init_eigvec = init
-
-    if parameters.skqd.max_iterations == 0:
-        return init_energy, init_eigvec
-
+    hamiltonian = make_hamiltonian(parameters)
     num_steps = parameters.skqd.n_trotter_steps
     shots = parameters.runtime.shots
 
-    relevant_states = init_states[np.square(np.abs(init_eigvec)) > 1.e-20]
     exp_data_size = num_steps * shots
     gen_data_size = exp_data_size * parameters.skqd.num_gen
-    max_size = gen_data_size + min(exp_data_size, 10 * relevant_states.shape[0])
+    max_size = gen_data_size + min(exp_data_size, 10 * states_init.shape[0])
     logger.info('Set maximum array size to %d', max_size)
 
     if crbm_models:
         generate_fn = make_batch_generator(parameters.skqd.num_gen)
     else:
-        ref_data = reco_data[1]
-        mean_activation = [np.mean(plaq_data, axis=0) for _, plaq_data in ref_data]
+        if ref_data is None:
+            logger.warning('Assuming single-plaquette flip probability of 0.5')
+            mean_activation = [np.full(exp_data[0][1].shape[1], 0.5)] * num_steps
+        else:
+            logger.info('Using the mean of reference circuit data as single-plaquette probability')
+            mean_activation = [np.mean(plaq_data, axis=0) for _, plaq_data in ref_data]
 
     energies = []
     subspace_dims = []
+    relevant_states = states_init
     prev_energy = None
 
     is_last = False
@@ -244,7 +249,8 @@ def diagonalize(
             logger.info('Updated maximum array size to %d', max_size)
         logger.info('Diagonalizing the Hamiltonian projected onto %d states..', states.shape[0])
         start = time.time()
-        sqd_result = sqd(hamiltonian, states, states_size=max_size, return_hproj=is_last)
+        sqd_result = sqd(hamiltonian, states, states_size=max_size, return_hproj=is_last,
+                         jax_device_id=jax_device_id)
         energy, eigvec, sqd_states = sqd_result[:3]
         energies.append(energy)
         subspace_dims.append(sqd_states.shape[0])
@@ -265,61 +271,56 @@ def diagonalize(
         if is_last:
             break
 
-        relevant_states = sqd_states[np.square(np.abs(eigvec)) > 1.e-20]
+        relevant_states = get_relevant_states(sqd_states, eigvec,
+                                              parameters.skqd.probability_cutoff)
 
     ham_proj = sqd_result[-1]
 
-    with h5py.File(parameters.output_filename, 'r+') as out:
-        group = save_skqd_result(out, group_name, sqd_states, energy, eigvec, ham_proj)
-        group.create_dataset('energies', data=energies)
-        group.create_dataset('subspace_dims', data=subspace_dims)
+    path = Path(parameters.pkgpath) / f'{group_name}.h5'
+    with h5py.File(path, 'w', libver='latest') as out:
+        save_skqd_result(out, sqd_states, energy, eigvec, ham_proj)
+        out.create_dataset('energies', data=energies)
+        out.create_dataset('subspace_dims', data=subspace_dims)
 
-    return energy, eigvec
+    return energy
 
 
 if __name__ == '__main__':
-    import os
+    import sys
     import argparse
     from skqd_z2lgt.tasks.preprocess import load_reco
     from skqd_z2lgt.tasks.train_generator import load_model
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('filename')
-    parser.add_argument('--gpu', nargs='+')
-    parser.add_argument('--num-gen', type=int, default=5)
-    parser.add_argument('--gen-batch-size', type=int, default=10_000)
-    parser.add_argument('--random', action='store_true')
-    parser.add_argument('--niter', type=int, default=1)
-    parser.add_argument('--terminate-deltae', type=float, default=0.005)
-    parser.add_argument('--terminate-ndim', type=int, default=1_000_000)
+    parser.add_argument('pkgpath')
+    parser.add_argument('--gpus', help='CUDA_VISIBLE_DEVICES')
+    parser.add_argument('--mode', default='full')
+    parser.add_argument('--log-level', default='INFO')
     options = parser.parse_args()
 
+    logging.basicConfig(level=getattr(logging, options.log_level.upper()))
     LOG = logging.getLogger(__name__)
 
-    if options.gpu and options.gpu[0] != 'all':
-        os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(options.gpu)
+    if options.gpus:
+        os.environ['CUDA_VISIBLE_DEVICES'] = options.gpus
     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     jax.config.update('jax_enable_x64', True)
 
-    params = Parameters()
-    params.output_filename = options.filename
-    with h5py.File(options.filename, 'r') as src:
-        params.lgt.lattice = src.attrs['lattice']
-        params.lgt.plaquette_energy = src.attrs['plaquette_energy']
-        params.lgt.charged_vertices = src.attrs['charged_vertices']
-        params.skqd.n_trotter_steps = src.attrs['num_steps']
-        params.runtime.shots = src.attrs['shots']
-    params.skqd.num_gen = options.num_gen
-    params.skqd.max_iterations = options.niter
-    params.crbm.gen_batch_size = options.gen_batch_size
-    params.skqd.delta_e = options.terminate_deltae
-    params.skqd.max_subspace_dim = options.terminate_ndim
+    with open(Path(options.pkgpath) / 'parameters.json', 'r', encoding='utf-8') as src:
+        params = Parameters.model_validate_json(src.read())
 
-    rdata = load_reco(params)
-    if options.random:
-        models = None
+    edata = load_reco(params, 'exp')
+    _, st_init = diagonalize_init(params, edata)
+
+    if options.mode == 'init':
+        sys.exit(0)
+
+    if options.mode == 'random':
+        models = None  # pylint: disable=invalid-name
+        rdata = load_reco(params, 'ref')
     else:
-        models = [load_model(istep, params.output_filename, istep % jax.device_count())
+        rdata = None  # pylint: disable=invalid-name
+        models = [load_model(params, istep, istep % jax.device_count())[0]
                   for istep in range(params.skqd.n_trotter_steps)]
 
         for istep, crbm in enumerate(models):
@@ -331,4 +332,4 @@ if __name__ == '__main__':
                     size=params.skqd.num_gen
                 )
 
-    diagonalize(params, rdata, models)
+    diagonalize(params, edata, st_init, crbm_models=models, ref_data=rdata)

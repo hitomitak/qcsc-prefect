@@ -12,6 +12,9 @@ from qiskit.quantum_info import SparsePauliOp
 def ising_dmrg(
     hamiltonian: SparsePauliOp,
     filename: Optional[str] = None,
+    nsweeps: int = 5,
+    maxdim: Optional[list[int]] = None,
+    cutoff: float = 1.e-10,
     julia_bin: str | list[str] = 'julia'
 ):
     """Call ising_dmrg.jl. There must be a much smarter way to do this."""
@@ -36,13 +39,17 @@ def ising_dmrg(
         else:
             raise RuntimeError(pstr)
 
+    maxdim = maxdim or [10, 20, 100, 100]
+    if nsweeps > 4 and len(maxdim) < nsweeps:
+        maxdim += [200] * (nsweeps - 4)
+
     is_tempfile = False
     if not filename:
         is_tempfile = True
         with tempfile.NamedTemporaryFile() as tfile:
             filename = tfile.name
 
-    with h5py.File(filename, 'w') as out:
+    with h5py.File(filename, 'w', libver='latest') as out:
         out.create_dataset('num_qubits', data=hamiltonian.num_qubits)
         out.create_dataset('zz_indices', data=np.array(zz_indices))
         out.create_dataset('zz_coeffs', data=np.array(zz_coeffs))
@@ -50,6 +57,9 @@ def ising_dmrg(
         out.create_dataset('z_coeffs', data=np.array(z_coeffs))
         out.create_dataset('x_indices', data=np.array(x_indices))
         out.create_dataset('x_coeffs', data=np.array(x_coeffs))
+        out.create_dataset('nsweeps', data=nsweeps)
+        out.create_dataset('maxdim', data=maxdim)
+        out.create_dataset('cutoff', data=cutoff)
 
     program = os.path.join(
         os.path.dirname(__file__),
@@ -69,7 +79,7 @@ def ising_dmrg(
         sys.stderr.write(proc.stderr)
         sys.stderr.flush()
 
-    with h5py.File(filename, 'r') as source:
+    with h5py.File(filename, 'r', libver='latest') as source:
         energy = source['energy'][()]
 
     if is_tempfile:
@@ -102,7 +112,7 @@ def get_mps_probs(
         sys.stderr.write(proc.stderr)
         sys.stderr.flush()
 
-    with h5py.File(filename, 'r') as source:
+    with h5py.File(filename, 'r', libver='latest') as source:
         states = source['states'][()]
         probs = source['probs'][()]
 
@@ -141,7 +151,7 @@ def get_mps_coverage(
         sys.stderr.write(proc.stderr)
         sys.stderr.flush()
 
-    with h5py.File(out_filename, 'r') as source:
+    with h5py.File(out_filename, 'r', libver='latest') as source:
         prob = source['prob'][()]
 
     os.unlink(out_filename)

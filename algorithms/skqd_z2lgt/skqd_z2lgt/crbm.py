@@ -31,9 +31,12 @@ class ConditionalRBM(nnx.Module):
     def save(self, file: str | h5py.Group):
         params_state, rngs_state = map(nnx.pure, nnx.state(self, nnx.Param, ...))
         if isinstance(file, str):
-            out = h5py.File(file, 'w')
+            out = h5py.File(file, 'w', libver='latest')
         else:
             out = file
+
+        out.create_dataset('therm_steps', data=self.therm_steps)
+        out.create_dataset('vhat_size', data=self.vhat_size)
 
         params = out.create_group('params')
         for key, value in params_state.items():
@@ -45,16 +48,13 @@ class ConditionalRBM(nnx.Module):
             group.create_dataset('count', data=state['count'])
             group.create_dataset('key', data=jax.random.key_data(state['key']))
 
-        out.create_dataset('therm_steps', data=self.therm_steps)
-        out.create_dataset('vhat_size', data=self.vhat_size)
-
         if isinstance(file, str):
             out.close()
 
     @staticmethod
     def load(file: str | h5py.Group) -> 'ConditionalRBM':
         if isinstance(file, str):
-            source = h5py.File(file)
+            source = h5py.File(file, libver='latest')
         else:
             source = file
 
