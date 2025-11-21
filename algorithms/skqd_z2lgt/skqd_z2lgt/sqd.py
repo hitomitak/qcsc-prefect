@@ -88,8 +88,8 @@ def sqd(
             ham = retval_jax[-1]
             retval += (bcoo_to_csr(BCOO((ham.data, ham.indices), shape=(subspace_dim,) * 2)),)
     else:
-        start = time.time()
         with jax.default_device(jax.devices()[jax_device_id[0]]):
+            start = time.time()
             states = jnp.packbits(states, axis=1)
             states = uniquify_states(states)
             LOG.info('%f seconds to sort %d bitstrings', time.time() - start, states.shape[0])
@@ -98,7 +98,7 @@ def sqd(
             LOG.info('%f seconds to project the Hamiltonian onto subspace', time.time() - start)
             start = time.time()
             eigval, eigvec = ground_state_lobpcg(hproj)
-        LOG.info('%f seconds to diagonalize', time.time() - start)
+            LOG.info('%f seconds to diagonalize', time.time() - start)
 
         retval = (float(eigval), np.array(eigvec))
         if return_states:
@@ -144,9 +144,9 @@ def uniquify_states(
     """Uniquify the states array. Note that np.unique performs the desired lexicographic sort."""
     states = jnp.unique(states, axis=0, size=size, fill_value=255)
     if states.ndim == 1:
-        # Convert integer indices to binary
-        states = (states[:, None] >> jnp.arange(num_qubits)[None, ::-1]) % 2
-
+        # Convert integer indices to binary, then to packed uint8
+        bits = ((states[:, None] >> jnp.arange(num_qubits)[None, ::-1]) % 2).astype(np.uint8)
+        states = jnp.packbits(bits, axis=1)
     return states.astype(np.uint8)
 
 

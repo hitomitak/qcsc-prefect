@@ -43,7 +43,7 @@ def generate_states(model, vtx_data, plaq_data, generate_fn, batch_size):
 
         gen_data = generate_fn(model, vtx_data, plaq_data)[1]
 
-    return np.array(gen_data.reshape((-1, num_p))[:, ::-1])
+    return np.array(gen_data.reshape((-1, num_p)))
 
 
 def make_batch_generator(num_gen):
@@ -177,7 +177,7 @@ def diagonalize_init(
     logger.info('Performing SQD with observed (charge-corrected) plaquette states')
 
     hamiltonian = make_hamiltonian(parameters)
-    states = np.concatenate([pdata for _, pdata in exp_data], axis=0)[:, ::-1]
+    states = np.concatenate([pdata for _, pdata in exp_data], axis=0)
     energy, eigvec, states, ham_proj = sqd(hamiltonian, states, jax_device_id=jax_device_id)
     path = Path(parameters.pkgpath) / 'skqd_init.h5'
     with h5py.File(path, 'w', libver='latest') as out:

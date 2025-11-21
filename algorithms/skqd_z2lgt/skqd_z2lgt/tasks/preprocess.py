@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 import numpy as np
 import h5py
+from qiskit.primitives import BitArray
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.parameters import Parameters
 from skqd_z2lgt.mwpm import convert_link_to_plaq, minimum_weight_link_state
@@ -66,7 +67,7 @@ def load_reco(
 
 def preprocess_flow(
     parameters: Parameters,
-    raw_data: tuple[RecoData, RecoData],
+    raw_data: tuple[list[BitArray], list[BitArray]],
     convert_fn: Callable,
     logger: Optional[logging.Logger] = None
 ) -> tuple[RecoData, RecoData]:
