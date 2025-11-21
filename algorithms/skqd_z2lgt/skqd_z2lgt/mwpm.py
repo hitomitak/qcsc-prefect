@@ -43,11 +43,10 @@ def _mwpm_correct(link_state, dual_lattice, matching):
     approaches. We choose the second approach ("neutralize" the syndrome) here. Possibly this allows
     reusing the generative model trained for circuits with different initial states.
     """
-    syndrome = dual_lattice.primal.get_syndrome(link_state)
-    syndrome ^= dual_lattice.base_syndrome
+    syndrome = dual_lattice.primal.get_syndrome(link_state) ^ dual_lattice.base_syndrome
     correction = matching.decode(syndrome)
-    link_state ^= correction
-    return link_state, syndrome
+    corrected_link_state = link_state ^ correction
+    return corrected_link_state, syndrome
 
 
 def minimum_weight_link_state(
