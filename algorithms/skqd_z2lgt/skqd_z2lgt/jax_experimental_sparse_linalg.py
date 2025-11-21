@@ -121,7 +121,7 @@ def _lobpcg_standard_matrix(
     debug: bool = False):
   """Computes lobpcg_standard(), possibly with debug diagnostics."""
   return _lobpcg_standard_callable(
-      functools.partial(_mm, A), X, m, tol, debug)
+      functools.partial(_mm, A), X, m, tol, (), debug)
 
 @functools.partial(jax.jit, static_argnames=['A', 'm', 'debug'])
 def _lobpcg_standard_callable(
