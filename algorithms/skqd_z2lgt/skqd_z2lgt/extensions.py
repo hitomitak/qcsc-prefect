@@ -111,7 +111,7 @@ def vertical_reflection(states: np.ndarray, dual_lattice: PlaquetteDual):
     return np.concatenate([states, states[:, reflection]], axis=0)
 
 
-expansions = {
+extensions = {
     'perturbation_0q': perturbation_0q,
     'perturbation_2q': perturbation_2q,
     'vertical_reflection': vertical_reflection
