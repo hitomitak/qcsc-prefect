@@ -163,16 +163,18 @@ async def sample_quantum(
         with ThreadPoolExecutor(1) as executor:
             return executor.submit(fn).result()
 
+    # Cannot pass runtime.get_target directly as get_target_fn to sample_quantum_flow because of
+    # async_dispatch
     def get_target_fn():
         def fn():
-            return asyncio.run(runtime.get_target())
+            return runtime.get_target()
 
         with ThreadPoolExecutor(1) as executor:
             return executor.submit(fn).result()
 
     def sample_fn(pubs):
         def fn(pubs):
-            return asyncio.run(runtime.sampler(sampler_pubs=pubs, options=options))
+            return runtime.sampler(sampler_pubs=pubs, options=options)
 
         with ThreadPoolExecutor(1) as executor:
             return executor.submit(fn, pubs).result()
