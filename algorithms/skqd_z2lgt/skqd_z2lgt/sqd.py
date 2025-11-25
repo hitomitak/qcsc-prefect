@@ -22,7 +22,7 @@ def sqd(
     return_states: bool = True,
     return_hproj: bool = True,
     jax_device_id: int | list[int] = 0
-) -> tuple[np.ndarray, csr_array, float, np.ndarray]:
+) -> tuple[float, np.ndarray, np.ndarray, csr_array]:
     """Perform a sample-based quantum diagonalization of the Hamiltonian.
 
     Args:
@@ -42,7 +42,8 @@ def sqd(
         jax_device_id = [jax_device_id]
 
     with jax.default_device(jax.devices()[jax_device_id[0]]):
-        paulis_d, coeffs_d, paulis_n, coeffs_n = get_hamiltonian_arrays(hamiltonian, jax_device_id)
+        paulis_d, coeffs_d, paulis_n, coeffs_n = get_hamiltonian_arrays(hamiltonian, jax_device_id,
+                                                                        npmod=jnp)
 
     if states_size is not None:
         if (pad_length := states_size - states.shape[0]) < 0:
@@ -90,7 +91,7 @@ def sqd(
             start = time.time()
             diagonals = get_diagonals(paulis_d, coeffs_d, states)
             rows, data = get_nondiagonals(paulis_n, coeffs_n, states)
-            nondiagonals = reduce_nondiagonals(rows, data)
+            nondiagonals = reduce_nondiagonals(rows, data, npmod=jnp)
             eigval, eigvec = compute_ground_state(diagonals, nondiagonals)
             LOG.info('%f seconds to diagonalize', time.time() - start)
 
@@ -133,14 +134,15 @@ def uniquify_states(
 
 def get_hamiltonian_arrays(
     hamiltonian: SparsePauliOp,
-    device_ids: Optional[list[int]] = None
+    device_ids: Optional[list[int]] = None,
+    npmod=np
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
     paulis = hamiltonian.paulis
-    pauli_index = jnp.array([[0, 3], [1, 2]], dtype=np.uint8)
+    pauli_index = npmod.array([[0, 3], [1, 2]], dtype=np.uint8)
     pauli_strings = pauli_index[paulis.x[..., ::-1].astype(np.int32),
                                 paulis.z[..., ::-1].astype(np.int32)]
-    coeffs = jnp.array(hamiltonian.coeffs)
-    is_nondiag = jnp.any(paulis.x, axis=1)
+    coeffs = npmod.array(hamiltonian.coeffs)
+    is_nondiag = npmod.any(paulis.x, axis=1)
     nondiag_paulis = pauli_strings[is_nondiag]
     nondiag_coeffs = coeffs[is_nondiag]
     diag_paulis = pauli_strings[~is_nondiag]
@@ -237,11 +239,12 @@ def subspace_indices(mapped_states: jax.Array, states: jax.Array) -> jax.Array:
 
 
 def reduce_nondiagonals(
-    rows: jax.Array,
-    data: jax.Array
-) -> tuple[jax.Array, jax.Array, jax.Array]:
+    rows: np.ndarray,
+    data: np.ndarray,
+    npmod=np
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return flat arrays of columns, rows, and matrix elements of the nondiagonal Hamiltonian."""
-    indices = jnp.nonzero(jnp.not_equal(rows, -1))
+    indices = npmod.nonzero(npmod.not_equal(rows, -1))
     return indices[1], rows[indices], data[indices]
 
 
@@ -266,8 +269,8 @@ def compute_ground_state(
 
 
 def to_csr(
-    diagonals: jax.Array,
-    nondiagonals: tuple[jax.Array, jax.Array, jax.Array]
+    diagonals: np.ndarray,
+    nondiagonals: tuple[np.ndarray, np.ndarray, np.ndarray]
 ) -> csr_array:
     cols, rows, data = nondiagonals
     filt = np.logical_not(np.isclose(data, 0.))
@@ -279,3 +282,12 @@ def to_csr(
     data = np.concatenate([data, diagonals.astype(data.dtype)])
     coo = coo_array((data, (rows, cols)), shape=diagonals.shape * 2)
     return csr_array(coo)
+
+
+def make_hproj(hamiltonian: SparsePauliOp, states: np.ndarray) -> csr_array:
+    """Just compose the projected sparse Hamiltonian."""
+    paulis_d, coeffs_d, paulis_n, coeffs_n = get_hamiltonian_arrays(hamiltonian)
+    diagonals = get_diagonals(paulis_d, coeffs_d, states)
+    rows, data = get_nondiagonals(paulis_n, coeffs_n, states)
+    nondiagonals = reduce_nondiagonals(rows, data)
+    return to_csr(diagonals, nondiagonals)

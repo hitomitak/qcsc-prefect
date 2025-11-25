@@ -211,6 +211,11 @@ class SKQDParameters(BaseModel):
         title="Generated Samples",
         ge=1
     )
+    extensions: list[str] = Field(
+        default_factory=list,
+        description="Names of subspace extension functions to apply.",
+        title="Subspace extension functions"
+    )
     max_iterations: int = Field(
         default=10,
         description="Number of configuration recovery iterations.",

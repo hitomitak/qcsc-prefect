@@ -15,7 +15,8 @@ import jax.numpy as jnp
 from flax import nnx
 from qiskit.quantum_info import SparsePauliOp
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
-from skqd_z2lgt.sqd import sqd, to_bcoo, bcoo_to_csr
+from skqd_z2lgt.sqd import sqd, make_hproj
+from skqd_z2lgt.extensions import extensions
 from skqd_z2lgt.mwpm import minimum_weight_link_state
 from skqd_z2lgt.crbm import ConditionalRBM
 from skqd_z2lgt.parameters import Parameters
@@ -156,7 +157,7 @@ def make_hamiltonian(parameters: Parameters) -> SparsePauliOp:
     lattice = TriangularZ2Lattice(parameters.lgt.lattice)
     base_link_state = minimum_weight_link_state(parameters.lgt.charged_vertices, lattice)
     dual_lattice = lattice.plaquette_dual(base_link_state)
-    return dual_lattice.make_hamiltonian(parameters.lgt.plaquette_energy)
+    return dual_lattice, dual_lattice.make_hamiltonian(parameters.lgt.plaquette_energy)
 
 
 def diagonalize_init(
@@ -176,8 +177,10 @@ def diagonalize_init(
 
     logger.info('Performing SQD with observed (charge-corrected) plaquette states')
 
-    hamiltonian = make_hamiltonian(parameters)
+    dual_lattice, hamiltonian = make_hamiltonian(parameters)
     states = np.concatenate([pdata for _, pdata in exp_data], axis=0)
+    for fname in parameters.skqd.extensions:
+        states = extensions[fname](states, dual_lattice)
     energy, eigvec, states, ham_proj = sqd(hamiltonian, states, jax_device_id=jax_device_id)
     path = Path(parameters.pkgpath) / 'skqd_init.h5'
     with h5py.File(path, 'w', libver='latest') as out:
@@ -209,7 +212,7 @@ def diagonalize(
         logger.info('There is already an SKQD result saved in the file.')
         return saved_result[1]
 
-    hamiltonian = make_hamiltonian(parameters)
+    dual_lattice, hamiltonian = make_hamiltonian(parameters)
     num_steps = parameters.skqd.n_trotter_steps
     shots = parameters.runtime.shots
 
@@ -244,6 +247,8 @@ def diagonalize(
             gen_states = generate_random(parameters, exp_data, mean_activation, 12345 + it, logger)
 
         states = np.concatenate([relevant_states] + gen_states, axis=0)
+        for fname in parameters.skqd.extensions:
+            states = extensions[fname](states, dual_lattice)
         if (excess := states.shape[0] - max_size) > 0:
             max_size += 10 * excess
             logger.info('Updated maximum array size to %d', max_size)
@@ -264,8 +269,7 @@ def diagonalize(
         )
 
         if not is_last and terminate:
-            hproj = to_bcoo(hamiltonian, np.packbits(sqd_states, axis=1))
-            sqd_result += (bcoo_to_csr(hproj),)
+            sqd_result += (make_hproj(hamiltonian, sqd_states),)
             is_last = True
 
         if is_last:
