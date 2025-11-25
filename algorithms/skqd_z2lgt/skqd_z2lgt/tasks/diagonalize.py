@@ -214,26 +214,20 @@ def diagonalize(
 
     dual_lattice, hamiltonian = make_hamiltonian(parameters)
     num_steps = parameters.skqd.n_trotter_steps
-    shots = parameters.runtime.shots
-
-    exp_data_size = num_steps * shots
-    gen_data_size = exp_data_size * parameters.skqd.num_gen
-    max_size = gen_data_size + min(exp_data_size, 10 * states_init.shape[0])
-    logger.info('Set maximum array size to %d', max_size)
 
     if crbm_models:
         generate_fn = make_batch_generator(parameters.skqd.num_gen)
+    elif ref_data is None:
+        logger.warning('Assuming single-plaquette flip probability of 0.5')
+        mean_activation = [np.full(exp_data[0][1].shape[1], 0.5)] * num_steps
     else:
-        if ref_data is None:
-            logger.warning('Assuming single-plaquette flip probability of 0.5')
-            mean_activation = [np.full(exp_data[0][1].shape[1], 0.5)] * num_steps
-        else:
-            logger.info('Using the mean of reference circuit data as single-plaquette probability')
-            mean_activation = [np.mean(plaq_data, axis=0) for _, plaq_data in ref_data]
+        logger.info('Using the mean of reference circuit data as single-plaquette probability')
+        mean_activation = [np.mean(plaq_data, axis=0) for _, plaq_data in ref_data]
 
     energies = []
     subspace_dims = []
     relevant_states = states_init
+    max_size = None
     prev_energy = None
 
     is_last = False
@@ -249,6 +243,9 @@ def diagonalize(
         states = np.concatenate([relevant_states] + gen_states, axis=0)
         for fname in parameters.skqd.extensions:
             states = extensions[fname](states, dual_lattice)
+        if max_size is None:
+            max_size = states.shape[0] + relevant_states.shape[0]
+            logger.info('Set maximum array size to %d', max_size)
         if (excess := states.shape[0] - max_size) > 0:
             max_size += 10 * excess
             logger.info('Updated maximum array size to %d', max_size)
@@ -275,6 +272,7 @@ def diagonalize(
         if is_last:
             break
 
+        prev_energy = energy
         relevant_states = get_relevant_states(sqd_states, eigvec,
                                               parameters.skqd.probability_cutoff)
 
