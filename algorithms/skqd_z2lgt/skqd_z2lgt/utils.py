@@ -10,13 +10,14 @@ from jax.sharding import NamedSharding, PartitionSpec
 def read_bits(
     dataset: np.ndarray | h5py.Dataset,
     num_bits: Optional[int] = None,
-    align: str = 'left'
+    align: str = 'left',
+    offset: int = 0
 ) -> np.ndarray:
     bits = np.unpackbits(dataset, axis=-1)
     num_bits = num_bits or dataset.attrs['num_bits']
     if align == 'left':
-        return bits[..., :num_bits]
-    return bits[..., -num_bits:]
+        return bits[..., offset:num_bits + offset]
+    return bits[..., -(offset + num_bits):-offset]
 
 
 def save_bits(group: h5py.Group, name: str, bits: np.ndarray) -> h5py.Dataset:
