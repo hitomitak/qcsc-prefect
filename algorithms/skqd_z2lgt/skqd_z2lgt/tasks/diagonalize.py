@@ -179,8 +179,10 @@ def diagonalize_init(
 
     dual_lattice, hamiltonian = make_hamiltonian(parameters)
     states = np.concatenate([pdata for _, pdata in exp_data], axis=0)
+    logger.info('Number of bitstrings from circuit sampling: %d', states.shape[0])
     for fname in parameters.skqd.extensions:
         states = extensions[fname](states, dual_lattice)
+        logger.info('Number of bitstrings after applying %s: %d', fname, states.shape[0])
     energy, eigvec, states, ham_proj = sqd(hamiltonian, states, jax_device_id=jax_device_id)
     path = Path(parameters.pkgpath) / 'skqd_init.h5'
     with h5py.File(path, 'w', libver='latest') as out:

@@ -133,29 +133,33 @@ def train_generator(
     #     return models
 
     def train_fn_subprocess(steps_to_train, _):
-        def run_script(istep, idev):
+        def run_script(istep, igpu):
             cmd = [
                 sys.executable,
-                pathlib.Path(__file__),
+                str(pathlib.Path(__file__)),
                 parameters.pkgpath,
                 f'{istep}',
-                '--gpu', f'{idev}',  # train on idev
+                '--gpu', f'{igpu}',  # train on igpu
             ]
             proc = subprocess.run(cmd, capture_output=True, check=True, text=True)
             for txt, stream in zip([proc.stdout, proc.stderr], [sys.stdout, sys.stderr]):
                 stream.write(txt)
                 stream.flush()
 
-            # Load the model onto istep % ndev (instead of idev)
+            # Load the model onto istep % ndev (instead of igpu)
             model, _ = load_model(parameters, istep, istep % jax.device_count())
             return model
 
         models = {}
         with ThreadPoolExecutor(jax.device_count()) as executor:
+            if (cvd := os.getenv('CUDA_VISIBLE_DEVICES')):
+                gpus = list(map(int, cvd.split(',')))
+            else:
+                gpus = list(range(jax.device_count()))
             futures = []
             for iproc, istep in enumerate(steps_to_train):
-                idev = iproc % jax.device_count()
-                futures.append(executor.submit(run_script, istep, idev))
+                igpu = gpus[iproc % len(gpus)]
+                futures.append(executor.submit(run_script, istep, igpu))
 
         for istep, future in zip(steps_to_train, futures):
             model = future.result()
