@@ -73,8 +73,8 @@ def sqd(
         LOG.info('%f seconds for SQD. Subspace dimension %d', time.time() - start, subspace_dim)
         retval = (float(retval_jax[-2]), np.array(retval_jax[-1][:subspace_dim]))
         if return_states:
-            states = read_bits(retval_jax[1][:subspace_dim], num_bits=hamiltonian.num_qubits,
-                               offset=1)
+            sqd_states = read_bits(retval_jax[1][:subspace_dim], num_bits=hamiltonian.num_qubits,
+                                   offset=1)
         if return_hproj:
             diagonals, rows, nondiag_data = map(np.asarray, retval_jax[2:5])
             diagonals = diagonals[:subspace_dim]
@@ -86,20 +86,20 @@ def sqd(
     else:
         with jax.default_device(jax.devices()[jax_device_id[0]]):
             start = time.time()
-            states = uniquify_states(states)
-            LOG.info('%f seconds to sort %d bitstrings', time.time() - start, states.shape[0])
+            states_u = uniquify_states(states)
+            LOG.info('%f seconds to sort %d bitstrings', time.time() - start, states_u.shape[0])
             start = time.time()
-            diagonals = get_diagonals(paulis_d, coeffs_d, states)
-            rows, data = get_nondiagonals(paulis_n, coeffs_n, states)
+            diagonals = get_diagonals(paulis_d, coeffs_d, states_u)
+            rows, data = get_nondiagonals(paulis_n, coeffs_n, states_u)
             nondiagonals = reduce_nondiagonals(rows, data, npmod=jnp)
             eigval, eigvec = compute_ground_state(diagonals, nondiagonals)
             LOG.info('%f seconds to diagonalize', time.time() - start)
 
         retval = (float(eigval), np.array(eigvec))
         if return_states:
-            states = read_bits(states, num_bits=hamiltonian.num_qubits)
+            sqd_states = read_bits(states_u, num_bits=hamiltonian.num_qubits)
     if return_states:
-        retval += (states,)
+        retval += (sqd_states,)  # pylint: disable=used-before-assignment
     if return_hproj:
         retval += (to_csr(diagonals, nondiagonals),)
 

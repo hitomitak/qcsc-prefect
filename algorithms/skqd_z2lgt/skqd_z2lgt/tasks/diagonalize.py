@@ -196,6 +196,7 @@ def diagonalize_init(
 def diagonalize(
     parameters: Parameters,
     exp_data: list[tuple[np.ndarray, np.ndarray]],
+    energy_init: float,
     states_init: np.ndarray,
     crbm_models: Optional[list[ConditionalRBM]] = None,
     ref_data: Optional[list[tuple[np.ndarray, np.ndarray]]] = None,
@@ -230,7 +231,7 @@ def diagonalize(
     subspace_dims = []
     relevant_states = states_init
     max_size = None
-    prev_energy = None
+    prev_energy = energy_init
 
     is_last = False
     for it in range(parameters.skqd.max_iterations):
@@ -262,13 +263,14 @@ def diagonalize(
                     time.time() - start, energy)
 
         terminate = (
-            (prev_energy is not None and prev_energy - energy < parameters.skqd.delta_e)
+            prev_energy - energy < parameters.skqd.delta_e
             or
             relevant_states.shape[0] >= parameters.skqd.max_subspace_dim
         )
 
         if not is_last and terminate:
-            sqd_result += (make_hproj(hamiltonian, sqd_states),)
+            states_p = np.packbits(states, axis=1)
+            sqd_result += (make_hproj(hamiltonian, states_p),)
             is_last = True
 
         if is_last:
@@ -314,7 +316,7 @@ if __name__ == '__main__':
         params = Parameters.model_validate_json(src.read())
 
     edata = load_reco(params, 'exp')
-    _, st_init = diagonalize_init(params, edata)
+    en_init, st_init = diagonalize_init(params, edata)
 
     if options.mode == 'init':
         sys.exit(0)
@@ -336,4 +338,4 @@ if __name__ == '__main__':
                     size=params.skqd.num_gen
                 )
 
-    diagonalize(params, edata, st_init, crbm_models=models, ref_data=rdata)
+    diagonalize(params, edata, en_init, st_init, crbm_models=models, ref_data=rdata)
