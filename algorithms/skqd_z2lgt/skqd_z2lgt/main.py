@@ -4,10 +4,15 @@ from pathlib import Path
 import logging
 import asyncio
 import tempfile
+import json
 from concurrent.futures import ThreadPoolExecutor
 import h5py
 from prefect import flow, task, get_run_logger
+from prefect.client.schemas.filters import (ArtifactFilter, ArtifactFilterKey,
+                                            ArtifactFilterTaskRunId)
+from prefect.client.orchestration import get_client
 from prefect.variables import Variable
+from prefect.runtime import task_run
 from prefect_qiskit.runtime import QuantumRuntime
 from prefect_qiskit.primitives import PrimitiveJobRun
 from prefect_miyabi import MiyabiJobBlock, PyFunctionJob
@@ -148,6 +153,7 @@ async def sample_quantum(
 
     runtime = runtime_task.result()
     options = options_task.result()
+    task_id = task_run.id
 
     def fetch_result_fn():
         def fn():
@@ -172,8 +178,23 @@ async def sample_quantum(
             return runtime.sampler(sampler_pubs=pubs, options=options)
 
         with ThreadPoolExecutor(1) as executor:
-            # TODO Figure out how to fetch the job id from the table artifact
-            return executor.submit(fn, pubs).result(), ''
+            pub_result = executor.submit(fn, pubs).result()
+
+        prefect_client = get_client(sync_client=True)
+        artifacts = prefect_client.read_artifacts(
+            limit=1,
+            artifact_filter=ArtifactFilter(
+                key=ArtifactFilterKey(any_=['job-metrics']),
+                task_run_id=ArtifactFilterTaskRunId(any_=[task_id])
+            )
+        )
+        if artifacts:
+            keys, values = json.loads(artifacts[0].data)
+            job_id = values[keys.index('job_id')]
+        else:
+            job_id = ''
+
+        return pub_result, job_id
 
     sample_quantum_flow(parameters, fetch_result_fn, get_target_fn, sample_fn, logger)
 
