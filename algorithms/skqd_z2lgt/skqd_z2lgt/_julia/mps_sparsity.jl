@@ -1,3 +1,4 @@
+using Base.Threads
 using HDF5: h5open, read, write
 using ITensors: ITensor, scalar
 using ITensorMPS: siteinds, state, MPS, MPO, OpSum, orthogonalize, sample
@@ -9,13 +10,13 @@ function get_mps_probs(filename, num_samples)
     sidx = siteinds(psi)
 
     samples = Array{Int8}(undef, length(psi), num_samples)
-    for isamp in 1:num_samples
+    @threads for isamp in 1:num_samples
         samples[:, isamp] = sample(psi)
     end
     states = unique(sortslices(samples, dims=2), dims=2)
 
     probs = Array{Float64}(undef, size(states)[2])
-    for ist in 1:size(states)[2]
+    @threads for ist in 1:size(states)[2]
         V = ITensor(1.)
         for iq in 1:length(psi)
             V *= (psi[iq] * state(sidx[iq], states[iq, ist]))
