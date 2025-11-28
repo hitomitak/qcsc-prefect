@@ -135,6 +135,7 @@ def preprocess_single_array(
 
 
 if __name__ == '__main__':
+    import sys
     import argparse
     from mpi4py import MPI  # pylint: disable=no-name-in-module
 
@@ -146,7 +147,8 @@ if __name__ == '__main__':
     parser.add_argument('--log-level', default='INFO')
     options = parser.parse_args()
 
-    logging.basicConfig(level=getattr(logging, options.log_level.upper()))
+    logging.basicConfig(level=getattr(logging, options.log_level.upper()),
+                        stream=sys.stdout)
 
     with open(Path(options.pkgpath) / 'parameters.json', 'r', encoding='utf-8') as src:
         params = Parameters.model_validate_json(src.read())

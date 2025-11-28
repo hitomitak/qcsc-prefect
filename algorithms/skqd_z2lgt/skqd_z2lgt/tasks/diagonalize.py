@@ -304,7 +304,8 @@ if __name__ == '__main__':
     parser.add_argument('--log-level', default='INFO')
     options = parser.parse_args()
 
-    logging.basicConfig(level=getattr(logging, options.log_level.upper()))
+    logging.basicConfig(level=getattr(logging, options.log_level.upper()),
+                        stream=sys.stdout)
     LOG = logging.getLogger(__name__)
 
     if options.gpus:
