@@ -345,7 +345,11 @@ if __name__ == '__main__':
     logging.basicConfig(level=getattr(logging, args.log_level.upper()),
                         format='%(asctime)s:%(name)s:%(levelname)s %(message)s')
 
-    with open(args.parameters, 'r', encoding='utf-8') as src:
-        params = Parameters(**yaml.load(src, yaml.Loader))
+    if os.path.isdir(args.parameters):
+        with open(Path(args.parameters) / 'parameters.json', 'r', encoding='utf-8') as source:
+            params = Parameters.model_validate_json(source.read())
+    else:
+        with open(args.parameters, 'r', encoding='utf-8') as src:
+            params = Parameters(**yaml.load(src, yaml.Loader))
 
     asyncio.run(skqd_z2lgt(params))

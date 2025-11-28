@@ -195,6 +195,7 @@ if __name__ == '__main__':
 
     logging.basicConfig(level=getattr(logging, options.log_level.upper()),
                         stream=sys.stdout)
+    logging.getLogger('jax').setLevel(logging.WARNING)
 
     if options.gpu:
         os.environ['CUDA_VISIBLE_DEVICES'] = options.gpu
