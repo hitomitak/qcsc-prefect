@@ -13,7 +13,7 @@ from prefect_qiskit.primitives import PrimitiveJobRun
 from prefect_miyabi import MiyabiJobBlock, PyFunctionJob
 from skqd_z2lgt.ising_dmrg import ising_dmrg, get_mps_probs
 from skqd_z2lgt.parameters import Parameters
-from skqd_z2lgt.tasks.open_output import open_output as _open_output
+from skqd_z2lgt.tasks.open_output import open_output
 from skqd_z2lgt.tasks.dmrg import dmrg_flow
 from skqd_z2lgt.tasks.sample_quantum import sample_quantum_flow
 from skqd_z2lgt.tasks.preprocess import preprocess_flow
@@ -50,7 +50,7 @@ async def skqd_z2lgt(
         tmpdir = tempfile.TemporaryDirectory()
         parameters.pkgpath = tmpdir.name
 
-    open_output(parameters)
+    open_output(parameters, logger)
     if parameters.dmrg:
         dmrg_future = dmrg.submit(parameters, cpu_pyfuncjob_name=cpu_pyfuncjob_name)
     sample_quantum_future = sample_quantum.submit(parameters,
@@ -86,11 +86,6 @@ async def skqd_z2lgt(
     logger.info('SKQD energy (full conf. recovery): %f', energy)
 
     return energy
-
-
-@task
-def open_output(parameters: Parameters):
-    return _open_output(parameters, get_run_logger())
 
 
 @task
@@ -143,7 +138,7 @@ async def sample_quantum(
     """
     logger = get_run_logger()
     logger.info('Sampling Trotter circuit final state bitstrings')
-    
+
     async with asyncio.TaskGroup() as tg:
         runtime_task = tg.create_task(QuantumRuntime.load(runtime_name))
         options_task = tg.create_task(Variable.get(parameters.runtime.options_name))
@@ -214,7 +209,7 @@ async def preprocess(
             executor.submit(lambda: asyncio.run(convert_miyabi())).result()
 
     preprocess_flow(parameters, convert_fn, logger=logger)
-    
+
 
 @task
 async def train_generator(
@@ -247,7 +242,7 @@ async def train_generator(
                 **job_block.get_job_variables()
             )
         if exit_status != 0:
-            raise RuntimeError('PBS job train_generator.py failed') 
+            raise RuntimeError('PBS job train_generator.py failed')
 
     def train_fn(steps_to_train):
         with ThreadPoolExecutor(1) as executor:
@@ -294,7 +289,7 @@ async def diagonalize(
             **job_block.get_job_variables()
         )
     if exit_status != 0:
-        raise RuntimeError('PBS job diagonalize.py failed')
+        raise RuntimeError(f'PBS job "diagonalize.py --mode {mode}" failed')
 
     with h5py.File(Path(parameters.pkgpath) / f'{group_name}.h5', 'r', libver='latest') as source:
         return source['energy'][()]
