@@ -126,7 +126,7 @@ def denoising(states: np.ndarray, dual_lattice: PlaquetteDual):
     link_states = np.bitwise_xor.reduce(states[..., None] * plaq_link_matrix[None, ...], axis=1)
     link_states ^= dual_lattice.base_link_state
     denoised_states = np.empty_like(states)
-    link_vtx_map = {key: value[:2] for key, value in lattice.graph.edge_index_map.items()}
+    link_vtx_map = {key: value[:2] for key, value in lattice.graph.edge_index_map().items()}
     for istate, link_state in enumerate(link_states):
         rev_denoised_link_state = np.zeros_like(link_state)
         lids = np.nonzero(link_state[::-1])[0]
@@ -134,7 +134,7 @@ def denoising(states: np.ndarray, dual_lattice: PlaquetteDual):
         cc = rx.connected_components(edge_subgraph)  # pylint: disable=no-member
         for nodes in cc:
             if charged_vertices <= nodes:
-                subgraph = lattice.graph.subgraph(nodes)
+                subgraph = lattice.graph.subgraph(list(nodes))
                 for link in subgraph.edges():
                     rev_denoised_link_state[link.link_id] = 1
                 break
