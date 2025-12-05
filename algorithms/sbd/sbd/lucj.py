@@ -1,18 +1,15 @@
 # Workflow for observability demo on Miyabi
-#
-# Author: Naoki Kanazawa (knzwnao@jp.ibm.com)
 
 import ffsim
 import numpy as np
 from prefect import task
-from qcsc_workflow_utility.chem import ElectronicProperties
-from qiskit.circuit import ClassicalRegister, QuantumCircuit, QuantumRegister
-
-from .np_type_extension import (
+from qcsc_workflow_utility.chem import (
+    ElectronicProperties,
     NpStrict1DArrayF64,
     NpStrict2DArrayF64,
     NpStrict4DArrayF64,
 )
+from qiskit.circuit import ClassicalRegister, QuantumCircuit, QuantumRegister
 
 MODULE_RNG = np.random.default_rng(seed=4520)
 
@@ -28,12 +25,12 @@ def initialize_ucj_parameters(
 ) -> NpStrict2DArrayF64:
     assert not elec_props.open_shell
     global MODULE_RNG
-    
+
     def _t2_to_ucj_parameters(t2: NpStrict4DArrayF64) -> NpStrict1DArrayF64:
         nonlocal aa_indices
         nonlocal ab_indices
         nonlocal n_lucj_layers
-        
+
         tmp_operator = ffsim.UCJOpSpinBalanced.from_t_amplitudes(
             t2=t2,
             n_reps=n_lucj_layers + 1,
@@ -44,14 +41,18 @@ def initialize_ucj_parameters(
             orbital_rotations=tmp_operator.orbital_rotations[:-1],
             final_orbital_rotation=tmp_operator.orbital_rotations[-1],
         )
-        return truncated_ucj_op.to_parameters(interaction_pairs=(aa_indices, ab_indices))
-    
+        return truncated_ucj_op.to_parameters(
+            interaction_pairs=(aa_indices, ab_indices)
+        )
+
     # First walker is the bare CCSD parameters
     initial_params = [_t2_to_ucj_parameters(t2=elec_props.t2)]
-    
+
     # The rest of walkers are randomized parameters
     for _ in range(num_walkers - 1):
-        rand_values = randomization_factor * (MODULE_RNG.random(elec_props.t2.shape) - 0.5)
+        rand_values = randomization_factor * (
+            MODULE_RNG.random(elec_props.t2.shape) - 0.5
+        )
         drifted_params = _t2_to_ucj_parameters(t2=elec_props.t2 + rand_values)
         initial_params.append(drifted_params)
     return initial_params

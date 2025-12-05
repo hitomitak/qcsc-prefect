@@ -1,6 +1,4 @@
 # Workflow for observability demo on Miyabi
-#
-# Author: Naoki Kanazawa (knzwnao@jp.ibm.com)
 
 import asyncio
 from datetime import datetime, timezone
@@ -12,7 +10,7 @@ from prefect.transactions import CommitMode, transaction
 from prefect.variables import Variable
 from prefect_qiskit import QuantumRuntime
 from prefect_sbd.sbd_job import SBDResult, SBDSolverJob
-from qcsc_workflow_utility.chem import ElectronicProperties
+from qcsc_workflow_utility.chem import ElectronicProperties, NpStrict1DArrayF64
 from qiskit.primitives.containers import BitArray
 from qiskit_addon_sqd.configuration_recovery import (
     post_select_by_hamming_weight,
@@ -26,7 +24,6 @@ from .data_io import save_ndarray
 from .flow_params import CircuitParameters
 from .lucj import create_lucj_circuit
 from .np_type_extension import (
-    NpStrict1DArrayF64,
     NpStrict1DArrayLL,
     NpStrict2DArrayBool,
 )
@@ -68,12 +65,10 @@ def walker_sqd(
         )
         runtime = None
     options = Variable.get("sqd_options")
-    
+
     if runtime is not None:
         target = runtime.get_target()
-        logger.debug(
-            f"Sampling bitstrings with {runtime.resource_name}."
-        )
+        logger.debug(f"Sampling bitstrings with {runtime.resource_name}.")
         vir_circuit = create_lucj_circuit(
             ucj_parameter=ucj_parameter,
             elec_props=elec_props,
@@ -102,19 +97,17 @@ def walker_sqd(
             optimization_level=circuit_params.optimization_level,
         )
         pub_result = runtime.sampler(
-            sampler_pubs=[(isa_circuit, )],
+            sampler_pubs=[(isa_circuit,)],
             options=options,
             tags=["res: quantum"],
         )
-        logger.debug(
-            "Completed bitstring sampling."
-        )
+        logger.debug("Completed bitstring sampling.")
         # Reset mitigation
         meas_bits = pub_result[0].data.meas
         if circuit_params.use_reset_mitigation:
             test_bits = pub_result[0].data.test
             bit_array = meas_bits.get_bitstrings(test_bits.bitcount() == 0)
-            bit_array = BitArray.from_samples(bit_array, num_bits=meas_bits.num_bits)        
+            bit_array = BitArray.from_samples(bit_array, num_bits=meas_bits.num_bits)
         else:
             bit_array = meas_bits
         # Update application telemetry
@@ -124,19 +117,18 @@ def walker_sqd(
     else:
         # Random sampling
         # Isolate bitstring seed from the module seed for equivalent control with real device path.
-        seed = int((trial_index + walker_index) * (trial_index + walker_index + 1) // 2 + walker_index)
-        logger.info(
-            f"Sampling bitstrings with RNG seed {seed}"
+        seed = int(
+            (trial_index + walker_index) * (trial_index + walker_index + 1) // 2
+            + walker_index
         )
+        logger.info(f"Sampling bitstrings with RNG seed {seed}")
         bit_array = generate_bit_array_uniform(
             num_samples=options.get("params", {}).get("shots", 100_000),
             num_bits=elec_props.num_orbitals * 2,
             rand_seed=seed,
         )
 
-    logger.debug(
-        "Starting configuration recovery and diagonalization."
-    )
+    logger.debug("Starting configuration recovery and diagonalization.")
     raw_bitstrings, raw_probs = bit_array_to_arrays(bit_array)
     bitstrings, probs = recover_configurations(
         bitstring_matrix=raw_bitstrings,
@@ -170,9 +162,7 @@ def walker_sqd(
             nelec=elec_props.num_electrons,
         )
     )
-    logger.debug(
-        "Completed diagonalization."
-    )
+    logger.debug("Completed diagonalization.")
     energy = sbd_result.energy + elec_props.nuclear_repulsion_energy
 
     report_s3 = save_ndarray(
@@ -182,11 +172,9 @@ def walker_sqd(
         recovered_bitstrings=bitstrings,
         alphadets=ci_strings,
         avg_occupancy=sbd_result.orbital_occupancies[0],
-        carryover=sbd_result.carryover_bitstrings,        
+        carryover=sbd_result.carryover_bitstrings,
     )
-    logger.debug(
-        f"Saved SQD data in '{report_s3}'."
-    )
+    logger.debug(f"Saved SQD data in '{report_s3}'.")
 
     telemetry.update(
         num_post_determinants=len(bitstrings_post),
@@ -195,7 +183,7 @@ def walker_sqd(
         sqd_data=str(report_s3),
         last_updated=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     )
-    
+
     return ((energy, sbd_result.carryover_bitstrings), telemetry)
 
 
@@ -229,7 +217,7 @@ def subsample_close_shell(
     num_elec_a: int,
 ) -> NpStrict1DArrayLL:
     global MODULE_RNG
-    
+
     num_configs = bitstring_matrix.shape[0]
     num_carryover = carryover.shape[0]
 
@@ -237,11 +225,11 @@ def subsample_close_shell(
     # This is requirement of the SBD solver.
     # The Hartree Fock bitstring is something like '0000011111'
     hartreefock = (1 << num_elec_a) - 1
-    
+
     # Assume longlong is 64 bit integer.
-    # Bit at index > 64 overflows. 
+    # Bit at index > 64 overflows.
     assert norb < 64
-    
+
     ci_strs_a = np.zeros(num_configs, dtype=np.longlong)
     ci_strs_b = np.zeros(num_configs, dtype=np.longlong)
     ci_strs_carryover = np.zeros(num_carryover, dtype=np.longlong)
@@ -259,11 +247,11 @@ def subsample_close_shell(
         ci_strings=mixed_ci_strigs,
         probabilities=np.tile(probabilities, 2) / 2.0,
     )
-    
+
     # Remove HF string to make sure it appears at index 0
     non_hf_mask = ci_strs_unique != hartreefock
     ci_strs_carryover = ci_strs_carryover[ci_strs_carryover != hartreefock]
-    
+
     num_new_samples = int(np.sqrt(subspace_dim)) - len(ci_strs_carryover) - 1
     if len(ci_strs_unique) > num_new_samples:
         # Choose bitstrings not included in carryover bitstrings
@@ -282,7 +270,9 @@ def subsample_close_shell(
         new_strings = ci_strs_unique[non_hf_mask]
 
     # Carryover bitstrings are always included
-    return np.concatenate(([hartreefock], ci_strs_carryover, new_strings), dtype=np.longlong)
+    return np.concatenate(
+        ([hartreefock], ci_strs_carryover, new_strings), dtype=np.longlong
+    )
 
 
 def _deduplicate_and_accumurate_probs(

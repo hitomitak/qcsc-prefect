@@ -12,7 +12,7 @@
   },
   "de_params": {
     "num_walkers": 4,
-    "iterations": 20,
+    "iterations": 3,
     "randomization_factor": 0.2,
     "fxc": 0.6,
     "cr_prob": 0.9

@@ -1,10 +1,10 @@
 # Workflow for observability demo on Miyabi
-#
-# Author: Naoki Kanazawa (knzwnao@jp.ibm.com)
 
 from typing import Self
 
 import numpy as np
+import os
+import pathlib
 from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_table_artifact
 from prefect.cache_policies import RUN_ID, Inputs
@@ -14,16 +14,14 @@ from pydantic import BaseModel, Field
 from qcsc_workflow_utility.chem import (
     ElectronicProperties,
     compute_molecular_integrals_from_fcidump,
+    NpStrict1DArrayF64,
+    NpStrict2DArrayF64,
 )
 
 from .data_io import extend_table_artifact
 from .flow_params import FlowParameters
 from .lucj import initialize_ucj_parameters
-from .np_type_extension import (
-    NpStrict1DArrayF64,
-    NpStrict2DArrayBool,
-    NpStrict2DArrayF64,
-)
+from .np_type_extension import NpStrict2DArrayBool
 from .sqd import walker_sqd
 
 MODULE_RNG = np.random.default_rng(seed=4574)
@@ -31,6 +29,7 @@ MODULE_RNG = np.random.default_rng(seed=4574)
 
 class OptimizerState(BaseModel):
     """Intermediate data for optimization."""
+
     energies: NpStrict1DArrayF64
     populations: NpStrict2DArrayF64
     carryover: NpStrict2DArrayBool
@@ -38,12 +37,12 @@ class OptimizerState(BaseModel):
         default=None,
         ge=0,
     )
-    
+
     def best_energy(self) -> float | None:
         if self.best_index is None:
             return None
         return float(self.energies[self.best_index])
-    
+
     def copy(self) -> Self:
         return OptimizerState(
             energies=self.energies.copy(),
@@ -51,7 +50,7 @@ class OptimizerState(BaseModel):
             carryover=self.carryover.copy(),
             best_index=self.best_index,
         )
-    
+
     @classmethod
     def from_parameters(
         cls,
@@ -64,7 +63,9 @@ class OptimizerState(BaseModel):
         num_lucj_params = n_reps * (n_aa_params + n_ab_params + norb**2) + norb**2
         return OptimizerState(
             energies=np.zeros(num_walkers, dtype=np.float64),
-            populations=np.full((num_walkers, num_lucj_params), np.nan, dtype=np.float64),
+            populations=np.full(
+                (num_walkers, num_lucj_params), np.nan, dtype=np.float64
+            ),
             carryover=np.full((0, norb), np.nan, dtype=bool),
         )
 
@@ -83,11 +84,11 @@ def riken_sqd_de(
         key="sqd-telemetry",
         description="SQD intermediate data.",
     )
-    
+
     elec_props = compute_molecular_integrals_from_fcidump(
         fcidump_file=parameters.fcidump,
     )
-    
+
     # We assume heavy-hex topology
     # Orbitals for different spins have connections between every 4th orbital.
     aa_indices = [(p, p + 1) for p in range(elec_props.num_orbitals - 1)]
@@ -104,7 +105,7 @@ def riken_sqd_de(
     # Start differential evoluation
     for i in range(parameters.de_params.iterations):
         logger.info(f"Running differential evolution trial {i}")
-        
+
         state = differential_evolution_trial(
             trial_index=i,
             parameters=parameters,
@@ -112,12 +113,12 @@ def riken_sqd_de(
             aa_indices=aa_indices,
             ab_indices=ab_indices,
             state=state,
-        )        
+        )
 
         logger.info(
             f"Current best energy = {state.best_energy()} (walker {state.best_index})"
         )
-    
+
     return state.best_energy()
 
 
@@ -125,13 +126,16 @@ def riken_sqd_de(
     task_run_name="de_trial#{trial_index:02d}",
     # Cache on the flow run ID and trial_index.
     # This is roughly identical with the conventional checkpoint mechanism.
-    cache_policy=Inputs(exclude=[
-        "parameters",
-        "elec_props",
-        "aa_indices",
-        "ab_indices",
-        "state",
-    ]) + RUN_ID,
+    cache_policy=Inputs(
+        exclude=[
+            "parameters",
+            "elec_props",
+            "aa_indices",
+            "ab_indices",
+            "state",
+        ]
+    )
+    + RUN_ID,
 )
 def differential_evolution_trial(
     trial_index: int,
@@ -142,7 +146,7 @@ def differential_evolution_trial(
     state: OptimizerState,
 ) -> OptimizerState:
     logger = get_run_logger()
-    
+
     if state.best_index is not None:
         # Create next generation
         trial_populations = mutation_and_crossover(
@@ -161,7 +165,7 @@ def differential_evolution_trial(
             randomization_factor=parameters.de_params.randomization_factor,
             n_lucj_layers=parameters.circ_params.n_lucj_layers,
         )
-    
+
     futs = PrefectFutureList()
     for walker_index, ucj_parameter in enumerate(trial_populations):
         prefect_fut = walker_sqd.submit(
@@ -178,14 +182,18 @@ def differential_evolution_trial(
         futs.append(prefect_fut)
 
     # Collect results
-    result_energies = np.full(parameters.de_params.num_walkers, np.nan, dtype=np.float64)
-    result_carryovers: list[NpStrict2DArrayBool] = [None] * parameters.de_params.num_walkers
+    result_energies = np.full(
+        parameters.de_params.num_walkers, np.nan, dtype=np.float64
+    )
+    result_carryovers: list[NpStrict2DArrayBool] = [
+        None
+    ] * parameters.de_params.num_walkers
     records: list[dict] = [None] * parameters.de_params.num_walkers
     for walker_index, ((energy, carryover), telemery) in enumerate(futs.result()):
         result_energies[walker_index] = energy
         result_carryovers[walker_index] = carryover
         records[walker_index] = telemery
-    
+
     # Update artifact
     artifact_id = extend_table_artifact(
         artifact_key="sqd-telemetry",
@@ -199,7 +207,7 @@ def differential_evolution_trial(
         trial_carryovers=result_carryovers,
         current_state=state,
     )
-    
+
     return new_state
 
 
@@ -216,14 +224,19 @@ def mutation_and_crossover(
     mutant = np.zeros_like(current_populations, dtype=np.float64)
     for i in range(num_walkers):
         r1, r2, r3, r4 = MODULE_RNG.choice(
-            num_walkers, 
-            size=4, 
+            num_walkers,
+            size=4,
             replace=False,
             shuffle=True,
         )
-        drift_vec = current_populations[r1] - current_populations[r2] + current_populations[r3] - current_populations[r4]
+        drift_vec = (
+            current_populations[r1]
+            - current_populations[r2]
+            + current_populations[r3]
+            - current_populations[r4]
+        )
         mutant[i] = current_populations[best_index] + scaling_factor * drift_vec
-    
+
     for i in range(num_walkers):
         crossover_weights = MODULE_RNG.random(num_params)
         mask = crossover_weights > crossover_rate
@@ -243,10 +256,13 @@ def selection(
     current_state: OptimizerState,
 ) -> OptimizerState:
     logger = get_run_logger()
-    
+
     new_state = current_state.copy()
     best_index = int(np.nanargmin(trial_energies))
-    if current_state.best_energy() is None or trial_energies[best_index] < current_state.best_energy():
+    if (
+        current_state.best_energy() is None
+        or trial_energies[best_index] < current_state.best_energy()
+    ):
         # Update carryover when the best energy is updated
         logger.info(f"walker {best_index}: Update the best energy and carryover")
         new_state.best_index = best_index
@@ -263,3 +279,15 @@ def selection(
             new_state.energies[walker_idx] = trial_energies[walker_idx]
             new_state.populations[walker_idx] = trial_populations[walker_idx]
     return new_state
+
+
+def deploy():
+    """Deploy workflow with a local worker."""
+    # Prefect deploys with relative path.
+    # Workflow is now installed in site-packages.
+    os.chdir(pathlib.Path(__file__).parent)
+
+    riken_sqd_de.serve(
+        name="riken_sqd_de",
+        description="SQD with LUCJ parameter optimization with differential evoluation.",
+    )

@@ -1,7 +1,4 @@
 # Workflow for observability demo on Miyabi
-#
-# Author: Naoki Kanazawa (knzwnao@jp.ibm.com), on miyabi-observability repo
-# Modified: Yuto Morohoshi (mrhsyut@ibm.com), to migrate from miyabi-observability to qii-miyabi-kawasaki repo
 
 
 from src import riken_sqd_de
