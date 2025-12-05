@@ -14,7 +14,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 from skqd_z2lgt.crbm import ConditionalRBM
-from skqd_z2lgt.train_crbm import DefaultCallback, make_l2_loss_fn, cd_meanloss, train_crbm
+from skqd_z2lgt.train_crbm import SuccessRateCallback, make_l2_loss_fn, cd_meanloss, train_crbm
 from skqd_z2lgt.parameters import Parameters
 from skqd_z2lgt.tasks.preprocess import load_reco
 
@@ -119,6 +119,7 @@ def train_generator(
                 '--istep', f'{istep}',
                 '--gpu', f'{igpu}',  # train on igpu
             ]
+            print(' '.join(cmd))
             proc = subprocess.run(cmd, capture_output=True, check=True, text=True)
             for txt, stream in zip([proc.stdout, proc.stderr], [sys.stdout, sys.stderr]):
                 stream.write(txt)
@@ -176,14 +177,13 @@ def train_step_model(
     best_model, records = train_crbm(model, train_u, train_v, test_u, test_v,
                                      crbm_params.train_batch_size, crbm_params.num_epochs,
                                      loss_fn, lr=crbm_params.learning_rate,
-                                     rtol=crbm_params.rtol, callback=DefaultCallback())
+                                     rtol=crbm_params.rtol, callback=SuccessRateCallback())
     save_model(parameters, istep, best_model, records)
     return best_model, records
 
 
 if __name__ == '__main__':
     import argparse
-    from mpi4py import MPI  # pylint: disable=no-name-in-module
 
     parser = argparse.ArgumentParser()
     parser.add_argument('pkgpath')
@@ -206,6 +206,8 @@ if __name__ == '__main__':
         params = Parameters.model_validate_json(src.read())
 
     if options.mpi:
+        # pylint: disable-next=no-name-in-module
+        from mpi4py import MPI
         if options.istep is None:
             isteps = list(range(params.skqd.n_trotter_steps))
         else:

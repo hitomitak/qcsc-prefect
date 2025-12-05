@@ -1,7 +1,6 @@
 # pylint: disable=unused-argument
 """Classes and routines for training the CRBM."""
 from collections.abc import Callable
-from itertools import product
 import logging
 from typing import Any, Optional
 import numpy as np
@@ -53,17 +52,30 @@ class BaseCallback(nnx.Module):
 
 class DefaultCallback(BaseCallback):
     """Default callback module for recording loss and free energy histories."""
-    def __init__(self, eval_every: int = 100, **metrics):
-        self.metrics = nnx.metrics.MultiMetric(
+    def __init__(
+        self,
+        eval_every: int = 100,
+        train_metrics: Optional[dict] = None,
+        test_metrics: Optional[dict] = None
+    ):
+        train_metrics = train_metrics or {}
+        self.train_metrics = nnx.metrics.MultiMetric(
             loss=nnx.metrics.Average('loss'),
             free_energy=nnx.metrics.Average('free_energy'),
-            **metrics
+            **train_metrics
+        )
+        test_metrics = test_metrics or {}
+        self.test_metrics = nnx.metrics.MultiMetric(
+            loss=nnx.metrics.Average('loss'),
+            free_energy=nnx.metrics.Average('free_energy'),
+            **test_metrics
         )
         self.eval_every = eval_every
 
     def init_records(self) -> dict[str, Any]:
-        return {'_'.join(comb): []
-                for comb in product(['train', 'test'], self.metrics._metric_names)}
+        records = {f'train_{name}': [] for name in self.train_metrics._metric_names}
+        records |= {f'test_{name}': [] for name in self.test_metrics._metric_names}
+        return records
 
     def as_arrays(self, records: dict[str, list]):
         for key, value in records.items():
@@ -81,7 +93,7 @@ class DefaultCallback(BaseCallback):
         free_energy = jnp.mean(model.free_energy(u_batch, v_batch))
         updates = {'loss': loss, 'free_energy': free_energy}
         updates |= self._train_step_ext(model, u_batch, v_batch, updates)
-        self.metrics.update(**updates)
+        self.train_metrics.update(**updates)
 
     def _train_step_ext(self, model, u_batch, v_batch, updates):
         return {}
@@ -96,9 +108,9 @@ class DefaultCallback(BaseCallback):
         """Callback at evaluation during training."""
         if (ibatch + 1) % self.eval_every != 0:
             return
-        for metric, value in self.metrics.compute().items():
+        for metric, value in self.train_metrics.compute().items():
             records[f'train_{metric}'].append(float(value))
-        self.metrics.reset()
+        self.train_metrics.reset()
 
     @nnx.jit
     def _test_update(
@@ -111,7 +123,7 @@ class DefaultCallback(BaseCallback):
         free_energy = jnp.mean(model.free_energy(test_u, test_v))
         updates = {'loss': loss, 'free_energy': free_energy}
         updates |= self._test_update_ext(model, test_u, test_v, updates)
-        self.metrics.update(**updates)
+        self.test_metrics.update(**updates)
 
     def _test_update_ext(self, model, test_u, test_v, updates):
         return {}
@@ -127,9 +139,9 @@ class DefaultCallback(BaseCallback):
     ):
         self._test_ext(model, test_u, test_v, loss, iepoch)
         self._test_update(model, test_u, test_v, loss)
-        for metric, value in self.metrics.compute().items():
+        for metric, value in self.test_metrics.compute().items():
             records[f'test_{metric}'].append(float(value))
-        self.metrics.reset()
+        self.test_metrics.reset()
 
     def _test_ext(
         self,
@@ -145,7 +157,10 @@ class DefaultCallback(BaseCallback):
 class NLLCallback(DefaultCallback):
     """Callback with NLL calculation."""
     def __init__(self, eval_every=100):
-        super().__init__(eval_every=eval_every, nll=nnx.metrics.Average('nll'))
+        train_metrics = {'nll': nnx.metrics.Average('nll')}
+        test_metrics = {'nll': nnx.metrics.Average('nll')}
+        super().__init__(eval_every=eval_every, train_metrics=train_metrics,
+                         test_metrics=test_metrics)
 
     @nnx.jit
     def _train_step_ext(self, model, u_batch, v_batch, updates):
@@ -157,6 +172,20 @@ class NLLCallback(DefaultCallback):
     @nnx.jit
     def _test_update_ext(self, model, test_u, test_v, updates):
         return self._train_step_ext(model, test_u, test_v, updates)
+
+
+class SuccessRateCallback(DefaultCallback):
+    """Callback with recovery success rate calculation at test steps."""
+    def __init__(self, eval_every=100):
+        metrics = {f'success_{n}': nnx.metrics.Average(f'success_{n}')
+                   for n in [5, 10, 20, 100]}
+        super().__init__(eval_every=eval_every, test_metrics=metrics)
+
+    @nnx.jit
+    def _test_update_ext(self, model, test_u, test_v, updates):
+        samples = model.sample(test_u, 100)
+        test = jnp.all(jnp.equal(test_v[None, ...], samples), axis=-1)
+        return {f'success_{n}': jnp.any(test[:n], axis=0).astype(int) for n in [5, 10, 20, 100]}
 
 
 @nnx.jit
