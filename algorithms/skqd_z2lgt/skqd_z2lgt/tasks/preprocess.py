@@ -137,7 +137,6 @@ def preprocess_single_array(
 if __name__ == '__main__':
     import sys
     import argparse
-    from mpi4py import MPI  # pylint: disable=no-name-in-module
 
     parser = argparse.ArgumentParser()
     parser.add_argument('pkgpath')
@@ -154,6 +153,7 @@ if __name__ == '__main__':
         params = Parameters.model_validate_json(src.read())
 
     if options.mpi:
+        from mpi4py import MPI  # pylint: disable=no-name-in-module
         comm = MPI.COMM_WORLD
         mpi_rank = comm.Get_rank()
         nsteps = params.skqd.n_trotter_steps
