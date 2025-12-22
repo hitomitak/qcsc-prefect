@@ -187,11 +187,10 @@ class CRBMParameters(BaseModel):
         title='Maximum Epochs',
         ge=1
     )
-    rtol: float = Field(
+    rtol: float | None = Field(
         default=2.,
         description='Convergence condition (max|loss - mean| of the last 5 epochs < rtol * stddev)',
-        title='Convergence Relative Tolerance',
-        ge=0.
+        title='Convergence Relative Tolerance'
     )
 
 

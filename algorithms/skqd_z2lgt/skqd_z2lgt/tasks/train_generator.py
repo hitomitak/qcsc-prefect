@@ -119,7 +119,6 @@ def train_generator(
                 '--istep', f'{istep}',
                 '--gpu', f'{igpu}',  # train on igpu
             ]
-            print(' '.join(cmd))
             proc = subprocess.run(cmd, capture_output=True, check=True, text=True)
             for txt, stream in zip([proc.stdout, proc.stderr], [sys.stdout, sys.stderr]):
                 stream.write(txt)
