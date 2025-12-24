@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field, field_validator
 class LGTParameters(BaseModel):
     """Parameters to specify the Z2 LGT."""
 
-    lattice: str = Field(
-        default='full_156q',
+    lattice: str | tuple[int, int] = Field(
+        default=(8, 8),
         description='Two-dimensional lattice configuration.',
         title='Lattice Configuration'
     )
@@ -81,12 +81,6 @@ class DMRGParameters(BaseModel):
 class CircuitParameters(BaseModel):
     """Configuration for circuit."""
 
-    basis_2q: str = Field(
-        default='rzz',
-        description='Two-qubit gate used in the Trotter circuit ("cx", "cz", or "rzz"). Note that'
-                    ' the selection "rzz" will utilize CZ gates together with Rzz.',
-        title='Base two-qubit gate'
-    )
     layout: Optional[list[int]] = Field(
         default=None,
         description='Qubit layout.',

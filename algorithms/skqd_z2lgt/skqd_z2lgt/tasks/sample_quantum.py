@@ -6,11 +6,9 @@ from pathlib import Path
 from typing import Optional
 import h5py
 from qiskit.circuit import QuantumCircuit
-from qiskit.transpiler import Target, PassManager, generate_preset_pass_manager
-from qiskit.transpiler.passes import Optimize1qGatesDecomposition, RemoveIdentityEquivalent
+from qiskit.transpiler import Target
 from qiskit.primitives import BitArray, PrimitiveResult
 from qiskit_ibm_runtime import QiskitRuntimeService, Sampler
-from qiskit_ibm_runtime.transpiler.passes import FoldRzzAngle
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.parameters import Parameters
 from skqd_z2lgt.circuits import make_step_circuits, compose_trotter_circuits
@@ -39,31 +37,17 @@ def get_trotter_circuits(
     logger = logger or logging.getLogger(__name__)
 
     lattice = TriangularZ2Lattice(parameters.lgt.lattice)
-    layout = lattice.layout_heavy_hex(target=target, basis_2q=parameters.circuit.basis_2q)
+    circuits, layout = make_step_circuits(lattice, parameters.lgt.plaquette_energy,
+                                          parameters.skqd.dt, target,
+                                          charged_vertices=parameters.lgt.charged_vertices,
+                                          layout=parameters.circuit.layout,
+                                          optimization_level=parameters.circuit.optimization_level)
 
-    pm = generate_preset_pass_manager(
-        optimization_level=parameters.circuit.optimization_level,
-        target=target,
-        initial_layout=layout,
-    )
-    pm.post_optimization = PassManager(
-        [
-            FoldRzzAngle(),
-            Optimize1qGatesDecomposition(target=target),  # Cancel added local gates
-            RemoveIdentityEquivalent(target=target),  # Remove GlobalPhaseGate
-        ]
-    )
-    circuits = make_step_circuits(lattice, parameters.lgt.plaquette_energy,
-                                  parameters.skqd.dt, parameters.circuit.basis_2q,
-                                  parameters.lgt.charged_vertices)
-    # Somehow the combination of multiprocessing pm.run + prefect task causes the former to hang
-    logger.info('Transpiling circuits')
-    init, full_step, fwd_step, bkd_step, measure = [pm.run(circuit) for circuit in circuits]
-
-    id_step = fwd_step.compose(bkd_step)
-    exp_circuits = compose_trotter_circuits(init, full_step, measure,
-                                            parameters.skqd.n_trotter_steps)
-    ref_circuits = compose_trotter_circuits(init, id_step, measure, parameters.skqd.n_trotter_steps)
+    steps = list(range(1, int(parameters.skqd.n_trotter_steps) + 1))
+    exp_circuits = compose_trotter_circuits(circuits[0], circuits[1], circuits[3], circuits[5],
+                                            steps)
+    ref_circuits = compose_trotter_circuits(circuits[0], circuits[2], circuits[4], circuits[5],
+                                            steps)
     return layout, exp_circuits, ref_circuits
 
 
