@@ -25,7 +25,7 @@ def check_models(
     """Check existence of saved models without loading."""
     missing_isteps = []
     dirpath = Path(parameters.pkgpath) / 'crbm'
-    for istep in range(parameters.skqd.n_trotter_steps):
+    for istep in range(parameters.skqd.num_krylov):
         if not os.path.exists(dirpath / f'step{istep}.h5'):
             missing_isteps.append(istep)
     return missing_isteps
@@ -208,7 +208,7 @@ if __name__ == '__main__':
         # pylint: disable-next=no-name-in-module
         from mpi4py import MPI
         if options.istep is None:
-            isteps = list(range(params.skqd.n_trotter_steps))
+            isteps = list(range(params.skqd.num_krylov))
         else:
             isteps = options.istep
 

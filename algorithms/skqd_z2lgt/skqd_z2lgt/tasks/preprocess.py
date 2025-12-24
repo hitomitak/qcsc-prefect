@@ -31,7 +31,7 @@ def save_reco(
         pass
 
     for etype, arrays in zip(['exp', 'ref'], reco_data):
-        for istep in range(parameters.skqd.n_trotter_steps):
+        for istep in range(parameters.skqd.num_krylov):
             path = dirpath / f'{etype}_step{istep}.h5'
             with h5py.File(path, 'w', libver='latest') as out:
                 for name, array in zip(['vtx', 'plaq'], arrays[istep]):
@@ -49,7 +49,7 @@ def load_reco(
     else:
         etypes = [etype]
     if istep is None:
-        isteps = list(range(parameters.skqd.n_trotter_steps))
+        isteps = list(range(parameters.skqd.num_krylov))
     else:
         isteps = [istep]
 
@@ -156,7 +156,7 @@ if __name__ == '__main__':
         from mpi4py import MPI  # pylint: disable=no-name-in-module
         comm = MPI.COMM_WORLD
         mpi_rank = comm.Get_rank()
-        nsteps = params.skqd.n_trotter_steps
+        nsteps = params.skqd.num_krylov
         if mpi_rank < nsteps:
             et = 'exp'
         else:

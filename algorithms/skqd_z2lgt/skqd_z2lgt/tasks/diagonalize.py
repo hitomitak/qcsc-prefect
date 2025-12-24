@@ -222,7 +222,7 @@ def diagonalize(
         generate_fn = _make_batch_generator(parameters.skqd.num_gen)
         logger.info('Loading and compiling CRBM models')
         crbm_models = [load_model(parameters, istep, jax_device_id=istep % jax.device_count())[0]
-                       for istep in range(parameters.skqd.n_trotter_steps)]
+                       for istep in range(parameters.skqd.num_krylov)]
         compile_models(parameters, crbm_models)
     else:
         ref_data = load_reco(parameters, etype='ref')

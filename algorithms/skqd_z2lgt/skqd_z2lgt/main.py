@@ -214,7 +214,7 @@ async def preprocess(
     logger.info('Correcting and converting link states to plaquette states')
 
     job_block = await MiyabiJobBlock.load(cpu_scriptjob_name)
-    job_block.num_nodes = 2 * parameters.skqd.n_trotter_steps
+    job_block.num_nodes = 2 * parameters.skqd.num_krylov
     job_block.mpiprocs = 1
     job_block.walltime = '00:03:00'
 

@@ -84,7 +84,12 @@ class CircuitParameters(BaseModel):
     layout: Optional[list[int]] = Field(
         default=None,
         description='Qubit layout.',
-        title='Qubit layout'
+        title='Qubit Layout'
+    )
+    trotter_steps_per_dt: Optional[list[int]] = Field(
+        default=None,
+        description='Number of Trotter steps for each evolution step.',
+        title='Trotter Steps Per Evolution Step'
     )
     optimization_level: int = Field(
         default=3,
@@ -191,17 +196,16 @@ class CRBMParameters(BaseModel):
 class SKQDParameters(BaseModel):
     """Configuration for SKQD algorithm execution."""
 
-    n_trotter_steps: int = Field(
-        default=8,
-        description="Number of Trotter steps (Krylov dimension).",
-        title="Trotter Steps",
+    num_krylov: int = Field(
+        default=4,
+        description="Number of Krylov vectors excluding the initial state.",
+        title="Number of Unitary Krylov Vectors",
         ge=1,
     )
-    dt: float = Field(
-        default=0.02,
-        description="Time Interval for Trotterization.",
-        title="Time Interval",
-        ge=0,
+    time_steps: list[float] = Field(
+        default=[0.4],
+        description="Time Steps for Unitary Krylov Vectors.",
+        title="Time Steps",
     )
     num_gen: int = Field(
         default=3,

@@ -36,18 +36,27 @@ def get_trotter_circuits(
     """
     logger = logger or logging.getLogger(__name__)
 
-    lattice = TriangularZ2Lattice(parameters.lgt.lattice)
-    circuits, layout = make_step_circuits(lattice, parameters.lgt.plaquette_energy,
-                                          parameters.skqd.dt, target,
-                                          charged_vertices=parameters.lgt.charged_vertices,
-                                          layout=parameters.circuit.layout,
-                                          optimization_level=parameters.circuit.optimization_level)
+    if (trotter_steps_per_dt := parameters.circuit.trotter_steps_per_dt) is None:
+        trotter_steps_per_dt = [1] * len(parameters.lgt.time_steps)
 
-    steps = list(range(1, int(parameters.skqd.n_trotter_steps) + 1))
-    exp_circuits = compose_trotter_circuits(circuits[0], circuits[1], circuits[3], circuits[5],
-                                            steps)
-    ref_circuits = compose_trotter_circuits(circuits[0], circuits[2], circuits[4], circuits[5],
-                                            steps)
+    lattice = TriangularZ2Lattice(parameters.lgt.lattice)
+    exp_circuits = []
+    ref_circuits = []
+    for time_step, n_tr in zip(parameters.lgt.time_steps, trotter_steps_per_dt):
+        circuits, layout = make_step_circuits(
+            lattice, parameters.lgt.plaquette_energy, time_step / n_tr, target,
+            charged_vertices=parameters.lgt.charged_vertices,
+            layout=parameters.circuit.layout,
+            optimization_level=parameters.circuit.optimization_level
+        )
+
+        steps = list(range(n_tr, (int(parameters.skqd.num_krylov) + 1) * n_tr, n_tr))
+        exp_circuits.append(
+            compose_trotter_circuits(circuits[0], circuits[1], circuits[3], circuits[5], steps)
+        )
+        ref_circuits.append(
+            compose_trotter_circuits(circuits[0], circuits[2], circuits[4], circuits[5], steps)
+        )
     return layout, exp_circuits, ref_circuits
 
 
@@ -67,45 +76,56 @@ def save_raw(
 
     ires = 0
     for etype in ['exp', 'ref']:
-        for istep in range(parameters.skqd.n_trotter_steps):
-            path = dirpath / f'{etype}_step{istep}.h5'
-            with h5py.File(path, 'w', libver='latest') as out:
-                bit_array = pub_result[ires].data.c
-                dataset = out.create_dataset('link', data=bit_array.array)
-                dataset.attrs['num_bits'] = bit_array.num_bits
-                ires += 1
+        for idt, time_step in enumerate(parameters.skqd.time_steps):
+            for ikr in range(1, parameters.skqd.num_krylov + 1):
+                path = dirpath / f'{etype}_dt{idt}_k{ikr}.h5'
+                with h5py.File(path, 'w', libver='latest') as out:
+                    out.attrs['time_step'] = time_step
+                    bit_array = pub_result[ires].data.c
+                    dataset = out.create_dataset('link', data=bit_array.array)
+                    dataset.attrs['num_bits'] = bit_array.num_bits
+                    ires += 1
 
 
 def load_raw(
     parameters: Parameters,
     etype: Optional[str] = None,
+    idt: Optional[int] = None,
     istep: Optional[int] = None
-) -> tuple[list[BitArray], list[BitArray]] | list[BitArray] | BitArray:
+) -> (tuple[list[list[BitArray]], list[list[BitArray]]] | list[list[BitArray]] | list[BitArray]
+      | BitArray):
     """Load the sampled bitstrings from files."""
-    def read_bit_array(dataset):
-        return BitArray(dataset[()], int(dataset.attrs['num_bits']))
+    def read_bit_array(et, itm, ikr):
+        filename = Path(parameters.pkgpath) / 'data' / 'raw' / f'{et}_dt{itm}_k{ikr}.h5'
+        with h5py.File(filename, 'r', libver='latest') as source:
+            dataset = source['link']
+            return BitArray(dataset[()], int(dataset.attrs['num_bits']))
 
-    if etype is None:
-        etypes = ['exp', 'ref']
-    else:
-        etypes = [etype]
-    if istep is None:
-        isteps = list(range(parameters.skqd.n_trotter_steps))
-    else:
-        isteps = [istep]
-
-    dirpath = Path(parameters.pkgpath) / 'data' / 'raw'
-    data = tuple([] for _ in range(len(etypes)))
-    for et, rdata in zip(etypes, data):
-        for ist in isteps:
-            with h5py.File(dirpath / f'{et}_step{ist}.h5', 'r', libver='latest') as source:
-                rdata.append(read_bit_array(source['link']))
-
-    if etype is None:
-        return data
-    elif istep is None:
-        return data[0]
-    return data[0][0]
+    if etype is not None:
+        if idt is not None:
+            if istep is not None:
+                return read_bit_array(etype, idt, istep)
+            return [
+                read_bit_array(etype, idt, ikr)
+                for ikr in range(1, parameters.skqd.num_krylov + 1)
+            ]
+        return [
+            [
+                read_bit_array(etype, itm, ikr)
+                for ikr in range(1, parameters.skqd.num_krylov + 1)
+            ]
+            for itm in range(len(parameters.skqd.time_steps))
+        ]
+    return tuple(
+        [
+            [
+                read_bit_array(et, itm, ikr)
+                for ikr in range(1, parameters.skqd.num_krylov + 1)
+            ]
+            for itm in range(len(parameters.skqd.time_steps))
+        ]
+        for et in ['exp', 'ref']
+    )
 
 
 def sample_quantum_flow(
@@ -137,7 +157,8 @@ def sample_quantum_flow(
         layout, exp_circuits, ref_circuits = get_trotter_circuits(parameters, target, logger)
         # Run primitive
         logger.info('Submitting a runtime job')
-        pub_result, job_id = sample_fn(exp_circuits + ref_circuits)
+        circuits = sum(exp_circuits, []) + sum(ref_circuits, [])
+        pub_result, job_id = sample_fn(circuits)
 
         parameters.circuit.layout = layout
         parameters.runtime.job_id = job_id
