@@ -213,14 +213,21 @@ async def preprocess(
     logger = get_run_logger()
     logger.info('Correcting and converting link states to plaquette states')
 
-    job_block = await MiyabiJobBlock.load(cpu_scriptjob_name)
-    job_block.num_nodes = 2 * parameters.skqd.num_krylov
-    job_block.mpiprocs = 1
-    job_block.walltime = '00:03:00'
+    async def convert_miyabi(task_specs):
+        job_block = await MiyabiJobBlock.load(cpu_scriptjob_name)
+        job_block.num_nodes = len(task_specs)
+        job_block.mpiprocs = 1
+        job_block.walltime = '00:10:00'
 
-    async def convert_miyabi():
         with job_block.get_executor() as executor:
-            arguments = [TASK_SCRIPT_DIR / 'preprocess.py', parameters.pkgpath, '--mpi']
+            arguments = [
+                TASK_SCRIPT_DIR / 'preprocess.py',
+                parameters.pkgpath,
+                '--mpi',
+                '--etype', ','.join(task[0] for task in task_specs),
+                '--idt', ','.join(str(task[1]) for task in task_specs),
+                '--ikrylov', ','.join(str(task[2]) for task in task_specs)
+            ]
             exit_status = await executor.execute_job(
                 arguments=arguments,
                 **job_block.get_job_variables()
@@ -228,9 +235,9 @@ async def preprocess(
         if exit_status != 0:
             raise RuntimeError('PBS job preprocess.py failed')
 
-    def convert_fn():
+    def convert_fn(task_specs):
         with ThreadPoolExecutor(1) as executor:
-            executor.submit(lambda: asyncio.run(convert_miyabi())).result()
+            executor.submit(lambda: asyncio.run(convert_miyabi(task_specs))).result()
 
     preprocess_flow(parameters, convert_fn, logger=logger)
 

@@ -4,6 +4,7 @@ import os
 from collections.abc import Callable
 import logging
 from pathlib import Path
+from itertools import product
 from typing import Optional
 import numpy as np
 import h5py
@@ -13,58 +14,69 @@ from skqd_z2lgt.utils import read_bits, save_bits
 from skqd_z2lgt.tasks.sample_quantum import load_raw
 from skqd_z2lgt.tasks.common import make_dual_lattice
 
-RecoData = list[tuple[np.ndarray, np.ndarray]]  # [(vertex data, plaquette data)] * steps
+RecoData = tuple[np.ndarray, np.ndarray]  # (vertex data, plaquette data)
 
 
 def save_reco(
     parameters: Parameters,
-    reco_data: tuple[RecoData, RecoData],
+    arrays: RecoData,
+    etype: str,
+    idt: int,
+    ikrylov: int,
     logger: Optional[logging.Logger] = None
 ):
     """Save vertex and plaquette data to files."""
     logger = logger or logging.getLogger(__name__)
     logger.info('Saving vertex and plaquette data')
-    dirpath = Path(parameters.pkgpath) / 'data' / 'reco'
-    try:
-        os.makedirs(dirpath)
-    except FileExistsError:
-        pass
 
-    for etype, arrays in zip(['exp', 'ref'], reco_data):
-        for istep in range(parameters.skqd.num_krylov):
-            path = dirpath / f'{etype}_step{istep}.h5'
-            with h5py.File(path, 'w', libver='latest') as out:
-                for name, array in zip(['vtx', 'plaq'], arrays[istep]):
-                    save_bits(out, name, array)
+    path = Path(parameters.pkgpath) / 'data' / 'reco' / f'{etype}_dt{idt}_k{ikrylov}.h5'
+    os.makedirs(path.parent, exist_ok=True)
+    with h5py.File(path, 'w', libver='latest') as out:
+        for name, array in zip(['vtx', 'plaq'], arrays):
+            save_bits(out, name, array)
+
+
+def check_reco(
+    parameters: Parameters,
+    etype: str,
+    idt: int,
+    ikrylov: int,
+    logger: Optional[logging.Logger] = None
+):
+    logger = logger or logging.getLogger(__name__)
+    path = Path(parameters.pkgpath) / 'data' / 'reco' / f'{etype}_dt{idt}_k{ikrylov}.h5'
+    if os.path.exists(path):
+        logger.info('Reco data for etype=%s idt=%d ikrylov=%d already exists.', etype, idt, ikrylov)
+        return True
+    return False
 
 
 def load_reco(
     parameters: Parameters,
     etype: Optional[str] = None,
-    istep: Optional[int] = None
-) -> tuple[RecoData, RecoData] | RecoData | tuple[np.ndarray, np.ndarray]:
+    idt: Optional[int] = None,
+    ikrylov: Optional[int] = None
+) -> (tuple[list[list[RecoData]], list[list[RecoData]]] | list[list[RecoData]] | list[RecoData]
+      | RecoData):
     """Load vertex and plaquette data from files."""
-    if etype is None:
-        etypes = ['exp', 'ref']
-    else:
-        etypes = [etype]
-    if istep is None:
-        isteps = list(range(parameters.skqd.num_krylov))
-    else:
-        isteps = [istep]
+    def read_reco_data(et, itm, ikr):
+        path = Path(parameters.pkgpath) / 'data' / 'reco' / f'{et}_dt{itm}_k{ikr}.h5'
+        with h5py.File(path, 'r', libver='latest') as source:
+            return tuple(read_bits(source[name]) for name in ['vtx', 'plaq'])
 
-    dirpath = Path(parameters.pkgpath) / 'data' / 'reco'
-    data = tuple([] for _ in range(len(etypes)))
-    for etp, rdata in zip(etypes, data):
-        for istp in isteps:
-            with h5py.File(dirpath / f'{etp}_step{istp}.h5', 'r', libver='latest') as source:
-                rdata.append((read_bits(source['vtx']), read_bits(source['plaq'])))
+    def read_dt_data(et, itm):
+        return [read_reco_data(et, itm, ikr) for ikr in range(1, parameters.skqd.num_krylov + 1)]
+
+    def read_et_data(et):
+        return [read_dt_data(et, itm) for itm in range(len(parameters.skqd.time_steps))]
 
     if etype is None:
-        return data
-    if istep is None:
-        return data[0]
-    return data[0][0]
+        return tuple(read_et_data(et) for et in ['exp', 'ref'])
+    if idt is None:
+        return read_et_data(etype)
+    if ikrylov is None:
+        return read_dt_data(etype, idt)
+    return read_reco_data(etype, idt, ikrylov)
 
 
 def preprocess_flow(
@@ -74,18 +86,17 @@ def preprocess_flow(
 ):
     """Correct the link-state bitstrings with MWPM and convert to plaquette-state bitstrings."""
     logger = logger or logging.getLogger(__name__)
-
-    try:
-        load_reco(parameters)
-    except FileNotFoundError:
-        pass
-    else:
-        logger.info('All link-state bitstrings already converted')
-        return
-
     logger.info('Correcting the charge sector of link-state bitstrings and converting them to '
                 'vertex and plaquette data')
-    convert_fn()
+
+    tasks = []
+    for etype in ['exp', 'ref']:
+        for idt in range(len(parameters.skqd.time_steps)):
+            for ikrylov in range(1, parameters.skqd.num_krylov + 1):
+                if not check_reco(parameters, etype, idt, ikrylov, logger=logger):
+                    tasks.append((etype, idt, ikrylov))
+
+    convert_fn(tasks)
 
 
 def preprocess(
@@ -93,17 +104,14 @@ def preprocess(
     logger: Optional[logging.Logger] = None
 ):
     """Standalone preprocess function."""
-    def convert_fn():
+    def convert_fn(tasks):
         dual_lattice = make_dual_lattice(parameters)
-        raw_data = load_raw(parameters)
+        batch_size = parameters.runtime.shots // (os.cpu_count() - 1)
 
-        reco_data = ([], [])
-        batch_size = parameters.runtime.shots // 20
-        for raw, reco in zip(raw_data, reco_data):
-            for array in raw:
-                reco.append(convert_link_to_plaq(array, dual_lattice, batch_size=batch_size))
-
-        save_reco(parameters, reco_data)
+        for etype, idt, ikrylov in tasks:
+            bit_array = load_raw(parameters, etype, idt, ikrylov)
+            arrays = convert_link_to_plaq(bit_array, dual_lattice, batch_size=batch_size)
+            save_reco(parameters, arrays, etype, idt, ikrylov, logger=logger)
 
     preprocess_flow(parameters, convert_fn, logger=logger)
 
@@ -111,24 +119,22 @@ def preprocess(
 def preprocess_single_array(
     parameters: Parameters,
     etype: str,
-    istep: int,
+    idt: int,
+    ikrylov: int,
     logger: Optional[logging.Logger] = None
 ):
     """Preprocess one bit array parallelized over all cores and save the result."""
     logger = logger or logging.getLogger(__name__)
-    logger.info('Preprocessing %s step %d', etype, istep)
+    logger.info('Preprocessing %s, time interval %f, Krylov vector %d',
+                etype, parameters.skqd.time_steps[idt], ikrylov)
 
-    bit_array = load_raw(parameters, etype, istep)
+    bit_array = load_raw(parameters, etype, idt, ikrylov)
     dual_lattice = make_dual_lattice(parameters)
     batch_size = bit_array.num_shots // (os.cpu_count() - 1)
     arrays = convert_link_to_plaq(bit_array, dual_lattice, batch_size)
 
-    path = Path(parameters.pkgpath) / 'data' / 'reco' / f'{etype}_step{istep}.h5'
-    try:
-        os.makedirs(path.parent)
-    except FileExistsError:
-        pass
-
+    path = Path(parameters.pkgpath) / 'data' / 'reco' / f'{etype}_dt{idt}_k{ikrylov}.h5'
+    os.makedirs(path.parent, exist_ok=True)
     with h5py.File(path, 'w', libver='latest') as out:
         for name, array in zip(['vtx', 'plaq'], arrays):
             save_bits(out, name, array)
@@ -142,7 +148,8 @@ if __name__ == '__main__':
     parser.add_argument('pkgpath')
     parser.add_argument('--mpi', action='store_true')
     parser.add_argument('--etype')
-    parser.add_argument('--istep', type=int)
+    parser.add_argument('--idt')
+    parser.add_argument('--ikrylov')
     parser.add_argument('--log-level', default='INFO')
     options = parser.parse_args()
 
@@ -152,18 +159,23 @@ if __name__ == '__main__':
     with open(Path(options.pkgpath) / 'parameters.json', 'r', encoding='utf-8') as src:
         params = Parameters.model_validate_json(src.read())
 
+    if options.etype:
+        etypes = options.etype.split(',')
+        idts = list(map(int, options.idt.split(',')))
+        ikrylovs = list(map(int, options.ikrylov.split(',')))
+        if not (len(etypes) == len(idts) == len(ikrylovs)):
+            raise ValueError('Lengths of etype, idt, and ikrylov lists do not match')
+        task_specs = list(zip(etypes, idts, ikrylovs))
+    else:
+        etypes = ['exp', 'ref']
+        idts = list(range(len(params.skqd.time_steps)))
+        ikrylovs = list(range(1, params.skqd.num_krylov + 1))
+        task_specs = list(product(etypes, idts, ikrylovs))
+
     if options.mpi:
         from mpi4py import MPI  # pylint: disable=no-name-in-module
         comm = MPI.COMM_WORLD
-        mpi_rank = comm.Get_rank()
-        nsteps = params.skqd.num_krylov
-        if mpi_rank < nsteps:
-            et = 'exp'
-        else:
-            et = 'ref'
-        ist = mpi_rank % nsteps
-    else:
-        et = options.etype
-        ist = options.istep
+        task_specs = [task_specs[comm.Get_rank()]]
 
-    preprocess_single_array(params, et, ist)
+    for task_spec in task_specs:
+        preprocess_single_array(params, *task_spec)

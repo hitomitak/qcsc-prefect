@@ -69,10 +69,7 @@ def save_raw(
     logger = logger or logging.getLogger(__name__)
     logger.info('Saving raw link data')
     dirpath = Path(parameters.pkgpath) / 'data' / 'raw'
-    try:
-        os.makedirs(dirpath)
-    except FileExistsError:
-        pass
+    os.makedirs(dirpath, exist_ok=True)
 
     ires = 0
     for etype in ['exp', 'ref']:
@@ -91,7 +88,7 @@ def load_raw(
     parameters: Parameters,
     etype: Optional[str] = None,
     idt: Optional[int] = None,
-    istep: Optional[int] = None
+    ikrylov: Optional[int] = None
 ) -> (tuple[list[list[BitArray]], list[list[BitArray]]] | list[list[BitArray]] | list[BitArray]
       | BitArray):
     """Load the sampled bitstrings from files."""
@@ -101,31 +98,19 @@ def load_raw(
             dataset = source['link']
             return BitArray(dataset[()], int(dataset.attrs['num_bits']))
 
-    if etype is not None:
-        if idt is not None:
-            if istep is not None:
-                return read_bit_array(etype, idt, istep)
-            return [
-                read_bit_array(etype, idt, ikr)
-                for ikr in range(1, parameters.skqd.num_krylov + 1)
-            ]
-        return [
-            [
-                read_bit_array(etype, itm, ikr)
-                for ikr in range(1, parameters.skqd.num_krylov + 1)
-            ]
-            for itm in range(len(parameters.skqd.time_steps))
-        ]
-    return tuple(
-        [
-            [
-                read_bit_array(et, itm, ikr)
-                for ikr in range(1, parameters.skqd.num_krylov + 1)
-            ]
-            for itm in range(len(parameters.skqd.time_steps))
-        ]
-        for et in ['exp', 'ref']
-    )
+    def read_dt_arrays(et, itm):
+        return [read_bit_array(et, itm, ikr) for ikr in range(1, parameters.skqd.num_krylov + 1)]
+
+    def read_et_arrays(et):
+        return [read_dt_arrays(et, itm) for itm in range(len(parameters.skqd.time_steps))]
+
+    if etype is None:
+        return tuple(read_et_arrays(et) for et in ['exp', 'ref'])
+    if idt is None:
+        return read_et_arrays(etype)
+    if ikrylov is None:
+        return read_dt_arrays(etype, idt)
+    return read_bit_array(etype, idt, ikrylov)
 
 
 def sample_quantum_flow(
