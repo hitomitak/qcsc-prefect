@@ -18,12 +18,13 @@ from skqd_z2lgt.extensions import extensions
 from skqd_z2lgt.crbm import ConditionalRBM
 from skqd_z2lgt.parameters import Parameters
 from skqd_z2lgt.utils import read_bits
-from skqd_z2lgt.tasks.preprocess import load_reco
+from skqd_z2lgt.tasks.preprocess import RecoData, load_reco
 from skqd_z2lgt.tasks.train_generator import load_model
 from skqd_z2lgt.tasks.common import make_dual_lattice
 
 
-def _generate_states(model, vtx_data, plaq_data, generate_fn, batch_size):
+def _generate_states(model, reco_data, generate_fn, batch_size):
+    vtx_data, plaq_data = reco_data
     shots = plaq_data.shape[0]
     num_p = plaq_data.shape[1]
 
@@ -58,10 +59,10 @@ def _make_batch_generator(num_gen):
     return generate_fn
 
 
-def _generate_with_crbm(
+def _generate_cr(
     parameters: Parameters,
-    exp_data: list[tuple[np.ndarray, np.ndarray]],
-    crbm_models: list[ConditionalRBM],
+    exp_data: list[list[RecoData]],
+    crbm_models: list[list[ConditionalRBM]],
     generate_fn: Callable,
     logger: Optional[logging.Logger] = None
 ) -> list[np.ndarray]:
@@ -75,29 +76,19 @@ def _generate_with_crbm(
     with ThreadPoolExecutor() as executor:
         futures = [
             executor.submit(_generate_states,
-                            crbm_models[istep], exp_data[istep][0], exp_data[istep][1],
-                            generate_fn, parameters.crbm.gen_batch_size)
-            for istep in range(len(exp_data))
+                            crbm_models[idt][ikr], exp_data[idt][ikr], generate_fn,
+                            parameters.crbm.gen_batch_size)
+            for idt in range(len(parameters.skqd.time_steps))
+            for ikr in range(len(parameters.skqd.num_krylov))
         ]
     gen_states = [future.result() for future in futures]
     logger.info('Generation took %.2f seconds.', time.time() - start)
     return gen_states
 
 
-def compile_models(parameters: Parameters, models: list[ConditionalRBM]):
-    """Compile the sample function of the CRBM models."""
-    for crbm in models:
-        with jax.default_device(crbm.weights_vu.value.device):
-            crbm.sample(
-                jnp.zeros((parameters.crbm.gen_batch_size, crbm.weights_vu.shape[1]),
-                          dtype=np.uint8),
-                size=parameters.skqd.num_gen
-            )
-
-
 def _generate_random(
     parameters: Parameters,
-    exp_data: list[tuple[np.ndarray, np.ndarray]],
+    exp_data: list[list[RecoData]],
     mean_activation: list[np.ndarray],
     seed: int,
     logger: Optional[logging.Logger] = None
@@ -182,7 +173,11 @@ def diagonalize_init(
     exp_data = load_reco(parameters, etype='exp')
     dual_lattice = make_dual_lattice(parameters)
     hamiltonian = dual_lattice.make_hamiltonian(parameters.lgt.plaquette_energy)
-    states = np.concatenate([pdata for _, pdata in exp_data], axis=0)
+    plaq_data = []
+    for dt_data in exp_data:
+        for _, pdata in dt_data:
+            plaq_data.append(pdata)
+    states = np.concatenate(plaq_data, axis=0)
     logger.info('Number of bitstrings from circuit sampling: %d', states.shape[0])
     for fname in parameters.skqd.extensions:
         states = extensions[fname](states, dual_lattice)
@@ -199,9 +194,7 @@ def diagonalize_init(
 
 def diagonalize(
     parameters: Parameters,
-    energy_init: float,
-    states_init: np.ndarray,
-    gen_mode: str,  # 'rcv' or 'rnd'
+    gen_mode: str,  # 'cr' or 'rn'
     jax_device_id: int = 0,
     logger: Optional[logging.Logger] = None
 ) -> float:
@@ -218,30 +211,38 @@ def diagonalize(
     dual_lattice = make_dual_lattice(parameters)
     hamiltonian = dual_lattice.make_hamiltonian(parameters.lgt.plaquette_energy)
 
-    if gen_mode == 'rcv':
+    if gen_mode == 'cr':
         generate_fn = _make_batch_generator(parameters.skqd.num_gen)
         logger.info('Loading and compiling CRBM models')
-        crbm_models = [load_model(parameters, istep, jax_device_id=istep % jax.device_count())[0]
-                       for istep in range(parameters.skqd.num_krylov)]
-        compile_models(parameters, crbm_models)
+        idev = 0
+        comp_shape = (parameters.crbm.gen_batch_size, parameters.skqd.num_gen)
+        crbm_models = []
+        for idt in range(len(parameters.skqd.time_steps)):
+            crbm_models.append([])
+            for ikrylov in range(parameters.skqd.num_krylov):
+                crbm_models[-1].append(
+                    load_model(parameters, idt, ikrylov, compile_for=comp_shape, jax_device_id=idev)
+                )
+                idev += 1
     else:
         ref_data = load_reco(parameters, etype='ref')
         logger.info('Using the mean of reference circuit data as single-plaquette probability')
-        mean_activation = [np.mean(plaq_data, axis=0) for _, plaq_data in ref_data]
+        mean_activation = [
+            [np.mean(plaq_data, axis=0) for _, plaq_data in dt_data]
+            for dt_data in ref_data
+        ]
 
     energies = []
     subspace_dims = []
-    relevant_states = states_init
+    relevant_states = None
     max_size = None
-    prev_energy = energy_init
-
     is_last = False
     for it in range(parameters.skqd.max_iterations):
-        logger.info('Iteration %d: %d relevant states', it, relevant_states.shape[0])
+        logger.info('SKQD iteration %d', it)
         is_last = it == parameters.skqd.max_iterations - 1
 
-        if gen_mode == 'rcv':
-            gen_states = _generate_with_crbm(parameters, exp_data, crbm_models, generate_fn, logger)
+        if gen_mode == 'cr':
+            gen_states = _generate_cr(parameters, exp_data, crbm_models, generate_fn, logger)
         else:
             gen_states = _generate_random(parameters, exp_data, mean_activation, 12345 + it, logger)
 
