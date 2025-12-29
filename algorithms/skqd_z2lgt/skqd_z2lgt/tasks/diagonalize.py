@@ -10,6 +10,7 @@ import numpy as np
 from scipy.sparse import csr_array
 import h5py
 import jax
+import jax.numpy as jnp
 from flax import nnx
 from skqd_z2lgt.sqd import sqd, make_hproj, uniquify_states
 from skqd_z2lgt.extensions import extensions
@@ -19,6 +20,50 @@ from skqd_z2lgt.utils import read_bits, save_bits
 from skqd_z2lgt.tasks.preprocess import RecoData, load_reco
 from skqd_z2lgt.tasks.train_generator import load_model
 from skqd_z2lgt.tasks.common import make_dual_lattice
+
+
+def _prepare_data_and_models(
+    parameters: Parameters,
+    exp_data: list[list[RecoData]],
+    logger: logging.Logger
+):
+    num_vertices = exp_data[0][0][0].shape[1]
+    num_plaquettes = exp_data[0][0][1].shape[1]
+    shots = parameters.runtime.shots_exp
+    batch_size = parameters.crbm.gen_batch_size
+    num_batches = int(np.ceil(shots / batch_size).astype(int))
+    if (residue := num_batches * batch_size - shots) != 0:
+        padding = (
+            np.zeros((residue, num_vertices), dtype=np.uint8),
+            np.zeros((residue, num_plaquettes), dtype=np.uint8)
+        )
+    else:
+        padding = None
+
+    logger.info('Loading and compiling CRBM models')
+    idev = 0
+    comp_shape = (parameters.crbm.gen_batch_size, parameters.skqd.num_gen)
+    crbm_models = []
+    for idt in range(len(parameters.skqd.time_steps)):
+        crbm_models.append([])
+        for ikrylov in range(1, parameters.skqd.num_krylov + 1):
+            crbm_models[-1].append(
+                load_model(parameters, idt, ikrylov, compile_for=comp_shape, jax_device_id=idev)
+            )
+            device = jax.devices()[idev]
+            vtx_data, plaq_data = exp_data[idt][ikrylov - 1]
+            if padding:
+                vtx_data = np.concatenate([vtx_data, padding[0]], axis=0)
+                plaq_data = np.concatenate([plaq_data, padding[1]], axis=0)
+            vtx_data = jax.device_put(vtx_data, device)
+            plaq_data = jax.device_put(plaq_data, device)
+            exp_data[idt][ikrylov - 1] = (
+                vtx_data.reshape((num_batches, batch_size, num_vertices)),
+                plaq_data.reshape((num_batches, batch_size, num_plaquettes))
+            )
+            idev = (idev + 1) % jax.device_count()
+
+    return crbm_models
 
 
 @nnx.jit(static_argnums=[3])
@@ -41,10 +86,9 @@ def _generate_cr(
     parameters: Parameters,
     exp_data: list[list[RecoData]],
     crbm_models: list[list[ConditionalRBM]],
-    parallelize: bool = True,
-    logger: Optional[logging.Logger] = None
+    logger: logging.Logger,
+    parallelize: bool = True
 ) -> list[np.ndarray]:
-    logger = logger or logging.getLogger(__name__)
     logger.info('Generating %d samples for each of %d shots',
                 parameters.skqd.num_gen, parameters.runtime.shots_exp)
     start = time.time()
@@ -69,27 +113,51 @@ def _generate_cr(
     return gen_states
 
 
+def _prepare_mean_activation(
+    parameters: Parameters,
+    logger: logging.Logger
+):
+    logger.info('Using the mean of reference circuit data as single-plaquette probability')
+    ref_data = load_reco(parameters, etype='ref')
+    mean_activation = []
+    for idt in range(len(parameters.skqd.time_steps)):
+        mean_activation.append([])
+        for ikr in range(parameters.skqd.num_krylov):
+            mean_activation[-1].append(np.mean(ref_data[idt][ikr][1], axis=0))
+
+    return mean_activation
+
+
+@nnx.jit(static_argnums=[3])
+def _generate_random_states(key, mean_activation, plaq_data, num_gen):
+    shape = (plaq_data.shape[0], num_gen, plaq_data.shape[1])
+    uniform = jax.random.uniform(key, shape=shape)
+    flips = jnp.asarray(uniform < mean_activation, dtype=np.uint8)
+    return (plaq_data[:, None, :] ^ flips).reshape((-1, plaq_data.shape[1]))
+
+
 def _generate_random(
     parameters: Parameters,
     exp_data: list[list[RecoData]],
     mean_activation: list[np.ndarray],
     seed: int,
-    logger: Optional[logging.Logger] = None
+    logger: logging.Logger
 ) -> list[np.ndarray]:
-    logger = logger or logging.getLogger(__name__)
-    num_steps = len(exp_data)
-    shots = exp_data[0][0].shape[0]
-    num_plaq = exp_data[0][1].shape[1]
-
-    logger.info('Generating random bitflips for %d steps, %d shots, %d samples per shot',
-                num_steps, shots, parameters.skqd.num_gen)
+    logger.info('Generating %d random samples for each of %d shots',
+                parameters.skqd.num_gen, parameters.runtime.shots_exp)
     start = time.time()
-    rng = np.random.default_rng(seed)
-    uniform = rng.random((num_steps, shots, parameters.skqd.num_gen, num_plaq))
-    flips = [np.asarray(uniform[istep] < act[None, None, :], dtype=np.uint8)
-             for istep, act in enumerate(mean_activation)]
-    gen_states = [(plaq_data[:, None, :] ^ fl).reshape((-1, num_plaq))
-                  for (_, plaq_data), fl in zip(exp_data, flips)]
+    key = jax.random.key(seed)
+
+    gen_states = []
+    for idt in range(len(parameters.skqd.time_steps)):
+        for ikr in range(parameters.skqd.num_krylov):
+            key, subkey = jax.random.split(key)
+            gen_states.append(
+                _generate_random_states(key, mean_activation[idt][ikr], exp_data[idt][ikr][1],
+                                        parameters.skqd.num_gen)
+            )
+            key = subkey
+
     logger.info('Generation took %.2f seconds.', time.time() - start)
     return gen_states
 
@@ -135,45 +203,6 @@ def save_skqd_result(out, sqd_states, energy, eigvec, ham_proj=None):
         group.create_dataset('indptr', data=ham_proj.indptr)
 
 
-def diagonalize_init(
-    parameters: Parameters,
-    jax_device_id: int = 0,
-    logger: Optional[logging.Logger] = None
-) -> tuple[float, np.ndarray]:
-    """Project and diagonalize the Hamiltonian directly with MWPM-corrected plaquette states."""
-    logger = logger or logging.getLogger(__name__)
-
-    saved_result = check_saved_result(parameters, 'skqd_init')
-    if saved_result:
-        logger.info('There is already an SKQD result saved in the file.')
-        states, energy, eigvec = saved_result[:3]
-        relevant_states = _get_relevant_states(states, eigvec, parameters.skqd.probability_cutoff)
-        return energy, relevant_states
-
-    logger.info('Performing SQD with observed (charge-corrected) plaquette states')
-
-    exp_data = load_reco(parameters, etype='exp')
-    dual_lattice = make_dual_lattice(parameters)
-    hamiltonian = dual_lattice.make_hamiltonian(parameters.lgt.plaquette_energy)
-    plaq_data = []
-    for dt_data in exp_data:
-        for _, pdata in dt_data:
-            plaq_data.append(pdata)
-    states = np.concatenate(plaq_data, axis=0)
-    logger.info('Number of bitstrings from circuit sampling: %d', states.shape[0])
-    for fname in parameters.skqd.extensions:
-        states = extensions[fname](states, dual_lattice)
-        logger.info('Number of bitstrings after applying %s: %d', fname, states.shape[0])
-    energy, eigvec, states, ham_proj = sqd(hamiltonian, states, jax_device_id=jax_device_id)
-    path = Path(parameters.pkgpath) / 'skqd_init.h5'
-    with h5py.File(path, 'w', libver='latest') as out:
-        save_skqd_result(out, states, energy, eigvec, ham_proj)
-
-    relevant_states = _get_relevant_states(states, eigvec, parameters.skqd.probability_cutoff)
-
-    return energy, relevant_states
-
-
 def diagonalize(
     parameters: Parameters,
     gen_mode: str,  # 'cr' or 'rn'
@@ -192,50 +221,12 @@ def diagonalize(
     exp_data = load_reco(parameters, etype='exp')
     dual_lattice = make_dual_lattice(parameters)
     hamiltonian = dual_lattice.make_hamiltonian(parameters.lgt.plaquette_energy)
-    num_vertices = dual_lattice.primal.num_vertices
     num_plaquettes = dual_lattice.num_plaquettes
 
     if gen_mode == 'cr':
-        shots = parameters.runtime.shots_exp
-        batch_size = parameters.crbm.gen_batch_size
-        num_batches = int(np.ceil(shots / batch_size).astype(int))
-        if (residue := num_batches * batch_size - shots) != 0:
-            padding = (
-                np.zeros((residue, num_vertices), dtype=np.uint8),
-                np.zeros((residue, num_plaquettes), dtype=np.uint8)
-            )
-        else:
-            padding = None
-
-        logger.info('Loading and compiling CRBM models')
-        idev = 0
-        comp_shape = (parameters.crbm.gen_batch_size, parameters.skqd.num_gen)
-        crbm_models = []
-        for idt in range(len(parameters.skqd.time_steps)):
-            crbm_models.append([])
-            for ikrylov in range(1, parameters.skqd.num_krylov + 1):
-                crbm_models[-1].append(
-                    load_model(parameters, idt, ikrylov, compile_for=comp_shape, jax_device_id=idev)
-                )
-                device = jax.devices()[idev]
-                vtx_data, plaq_data = exp_data[idt][ikrylov - 1]
-                if padding:
-                    vtx_data = np.concatenate([vtx_data, padding[0]], axis=0)
-                    plaq_data = np.concatenate([plaq_data, padding[1]], axis=0)
-                vtx_data = jax.device_put(vtx_data, device)
-                plaq_data = jax.device_put(plaq_data, device)
-                exp_data[idt][ikrylov - 1] = (
-                    vtx_data.reshape((num_batches, batch_size, num_vertices)),
-                    plaq_data.reshape((num_batches, batch_size, num_plaquettes))
-                )
-                idev = (idev + 1) % jax.device_count()
+        crbm_models = _prepare_data_and_models(parameters, exp_data, logger)
     else:
-        ref_data = load_reco(parameters, etype='ref')
-        logger.info('Using the mean of reference circuit data as single-plaquette probability')
-        mean_activation = [
-            [np.mean(plaq_data, axis=0) for _, plaq_data in dt_data]
-            for dt_data in ref_data
-        ]
+        mean_activation = _prepare_mean_activation(parameters, logger)
 
     energies = []
     subspace_dims = []
@@ -247,11 +238,11 @@ def diagonalize(
         is_last = it == parameters.skqd.max_iterations - 1
 
         if gen_mode == 'cr':
-            states_list = _generate_cr(parameters, exp_data, crbm_models, parallelize=it > 0,
-                                       logger=logger)
+            states_list = _generate_cr(parameters, exp_data, crbm_models, logger,
+                                       parallelize=it > 0)
         else:
-            states_list = _generate_random(parameters, exp_data, mean_activation, 12345 + it,
-                                           logger=logger)
+            states_list = _generate_random(parameters, exp_data, mean_activation, 1234 + it, logger)
+
         if relevant_states is not None:
             states_list.append(relevant_states)
         states = np.concatenate(states_list, axis=0)
@@ -311,6 +302,9 @@ if __name__ == '__main__':
     parser.add_argument('--log-level', default='INFO')
     options = parser.parse_args()
 
+    if options.mode not in ['cr', 'rn']:
+        raise ValueError(f'Invalid mode {options.mode}')
+
     logging.basicConfig(level=getattr(logging, options.log_level.upper()),
                         stream=sys.stdout)
     logging.getLogger('jax').setLevel(logging.WARNING)
@@ -323,11 +317,4 @@ if __name__ == '__main__':
     with open(Path(options.pkgpath) / 'parameters.json', 'r', encoding='utf-8') as src:
         params = Parameters.model_validate_json(src.read())
 
-    en_init, st_init = diagonalize_init(params)
-
-    if options.mode == 'init':
-        sys.exit(0)
-    if options.mode not in ['rcv', 'rnd']:
-        raise ValueError(f'Invalid mode {options.mode}')
-
-    diagonalize(params, en_init, st_init, options.mode)
+    diagonalize(params, options.mode)
