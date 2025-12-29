@@ -59,6 +59,7 @@ def load_model(
     parameters: Parameters,
     idt: int,
     ikrylov: int,
+    compile_for: Optional[tuple[int, int]] = None,
     jax_device_id: Optional[int] = None
 ) -> ConditionalRBM:
     """Construct CRBM models from saved weights."""
@@ -70,7 +71,12 @@ def load_model(
     path = Path(parameters.pkgpath) / 'crbm' / f'dt{idt}_k{ikrylov}.h5'
     with h5py.File(path, 'r', libver='latest') as source:
         with jax.default_device(device):
-            return ConditionalRBM.load(source)
+            model = ConditionalRBM.load(source)
+            if compile_for:
+                model.sample(
+                    jnp.zeros((compile_for[0], model.weights_vu.shape[1]), dtype=np.uint8),
+                    size=compile_for[1]
+                )
 
 
 def train_generator_flow(
@@ -160,10 +166,11 @@ def train_single_model(
 
     vtx_data, plaq_data = load_reco(parameters, etype='ref', idt=idt, ikrylov=ikrylov)
 
-    train_u = vtx_data[:80_000]
-    train_v = plaq_data[:80_000]
-    test_u = vtx_data[80_000:]
-    test_v = plaq_data[80_000:]
+    num_train = vtx_data.shape[0] // 10 * 8
+    train_u = vtx_data[:num_train]
+    train_v = plaq_data[:num_train]
+    test_u = vtx_data[num_train:]
+    test_v = plaq_data[num_train:]
     mean_activation = np.mean(train_v, axis=0)
     mean_activation = np.where(np.isclose(mean_activation, 0.), 1.e-6, mean_activation)
     bias_init = np.log(mean_activation / (1. - mean_activation))

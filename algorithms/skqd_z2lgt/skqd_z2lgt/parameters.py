@@ -81,7 +81,7 @@ class DMRGParameters(BaseModel):
 class CircuitParameters(BaseModel):
     """Configuration for circuit."""
 
-    layout: Optional[list[int]] = Field(
+    layout: Optional[list[int] | dict[tuple[str, int], int]] = Field(
         default=None,
         description='Qubit layout.',
         title='Qubit Layout'
@@ -118,14 +118,19 @@ class RuntimeParameters(BaseModel):
         description='Backend name.',
         title='Backend Name'
     )
-    shots: int = Field(
+    shots_exp: int = Field(
         default=100_000,
-        description='Shots per circuit.',
-        title='Shots'
+        description='Shots per experiment circuit.',
+        title='Shots (Experiment)'
+    )
+    shots_ref: int = Field(
+        default=100_000,
+        description='Shots per reference circuit.',
+        title='Shots (Reference)'
     )
     options: dict[str, Any] = Field(
         default_factory=dict,
-        description='Runtime options (except for shots).',
+        description='Runtime options.',
         title='Runtime Options'
     )
     options_name: str | None = Field(
@@ -181,7 +186,7 @@ class CRBMParameters(BaseModel):
         ge=0.
     )
     num_epochs: int = Field(
-        default=10,
+        default=100,
         description='Maximum number of epochs to train.',
         title='Maximum Epochs',
         ge=1

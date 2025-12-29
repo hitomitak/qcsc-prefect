@@ -37,12 +37,12 @@ def get_trotter_circuits(
     logger = logger or logging.getLogger(__name__)
 
     if (trotter_steps_per_dt := parameters.circuit.trotter_steps_per_dt) is None:
-        trotter_steps_per_dt = [1] * len(parameters.lgt.time_steps)
+        trotter_steps_per_dt = [1] * len(parameters.skqd.time_steps)
 
     lattice = TriangularZ2Lattice(parameters.lgt.lattice)
     exp_circuits = []
     ref_circuits = []
-    for time_step, n_tr in zip(parameters.lgt.time_steps, trotter_steps_per_dt):
+    for time_step, n_tr in zip(parameters.skqd.time_steps, trotter_steps_per_dt):
         circuits, layout = make_step_circuits(
             lattice, parameters.lgt.plaquette_energy, time_step / n_tr, target,
             charged_vertices=parameters.lgt.charged_vertices,
@@ -142,8 +142,9 @@ def sample_quantum_flow(
         layout, exp_circuits, ref_circuits = get_trotter_circuits(parameters, target, logger)
         # Run primitive
         logger.info('Submitting a runtime job')
-        circuits = sum(exp_circuits, []) + sum(ref_circuits, [])
-        pub_result, job_id = sample_fn(circuits)
+        pubs = [(circ, [], parameters.runtime.shots_exp) for circ in exp_circuits]
+        pubs += [(circ, [], parameters.runtime.shots_ref) for circ in ref_circuits]
+        pub_result, job_id = sample_fn(pubs)
 
         parameters.circuit.layout = layout
         parameters.runtime.job_id = job_id
@@ -179,7 +180,6 @@ def sample_quantum(
     def sample_fn(pubs):
         backend = service.backend(parameters.runtime.backend, use_fractional_gates=True)
         options = dict(parameters.runtime.options)
-        options['default_shots'] = parameters.runtime.shots
         sampler = Sampler(backend, options=options)
         job = sampler.run(pubs)
         logger.info('Sampler job: %s', job.job_id())
