@@ -205,14 +205,14 @@ def save_skqd_result(out, sqd_states, energy, eigvec, ham_proj=None):
 
 def diagonalize(
     parameters: Parameters,
-    gen_mode: str,  # 'cr' or 'rn'
+    mode: str,  # 'cr' or 'rn'
     jax_device_id: int = 0,
     logger: Optional[logging.Logger] = None
 ) -> float:
     """Project and diagonalize the Hamiltonian with configuration recovery or random bitflips."""
     logger = logger or logging.getLogger(__name__)
 
-    group_name = f'skqd_{gen_mode}'
+    group_name = f'skqd_{mode}'
     saved_result = check_saved_result(parameters, group_name)
     if saved_result:
         logger.info('There is already an SKQD result saved in the file.')
@@ -223,7 +223,7 @@ def diagonalize(
     hamiltonian = dual_lattice.make_hamiltonian(parameters.lgt.plaquette_energy)
     num_plaquettes = dual_lattice.num_plaquettes
 
-    if gen_mode == 'cr':
+    if mode == 'cr':
         crbm_models = _prepare_data_and_models(parameters, exp_data, logger)
     else:
         mean_activation = _prepare_mean_activation(parameters, logger)
@@ -237,7 +237,7 @@ def diagonalize(
         logger.info('SKQD iteration %d', it)
         is_last = it == parameters.skqd.max_iterations - 1
 
-        if gen_mode == 'cr':
+        if mode == 'cr':
             states_list = _generate_cr(parameters, exp_data, crbm_models, logger,
                                        parallelize=it > 0)
         else:
@@ -297,13 +297,11 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('pkgpath')
+    parser.add_argument('--mpi', action='store_true')
     parser.add_argument('--gpus', help='CUDA_VISIBLE_DEVICES')
-    parser.add_argument('--mode', default='rcv')
+    parser.add_argument('--mode')
     parser.add_argument('--log-level', default='INFO')
     options = parser.parse_args()
-
-    if options.mode not in ['cr', 'rn']:
-        raise ValueError(f'Invalid mode {options.mode}')
 
     logging.basicConfig(level=getattr(logging, options.log_level.upper()),
                         stream=sys.stdout)
@@ -317,4 +315,12 @@ if __name__ == '__main__':
     with open(Path(options.pkgpath) / 'parameters.json', 'r', encoding='utf-8') as src:
         params = Parameters.model_validate_json(src.read())
 
-    diagonalize(params, options.mode)
+    gen_modes = options.mode.split(',')
+
+    if options.mpi:
+        from mpi4py import MPI  # pylint: disable=no-name-in-module
+        comm = MPI.COMM_WORLD
+        gen_modes = [gen_modes[comm.Get_rank()]]
+
+    for gen_mode in gen_modes:
+        diagonalize(params, gen_mode)

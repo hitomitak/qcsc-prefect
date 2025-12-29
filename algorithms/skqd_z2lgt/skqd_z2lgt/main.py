@@ -6,7 +6,6 @@ import asyncio
 import tempfile
 import json
 from concurrent.futures import ThreadPoolExecutor
-import h5py
 from prefect import flow, task, get_run_logger
 from prefect.client.schemas.filters import (ArtifactFilter, ArtifactFilterKey,
                                             ArtifactFilterTaskRunId)
@@ -67,19 +66,9 @@ async def skqd_z2lgt(
     train_generator_future = train_generator.submit(parameters,
                                                     cuda_scriptjob_name=cuda_scriptjob_name,
                                                     wait_for=[preprocess_future])
-    diagonalize_init_future = diagonalize.submit(parameters, 'init',
-                                                 cuda_scriptjob_name=cuda_scriptjob_name,
-                                                 wait_for=[preprocess_future])
-    diagonalize_random_future = diagonalize.submit(parameters, 'rnd',
-                                                   cuda_scriptjob_name=cuda_scriptjob_name,
-                                                   wait_for=[diagonalize_init_future])
-    diagonalize_recov_future = diagonalize.submit(parameters, 'rcv',
-                                                  cuda_scriptjob_name=cuda_scriptjob_name,
-                                                  wait_for=[train_generator_future,
-                                                            diagonalize_init_future])
-    energy_norecov = diagonalize_init_future.result()
-    energy_random = diagonalize_random_future.result()
-    energy = diagonalize_recov_future.result()
+    diagonalize_future = diagonalize.submit(parameters, cuda_scriptjob_name=cuda_scriptjob_name,
+                                            wait_for=[train_generator_future])
+    energy_cr, energy_rn = diagonalize_future.result()
 
     if tmpdir:
         tmpdir.cleanup()
@@ -87,11 +76,10 @@ async def skqd_z2lgt(
     if parameters.dmrg:
         dmrg_energy = dmrg_future.result()
         logger.info('DMRG energy: %f', dmrg_energy)
-    logger.info('SKQD energy (no conf. recovery): %f', energy_norecov)
-    logger.info('SKQD energy (random bit flips): %f', energy_random)
-    logger.info('SKQD energy (full conf. recovery): %f', energy)
+    logger.info('SKQD energy (random bit flips): %f', energy_rn)
+    logger.info('SKQD energy (full conf. recovery): %f', energy_cr)
 
-    return energy
+    return energy_cr
 
 
 @task
@@ -290,7 +278,6 @@ async def train_generator(
 @task
 async def diagonalize(
     parameters: Parameters,
-    mode: str,
     cuda_scriptjob_name: str
 ) -> float:
     """Perform SQD with iterative configuration recovery.
@@ -301,34 +288,42 @@ async def diagonalize(
             CUDA environment.
     """
     logger = get_run_logger()
-    if mode == 'init':
-        logger.info('Performing SQD with no configuration recovery')
-    elif mode == 'rnd':
-        logger.info('Performing SQD with random bit flips')
-    else:
-        logger.info('Performing SQD with configuration recovery')
 
-    group_name = f'skqd_{mode}'
-    saved_result = check_saved_result(parameters, group_name)
-    if saved_result:
-        logger.info('There is already an SKQD result saved in the file.')
-        return saved_result[1]
+    gen_modes = []
+    energies = []
+    for gen_mode in ['cr', 'rn']:
+        if (res := check_saved_result(parameters, f'skqd_{gen_mode}')) is None:
+            gen_modes.append(gen_mode)
+        else:
+            energies.append(res[0])
+
+    if not gen_modes:
+        logger.info('All SQD results found on disk.')
+        return tuple(energies)
 
     job_block = await MiyabiJobBlock.load(cuda_scriptjob_name)
     job_block.launcher = 'single'
-    job_block.num_nodes = 1
+    job_block.num_nodes = len(gen_modes)
     job_block.walltime = '02:00:00'
     with job_block.get_executor() as executor:
-        arguments = [TASK_SCRIPT_DIR / 'diagonalize.py', parameters.pkgpath, '--mode', mode]
+        arguments = [
+            TASK_SCRIPT_DIR / 'diagonalize.py',
+            parameters.pkgpath,
+            '--mpi',
+            '--mode', ','.join(gen_modes)
+        ]
         exit_status = await executor.execute_job(
             arguments=arguments,
             **job_block.get_job_variables()
         )
     if exit_status != 0:
-        raise RuntimeError(f'PBS job "diagonalize.py --mode {mode}" failed')
+        raise RuntimeError('PBS job diagonalize.py failed')
 
-    with h5py.File(Path(parameters.pkgpath) / f'{group_name}.h5', 'r', libver='latest') as source:
-        return source['energy'][()]
+    energies = []
+    for gen_mode in ['cr', 'rn']:
+        res = check_saved_result(parameters, f'skqd_{gen_mode}')
+        energies.append(res[0])
+    return tuple(energies)
 
 
 def deploy():
