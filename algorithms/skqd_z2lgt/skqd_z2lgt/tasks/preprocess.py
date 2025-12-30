@@ -108,16 +108,8 @@ def preprocess(
 ):
     """Standalone preprocess function."""
     def convert_fn(tasks):
-        dual_lattice = make_dual_lattice(parameters)
-        batch_size = {
-            'exp': parameters.runtime.shots_exp // (os.cpu_count() - 1),
-            'ref': parameters.runtime.shots_ref // (os.cpu_count() - 1)
-        }
-
         for etype, idt, ikrylov in tasks:
-            bit_array = load_raw(parameters, etype, idt, ikrylov)
-            arrays = convert_link_to_plaq(bit_array, dual_lattice, batch_size=batch_size[etype])
-            save_reco(parameters, arrays, etype, idt, ikrylov, logger=logger)
+            preprocess_single_array(parameters, etype, idt, ikrylov, logger=logger)
 
     preprocess_flow(parameters, convert_fn, logger=logger)
 
@@ -135,7 +127,7 @@ def preprocess_single_array(
                 etype, parameters.skqd.time_steps[idt], ikrylov)
 
     dual_lattice = make_dual_lattice(parameters)
-    batch_size = parameters.runtime.shots // (os.cpu_count() - 1)
+    batch_size = getattr(parameters.runtime, f'shots_{etype}') // (os.cpu_count() - 1)
     bit_array = load_raw(parameters, etype, idt, ikrylov)
     arrays = convert_link_to_plaq(bit_array, dual_lattice, batch_size)
     save_reco(parameters, arrays, etype, idt, ikrylov, logger=logger)

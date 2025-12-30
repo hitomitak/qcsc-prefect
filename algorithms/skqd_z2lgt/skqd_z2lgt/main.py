@@ -250,16 +250,16 @@ async def train_generator(
     async def run_train_job(task_specs):
         job_block = await MiyabiJobBlock.load(cuda_scriptjob_name)
         job_block.mpiprocs = 1
-        job_block.walltime = '01:00:00'
         job_block.num_nodes = len(task_specs)
+        job_block.walltime = '01:00:00'
 
         with job_block.get_executor() as executor:
             arguments = [
                 TASK_SCRIPT_DIR / 'train_generator.py',
                 parameters.pkgpath,
                 '--mpi',
-                '--idt', ','.join(str(task[1]) for task in task_specs),
-                '--ikrylov', ','.join(str(task[2]) for task in task_specs)
+                '--idt', ','.join(str(task[0]) for task in task_specs),
+                '--ikrylov', ','.join(str(task[1]) for task in task_specs)
             ]
             exit_status = await executor.execute_job(
                 arguments=arguments,
@@ -302,7 +302,7 @@ async def diagonalize(
         return tuple(energies)
 
     job_block = await MiyabiJobBlock.load(cuda_scriptjob_name)
-    job_block.launcher = 'single'
+    job_block.mpiprocs = 1
     job_block.num_nodes = len(gen_modes)
     job_block.walltime = '02:00:00'
     with job_block.get_executor() as executor:
