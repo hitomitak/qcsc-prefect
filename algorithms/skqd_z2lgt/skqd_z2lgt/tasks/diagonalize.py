@@ -3,7 +3,6 @@
 import os
 import time
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 import numpy as np
@@ -41,74 +40,56 @@ def _prepare_data_and_models(
         padding = None
 
     logger.info('Loading and compiling CRBM models')
-    idev = 0
     comp_shape = (parameters.crbm.gen_batch_size, parameters.skqd.num_gen)
     crbm_models = []
     for idt in range(len(parameters.skqd.time_steps)):
         crbm_models.append([])
         for ikrylov in range(1, parameters.skqd.num_krylov + 1):
             crbm_models[-1].append(
-                load_model(parameters, idt, ikrylov, compile_for=comp_shape, jax_device_id=idev)
+                load_model(parameters, idt, ikrylov, compile_for=comp_shape)
             )
-            device = jax.devices()[idev]
             vtx_data, plaq_data = exp_data[idt][ikrylov - 1]
             if padding:
                 vtx_data = np.concatenate([vtx_data, padding[0]], axis=0)
                 plaq_data = np.concatenate([plaq_data, padding[1]], axis=0)
-            vtx_data = jax.device_put(vtx_data, device)
-            plaq_data = jax.device_put(plaq_data, device)
+            vtx_data = jax.device_put(vtx_data)
+            plaq_data = jax.device_put(plaq_data)
             exp_data[idt][ikrylov - 1] = (
                 vtx_data.reshape((num_batches, batch_size, num_vertices)),
                 plaq_data.reshape((num_batches, batch_size, num_plaquettes))
             )
-            idev = (idev + 1) % jax.device_count()
 
     return crbm_models
 
 
-@nnx.jit(static_argnums=[3])
-def _generate_states(model, vtx_data, plaq_data, num_gen):
+@nnx.jit(static_argnums=[3, 4])
+def _generate_states(model, vtx_data, plaq_data, num_gen, shots):
     @nnx.scan(in_axes=(nnx.Carry, 0, 0), out_axes=(nnx.Carry, 0,))
     def generate_fn(_model, vtx_batch, plaq_batch):
         sample = _model.sample(vtx_batch, size=num_gen)
         flips = sample.transpose((1, 0, 2))
         return _model, plaq_batch[:, None, :] ^ flips
 
-    return generate_fn(model, vtx_data, plaq_data)[1].reshape((-1, plaq_data.shape[-1]))
-
-
-def _generate_states_on(model, vtx_data, plaq_data, num_gen):
-    with jax.default_device(model.weights_vu.value.device):
-        return _generate_states(model, vtx_data, plaq_data, num_gen)
+    gen_states = generate_fn(model, vtx_data, plaq_data)[1]
+    return gen_states.reshape((-1, plaq_data.shape[-1]))[:shots * num_gen]
 
 
 def _generate_cr(
     parameters: Parameters,
     exp_data: list[list[RecoData]],
     crbm_models: list[list[ConditionalRBM]],
-    logger: logging.Logger,
-    parallelize: bool = True
+    logger: logging.Logger
 ) -> list[np.ndarray]:
-    logger.info('Generating %d samples for each of %d shots',
-                parameters.skqd.num_gen, parameters.runtime.shots_exp)
+    logger.info('Generating %d samples for each of %d shots of %d circuits',
+                parameters.skqd.num_gen, parameters.runtime.shots_exp,
+                sum(len(data) for data in exp_data))
     start = time.time()
-    if parallelize:
-        with ThreadPoolExecutor() as executor:
-            futures = [
-                executor.submit(_generate_states_on,
-                                crbm_models[idt][ikr], exp_data[idt][ikr][0], exp_data[idt][ikr][1],
-                                parameters.skqd.num_gen)
-                for idt in range(len(parameters.skqd.time_steps))
-                for ikr in range(parameters.skqd.num_krylov)
-            ]
-        gen_states = [future.result() for future in futures]
-    else:
-        gen_states = [
-            _generate_states_on(crbm_models[idt][ikr], exp_data[idt][ikr][0], exp_data[idt][ikr][1],
-                                parameters.skqd.num_gen)
-            for idt in range(len(parameters.skqd.time_steps))
-            for ikr in range(parameters.skqd.num_krylov)
-        ]
+    gen_states = [
+        _generate_states(crbm_models[idt][ikr], exp_data[idt][ikr][0], exp_data[idt][ikr][1],
+                         parameters.skqd.num_gen, parameters.runtime.shots_exp)
+        for idt in range(len(parameters.skqd.time_steps))
+        for ikr in range(parameters.skqd.num_krylov)
+    ]
     logger.info('Generation took %.2f seconds.', time.time() - start)
     return gen_states
 
@@ -146,18 +127,15 @@ def _generate_random(
     logger.info('Generating %d random samples for each of %d shots',
                 parameters.skqd.num_gen, parameters.runtime.shots_exp)
     start = time.time()
-    key = jax.random.key(seed)
-
-    gen_states = []
-    for idt in range(len(parameters.skqd.time_steps)):
-        for ikr in range(parameters.skqd.num_krylov):
-            key, subkey = jax.random.split(key)
-            gen_states.append(
-                _generate_random_states(key, mean_activation[idt][ikr], exp_data[idt][ikr][1],
-                                        parameters.skqd.num_gen)
-            )
-            key = subkey
-
+    ndt = len(parameters.skqd.time_steps)
+    nkr = parameters.skqd.num_krylov
+    keys = jax.random.split(jax.random.key(seed), num=ndt * nkr).reshape((ndt, nkr))
+    gen_states = [
+        _generate_random_states(keys[idt][ikr], mean_activation[idt][ikr], exp_data[idt][ikr][1],
+                                parameters.skqd.num_gen)
+        for idt in range(ndt)
+        for ikr in range(nkr)
+    ]
     logger.info('Generation took %.2f seconds.', time.time() - start)
     return gen_states
 
@@ -206,7 +184,6 @@ def save_skqd_result(out, sqd_states, energy, eigvec, ham_proj=None):
 def diagonalize(
     parameters: Parameters,
     mode: str,  # 'cr' or 'rn'
-    jax_device_id: int = 0,
     logger: Optional[logging.Logger] = None
 ) -> float:
     """Project and diagonalize the Hamiltonian with configuration recovery or random bitflips."""
@@ -238,8 +215,7 @@ def diagonalize(
         is_last = it == parameters.skqd.max_iterations - 1
 
         if mode == 'cr':
-            states_list = _generate_cr(parameters, exp_data, crbm_models, logger,
-                                       parallelize=it > 0)
+            states_list = _generate_cr(parameters, exp_data, crbm_models, logger)
         else:
             states_list = _generate_random(parameters, exp_data, mean_activation, 1234 + it, logger)
 
@@ -250,17 +226,17 @@ def diagonalize(
         for fname in parameters.skqd.extensions:
             states = extensions[fname](states, dual_lattice)
 
-        if max_size is None:
+        # For small-scale problems, save compilation time by using padded fixed-size arrays
+        if max_size is None and states.shape[0] < 1_000_000:
             max_size = int(states.shape[0] * 1.2)
             logger.info('Set maximum array size to %d', max_size)
-        if (excess := states.shape[0] - max_size) > 0:
+        if max_size and (excess := states.shape[0] - max_size) > 0:
             max_size += excess * (parameters.skqd.max_iterations - it)
             logger.info('Updated maximum array size to %d', max_size)
 
         logger.info('Diagonalizing the Hamiltonian projected onto %d states..', states.shape[0])
         start = time.time()
-        sqd_result = sqd(hamiltonian, states, states_size=max_size, return_hproj=is_last,
-                         jax_device_id=jax_device_id)
+        sqd_result = sqd(hamiltonian, states, states_size=max_size, return_hproj=is_last)
         energy, eigvec, sqd_states = sqd_result[:3]
         logger.info('Projection and diagonalization took %.2f seconds. Current energy %.4f',
                     time.time() - start, energy)
