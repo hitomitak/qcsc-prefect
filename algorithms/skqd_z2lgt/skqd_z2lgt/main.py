@@ -322,7 +322,7 @@ async def diagonalize(
     energies = []
     for gen_mode in ['cr', 'rn']:
         res = check_saved_result(parameters, f'skqd_{gen_mode}')
-        energies.append(res[0])
+        energies.append(res[1])
     return tuple(energies)
 
 
