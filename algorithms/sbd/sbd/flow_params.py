@@ -122,3 +122,8 @@ class FlowParameters(BaseModel):
         default_factory=DEParameters,
         title="Differential Evoluation Parameters",
     )
+
+    solver_block_ref: str = Field(
+        default="sbd_solver_job/davidson-solver",
+        description="Solver block reference in '<block_type_slug>/<block_document_name>' format.",
+    )

@@ -17,6 +17,7 @@ from qcsc_workflow_utility.chem import (
     NpStrict1DArrayF64,
     NpStrict2DArrayF64,
 )
+from prefect_sbd.sbd_job import SBDSolverJob
 
 from .data_io import extend_table_artifact
 from .flow_params import FlowParameters
@@ -77,6 +78,26 @@ def riken_sqd_de(
     parameters: FlowParameters,
 ):
     logger = get_run_logger()
+
+    # ★ fail-fast: solver block existence & sanity check
+    slug, name = parse_block_ref(parameters.solver_block_ref)
+    if slug != "sbd_solver_job":
+        raise ValueError(
+            f"solver_block_ref must be 'sbd_solver_job/<name>'. got: {parameters.solver_block_ref}"
+        )
+
+    try:
+        solver = SBDSolverJob.load(name)
+    except Exception:
+        logger.exception("Failed to load solver block: %s", parameters.solver_block_ref)
+        raise
+
+    logger.info(
+        "Solver OK: ref=%s mode=%s adetfile=%s",
+        parameters.solver_block_ref,
+        getattr(solver, "solver_mode", "unknown"),
+        getattr(solver, "adetfile", None),
+    )
 
     telemetry_data = []
     create_table_artifact(
@@ -166,6 +187,8 @@ def differential_evolution_trial(
             n_lucj_layers=parameters.circ_params.n_lucj_layers,
         )
 
+    _, solver_block_name = parse_block_ref(parameters.solver_block_ref)
+
     futs = PrefectFutureList()
     for walker_index, ucj_parameter in enumerate(trial_populations):
         prefect_fut = walker_sqd.submit(
@@ -178,6 +201,7 @@ def differential_evolution_trial(
             ab_indices=ab_indices,
             carryover=state.carryover,
             sqd_dim=parameters.sqd_dim,
+            solver_block_name=solver_block_name,
         )
         futs.append(prefect_fut)
 
@@ -280,6 +304,12 @@ def selection(
             new_state.populations[walker_idx] = trial_populations[walker_idx]
     return new_state
 
+
+def parse_block_ref(ref: str) -> tuple[str, str]:
+    parts = ref.split("/", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ValueError(f"Invalid solver_block_ref: {ref}")
+    return parts[0], parts[1]
 
 def deploy():
     """Deploy workflow with a local worker."""
