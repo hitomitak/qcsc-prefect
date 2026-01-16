@@ -48,9 +48,10 @@ def walker_sqd(
     ab_indices: list[tuple[int, int]],
     carryover: NpStrict2DArrayBool,
     sqd_dim: int,
+    solver_block_name: str,
 ) -> tuple[tuple[float, NpStrict2DArrayBool], dict[str, Any]]:
     logger = get_run_logger()
-    davidson_solver = SBDSolverJob.load("davidson-solver")
+    davidson_solver = SBDSolverJob.load(solver_block_name)
 
     telemetry = {
         "trial_index": trial_index,
