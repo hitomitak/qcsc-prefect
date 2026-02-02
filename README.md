@@ -1,36 +1,21 @@
-# HPC-Agnostic Workflow Execution Design (Revised Specification)
+# HPC Workflow Execution Design
 
-This document specifies an **HPC-agnostic workflow execution architecture**
-that combines **admin-defined execution profiles** with **user-adjustable tuning parameters**.
+This document specifies an HPC workflow execution architecture
+that combines admin-defined execution profiles with user-adjustable tuning parameters.
 
-The design allows users—who already have basic HPC knowledge—to flexibly adjust
-resource usage (nodes, memory, threads) while keeping HPC-specific complexity
-safely encapsulated in centrally managed profiles.
-
+The design allows users to flexibly adjust resource usage (nodes, memory, threads) 
+while keeping HPC-specific complexity safely encapsulated in centrally managed profiles.
 ---
 
 ## 1. Design Goals
 
-- Enable **one workflow** to run on multiple HPC systems (Fugaku, Miyabi, Slurm)
+- Enable one workflow to run on multiple HPC systems (Fugaku, Miyabi, Slurm)
   without modification
 - Reduce user burden by eliminating the need to write HPC-specific job blocks
-- Preserve **user autonomy** for common resource tuning (nodes, memory, threads)
-- Centralize scheduler-, MPI-, and filesystem-specific knowledge
-- Prevent configuration errors while avoiding excessive restrictions
 
 ---
 
-## 2. Core Design Principle
-
-> **Separate intent from resolution.**
-
-- Users express **what to run** and **how much resource they want**
-- Admin-defined profiles resolve **how that intent maps to a specific HPC system**
-- Workflow code never embeds HPC-specific details
-
----
-
-## 3. Architectural Overview
+## 2. Architectural Overview
 
 ```
 [ Workflow ]
@@ -53,12 +38,12 @@ safely encapsulated in centrally managed profiles.
 
 ---
 
-## 4. Block Types and Responsibilities
+## 3. Block Types
 
-### 4.1 Command Block (HPC-agnostic)
+### 3.1 Command Block
 
 **Purpose**
-- Define *what* command is executed
+- Define what command is executed
 
 **Characteristics**
 - Logical executable name only
@@ -71,14 +56,14 @@ safely encapsulated in centrally managed profiles.
 
 ---
 
-### 4.2 Execution Profile Block (Admin-defined baseline)
+### 3.2 Execution Profile Block (Admin task)
 
 **Purpose**
-- Provide a **recommended execution baseline** for a specific command
+- Provide a  execution baseline for a specific command
 
 **Characteristics**
 - Command-specific
-- Safe, prevalidated defaults
+- Safe, pre-validated defaults
 - Intended to cover common use cases
 
 **Typical contents**
@@ -94,11 +79,11 @@ safely encapsulated in centrally managed profiles.
 - `exec-diag-n16`
 - `exec-diag-gpu`
 
-> Execution Profiles express **recommended intent**, not fixed hardware allocations.
+> Execution Profiles express recommended intent, not fixed hardware allocations.
 
 ---
 
-### 4.3 HPC Profile Block (Admin-defined, environment-specific)
+### 3.3 HPC Profile Block (Admin task, environment-specific)
 
 **Purpose**
 - Resolve execution intent into concrete HPC-specific settings
@@ -118,7 +103,7 @@ safely encapsulated in centrally managed profiles.
 
 ---
 
-### 4.4 UserContext Block
+### 3.4 UserContext Block
 
 **Purpose**
 - Resolve execution identity information
@@ -130,9 +115,9 @@ safely encapsulated in centrally managed profiles.
 
 ---
 
-## 5. Run-Time Parameters Specification
+## 4. Run-Time Parameters Specification
 
-### 5.1 Required Parameters
+### 4.1 Required Parameters
 
 ```
 hpc_target: string
@@ -156,7 +141,7 @@ are passed unchanged and are outside the scope of this specification.
 
 ### 5.3 Optional Tuning Parameters (User-adjustable)
 
-Users may optionally provide **tuning parameters** to adjust resource usage
+Users may optionally provide tuning parameters to adjust resource usage
 relative to the selected execution profile.
 
 ```yaml
@@ -169,49 +154,12 @@ tuning:
 ```
 
 #### Design Intent
-- Tuning parameters allow **lightweight customization**
+- Tuning parameters allow lightweight customization
 - Users can adapt execution to problem size without creating new profiles
-- HPC Profile performs final validation and adjustment
 
 ---
 
-## 6. What Users Can and Cannot Tune
-
-### Allowed User Tuning
-
-- Node count
-- Walltime
-- MPI rank / thread layout
-- Requested memory (if supported by the HPC system)
-
-### Not User-Tunable (Profile-controlled)
-
-- Queue / resource group / partition
-- Scheduler directives
-- Raw MPI command-line options
-- Executable absolute paths
-
-> Users tune **resource quantities**, not **scheduler mechanics**.
-
----
-
-## 7. Resolution and Priority Rules
-
-Final execution configuration is resolved using the following priority order:
-
-1. **User tuning parameters**
-2. **Execution Profile defaults**
-3. **HPC Profile defaults**
-4. **System hard limits**
-
-Additional rules:
-- If `nodes` is explicitly set, it is respected
-- If `nodes` is unset and `mem_gib` is provided, HPC Profile may estimate nodes
-- Invalid or inconsistent configurations result in a validation error
-
----
-
-## 8. Example: `exec-diag-n16` with User Tuning
+## 6. Example: `exec-diag-n16` with User Tuning
 
 ### User Input
 
@@ -226,29 +174,12 @@ tuning:
 
 - Execution Profile provides baseline intent (`diag`, CPU, large-scale)
 - User tuning overrides node count and threading
-- HPC Profile:
-  - Validates against Fugaku/Miyabi limits
-  - Derives MPI options
-  - Selects appropriate queue/resource group
-  - Resolves executable path
 
 Workflow code remains unchanged.
 
 ---
 
-## 9. Coverage and Flexibility
-
-- Predefined execution profiles typically cover **70–90%** of use cases
-- Tuning parameters extend coverage to **90–98%**
-- Rare or experimental cases are handled by:
-  - Admin-reviewed custom profiles
-  - Advanced, gated override mechanisms
-
-This avoids profile explosion while preserving flexibility.
-
----
-
-## 10. Responsibility Split
+## 8. Responsibility Split
 
 ### Administrators
 - Define and maintain:
@@ -266,23 +197,8 @@ This avoids profile explosion while preserving flexibility.
 
 ---
 
-## 11. Key Benefits
+## 9. Summary
 
-- Fully HPC-agnostic workflows
-- Reduced user overhead without loss of control
-- Safe customization for experienced users
-- Centralized operational knowledge
-- Scalable long-term maintenance
-
----
-
-## 12. Summary
-
-> This architecture replaces user-written HPC job definitions with
-> centrally managed execution profiles, while still allowing users
-> to tune resource usage in a controlled and transparent way.
-
-**Workflows describe algorithms.  
-Profiles resolve execution.  
-Tuning provides flexibility.**
-
+This architecture replaces user-written HPC job definitions with
+centrally managed execution profiles, while still allowing users
+to tune resource usage in a controlled and transparent way.
