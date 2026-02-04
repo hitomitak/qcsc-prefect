@@ -1,14 +1,8 @@
 """
-Prefect flow demo for Miyabi HPC-agnostic execution.
-
-This demonstrates:
-- Blocks are created/managed separately
-- Flow remains HPC-agnostic and uses only logical selections
-- User can pass tuning parameters at run time (Deployment UI)
+Prefect flow demo for Miyabi HPC-agnostic execution (MPI hello).
 """
 
 from __future__ import annotations
-
 from prefect import flow
 
 from .blocks import CommandBlock, ExecutionProfileBlock, MiyabiHPCProfileBlock
@@ -16,17 +10,17 @@ from .models import Tuning
 from .tasks import generate_script, submit_script
 
 
-@flow(name="miyabi-hpc-agnostic-demo")
-def miyabi_demo_flow(
+@flow(name="miyabi-hpc-agnostic-mpi-hello")
+def miyabi_mpi_hello_flow(
     *,
-    command_block_name: str = "cmd-diag",
-    exec_profile_block_name: str = "exec-diag-n16",
+    command_block_name: str = "cmd-mpi-hello",
+    exec_profile_block_name: str = "exec-hello-n2",
     hpc_profile_block_name: str = "hpc-miyabi",
     work_root: str = "./demo_out",
-    job_name: str = "diag-demo",
+    job_name: str = "mpi-hello",
     tuning: Tuning | None = None,
     user_args: list[str] | None = None,
-    submit: bool = False,
+    submit: bool = True,
 ):
     cmd = CommandBlock.load(command_block_name)
     profile = ExecutionProfileBlock.load(exec_profile_block_name)

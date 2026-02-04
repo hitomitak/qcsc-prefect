@@ -1,12 +1,8 @@
 """
-Prefect tasks for the Miyabi demo.
-
-- generate_script: resolves and writes a PBS script
-- submit_script: (optional) submits via qsub
+Prefect tasks: generate PBS script and submit via qsub.
 """
 
 from __future__ import annotations
-
 import shutil
 import subprocess
 from pathlib import Path
