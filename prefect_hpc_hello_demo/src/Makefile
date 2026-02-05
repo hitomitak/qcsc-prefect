@@ -1,5 +1,5 @@
-CC ?= mpicc
-CFLAGS ?= -O2 -Wall
+CC := mpicc
+CFLAGS := -O2 -Wall
 TARGET := hello_mpi
 
 all: $(TARGET)

@@ -40,7 +40,7 @@ class ExecutionProfileBlock(Block):
     ranks_per_node: int = Field(default=1, gt=0, title="Ranks per Node (Baseline)")
     threads_per_rank: int = Field(default=1, gt=0, title="Threads per Rank (Baseline)")
 
-    launcher: Literal["mpirun", "mpiexec", "single"] = Field(default="mpirun", title="Launcher")
+    launcher: Literal["mpirun", "mpiexec.hydra", "single"] = Field(default="mpiexec.hydra", title="Launcher")
 
     # Optional: command-specific environment setup (kept here, not in Command)
     modules: list[str] | None = Field(default=None, title="Modules (optional)")

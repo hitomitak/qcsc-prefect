@@ -20,7 +20,7 @@ ExecutionProfileBlock(
     walltime="00:05:00",
     ranks_per_node=4,
     threads_per_rank=1,
-    launcher="mpirun",
+    launcher="mpiexec.hydra",
     modules=None,  # e.g., ["openmpi/4.1.5"]
 ).save("exec-hello-n2", overwrite=True)
 
@@ -32,17 +32,28 @@ ExecutionProfileBlock(
     walltime="00:05:00",
     ranks_per_node=4,
     threads_per_rank=1,
-    launcher="mpirun",
+    launcher="mpiexec.hydra",
 ).save("exec-hello-n8", overwrite=True)
 
+ExecutionProfileBlock(
+    profile_name="hello-n1",
+    command_name="mpi-hello",
+    resource_class="cpu",
+    nodes=1,
+    walltime="00:05:00",
+    ranks_per_node=1,
+    threads_per_rank=1,
+    launcher="mpiexec.hydra",
+).save("exec-hello-n1", overwrite=True)
+
 MiyabiHPCProfileBlock(
-    queue_cpu="cpu",
-    queue_gpu="gpu",
+    queue_cpu="regular-c",
+    queue_gpu="regular-g",
     project_cpu=None,      # set if your site requires it
     module_init=None,      # e.g., ["module purge"]
     spack_setup=None,
     executable_map={
-        "hello_mpi": "./hello_mpi",
+        "hello_mpi": "/work/gz09/z30541/hpc-execution-profiles/prefect_hpc_hello_demo/src/hello_mpi",
     },
 ).save("hpc-miyabi", overwrite=True)
 

@@ -16,7 +16,7 @@ def miyabi_mpi_hello_flow(
     command_block_name: str = "cmd-mpi-hello",
     exec_profile_block_name: str = "exec-hello-n2",
     hpc_profile_block_name: str = "hpc-miyabi",
-    work_root: str = "./demo_out",
+    work_root: str = "./hello_mpi",
     job_name: str = "mpi-hello",
     tuning: Tuning | None = None,
     user_args: list[str] | None = None,

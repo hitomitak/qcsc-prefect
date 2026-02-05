@@ -14,11 +14,14 @@ PBS_TEMPLATE = """#!/bin/bash
 #PBS -l select={nodes}:ncpus={ncpus_per_node}
 #PBS -l walltime={walltime}
 #PBS -N {job_name}
+#PBS -W group_list=gz09
 #PBS -j oe
 {project_line}
 
 set -euo pipefail
-cd "${PBS_O_WORKDIR:-$PWD}"
+cd "${{PBS_O_WORKDIR:-$PWD}}"
+
+
 
 # --- Environment setup (merged) ---
 {module_init_block}
@@ -73,7 +76,7 @@ def write_pbs_script(run: ResolvedRun, *, out_dir: Path, job_name: str) -> Path:
     if run.launcher == "single":
         launch_line = cmdline
     else:
-        launch = "mpiexec" if run.launcher == "mpiexec" else "mpirun"
+        launch = "mpiexec.hydra"
         launch_line = f"{launch} -np {run.total_ranks} {cmdline}"
 
     script = PBS_TEMPLATE.format(

@@ -15,7 +15,7 @@ class ResolvedRun:
     command_name: str
     profile_name: str
     executable: str
-    launcher: Literal["mpirun", "mpiexec", "single"]
+    launcher: Literal["mpiexec.hydra", "single"]
     queue: str
     project: str | None
     nodes: int
