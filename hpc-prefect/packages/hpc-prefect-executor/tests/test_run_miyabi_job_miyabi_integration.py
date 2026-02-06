@@ -17,6 +17,17 @@ def _env_enabled(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _resolve_work_dir(tmp_path: Path) -> Path:
+    raw = os.getenv("MIYABI_TEST_WORK_DIR", "").strip()
+    if not raw:
+        return tmp_path
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        p = Path.cwd() / p
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 @pytest.mark.miyabi_integration
 def test_run_miyabi_job_real_qsub(tmp_path: Path, monkeypatch):
     if not _env_enabled("MIYABI_INTEGRATION"):
@@ -45,7 +56,8 @@ def test_run_miyabi_job_real_qsub(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(run_mod, "get_run_logger", lambda: _LoggerStub())
     monkeypatch.setattr(run_mod, "create_table_artifact", fake_create_table_artifact)
 
-    executable = tmp_path / "hello.sh"
+    work_dir = _resolve_work_dir(tmp_path)
+    executable = work_dir / "hello.sh"
     executable.write_text("#!/bin/sh\necho miyabi-integration-ok\n")
     executable.chmod(0o755)
 
@@ -63,7 +75,7 @@ def test_run_miyabi_job_real_qsub(tmp_path: Path, monkeypatch):
 
     result = asyncio.run(
         run_mod.run_miyabi_job(
-            work_dir=tmp_path,
+            work_dir=work_dir,
             script_filename="integration_job.pbs",
             exec_profile=profile,
             req=req,
