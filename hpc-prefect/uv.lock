@@ -1,0 +1,31 @@
+version = 1
+revision = 3
+requires-python = ">=3.10"
+
+[manifest]
+members = [
+    "hpc-prefect-adapters",
+    "hpc-prefect-core",
+    "hpc-prefect-workspace",
+]
+
+[[package]]
+name = "hpc-prefect-adapters"
+version = "0.1.0"
+source = { editable = "packages/hpc-prefect-adapters" }
+dependencies = [
+    { name = "hpc-prefect-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "hpc-prefect-core", editable = "packages/hpc-prefect-core" }]
+
+[[package]]
+name = "hpc-prefect-core"
+version = "0.1.0"
+source = { editable = "packages/hpc-prefect-core" }
+
+[[package]]
+name = "hpc-prefect-workspace"
+version = "0.0.0"
+source = { editable = "." }
