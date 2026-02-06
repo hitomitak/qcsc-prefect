@@ -2,6 +2,7 @@
 
 #PBS -q {{ queue_name }}
 #PBS -l select={{ num_nodes }}{% if mpiprocs is defined %}:mpiprocs={{ mpiprocs }}{% endif %}{% if ompthreads is defined %}:ompthreads={{ ompthreads }}{% endif %}
+
 {% if walltime is defined %}
 #PBS -l walltime={{ walltime }}
 {% endif %}

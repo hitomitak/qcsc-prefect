@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 members = [
     "hpc-prefect-adapters",
     "hpc-prefect-core",
+    "hpc-prefect-executor",
     "hpc-prefect-workspace",
 ]
 
@@ -24,6 +25,17 @@ requires-dist = [{ name = "hpc-prefect-core", editable = "packages/hpc-prefect-c
 name = "hpc-prefect-core"
 version = "0.1.0"
 source = { editable = "packages/hpc-prefect-core" }
+
+[[package]]
+name = "hpc-prefect-executor"
+version = "0.1.0"
+source = { editable = "packages/hpc-prefect-executor" }
+dependencies = [
+    { name = "hpc-prefect-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "hpc-prefect-core", editable = "packages/hpc-prefect-core" }]
 
 [[package]]
 name = "hpc-prefect-workspace"
