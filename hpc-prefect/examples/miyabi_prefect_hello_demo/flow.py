@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 from prefect import flow
@@ -8,6 +9,12 @@ from hpc_prefect_adapters.miyabi.builder import MiyabiJobRequest
 from hpc_prefect_blocks.miyabi.blocks import CommandBlock, ExecutionProfileBlock, HPCProfileBlock
 from hpc_prefect_core.models.execution_profile import ExecutionProfile
 from hpc_prefect_executor.miyabi.run import run_miyabi_job
+
+
+async def _resolve_loaded_block(value):
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 def _resolve_queue_and_project(hpc_block: HPCProfileBlock, resource_class: str) -> tuple[str, str]:
@@ -26,9 +33,9 @@ async def miyabi_prefect_block_hello_flow(
     script_filename: str = "hello_demo.pbs",
     user_args: list[str] | None = None,
 ):
-    cmd = CommandBlock.load(command_block_name)
-    profile_block = ExecutionProfileBlock.load(execution_profile_block_name)
-    hpc_block = HPCProfileBlock.load(hpc_profile_block_name)
+    cmd = await _resolve_loaded_block(CommandBlock.load(command_block_name))
+    profile_block = await _resolve_loaded_block(ExecutionProfileBlock.load(execution_profile_block_name))
+    hpc_block = await _resolve_loaded_block(HPCProfileBlock.load(hpc_profile_block_name))
 
     if profile_block.command_name != cmd.command_name:
         raise ValueError(

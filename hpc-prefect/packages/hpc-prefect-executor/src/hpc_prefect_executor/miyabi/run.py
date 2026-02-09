@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -90,13 +91,20 @@ def _create_job_artifact(*, job_id: str, job_status: dict[str, str]) -> dict[str
     }
 
 
-def _read_text_if_exists(path: str | Path | None) -> str:
+def _resolve_log_file_path(path: str | Path | None) -> str:
     if not path:
         return ""
-    p = Path(path)
-    if not p.exists():
+    raw = str(path).strip().strip('"').strip("'")
+    if ":" in raw:
+        _, raw = raw.split(":", 1)
+    return raw
+
+
+def _read_text_if_exists(path: str | Path | None) -> str:
+    file_path = _resolve_log_file_path(path)
+    if not file_path or not os.path.exists(file_path):
         return ""
-    return p.read_text(errors="replace")
+    return Path(file_path).read_text(errors="replace")
 
 
 @dataclass(frozen=True)
@@ -167,4 +175,3 @@ async def run_miyabi_job(
     # existing behavior returns Exit_status as int
     exit_status = int(final_status.get("Exit_status", "0") or "0")
     return MiyabiRunResult(job_id=job_id, exit_status=exit_status, job_status=final_status_any)
-

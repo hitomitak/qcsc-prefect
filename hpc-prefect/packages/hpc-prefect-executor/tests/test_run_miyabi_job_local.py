@@ -59,8 +59,8 @@ def test_run_miyabi_job_local_mock(tmp_path: Path, monkeypatch):
 
     final_status = {
         "Exit_status": "0",
-        "Output_Path": str(stdout_path),
-        "Error_Path": str(stderr_path),
+        "Output_Path": f"login-node:{stdout_path}",
+        "Error_Path": f"login-node:{stderr_path}",
         "Job_Name": "pytest-miyabi",
         "queue": "normal",
         "Resource_List.select": "1",
