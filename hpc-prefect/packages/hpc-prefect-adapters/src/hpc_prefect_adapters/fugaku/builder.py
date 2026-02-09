@@ -42,20 +42,13 @@ def to_fugaku_template_kwargs(
         "stdout_path": str(stdout_path),
         "stderr_path": str(stderr_path),
         "stat_path": str(stat_path),
+        "mpi_options_for_pjm": list(req.mpi_options_for_pjm or []),
+        "gfscache": req.gfscache,
+        "spack_modules": list(req.spack_modules or []),
+        "environments": dict(exec_profile.environments or {}),
+        "mpi_options": list(exec_profile.mpi_options or []),
+        "arguments": list(exec_profile.arguments or []),
     }
-
-    if req.mpi_options_for_pjm:
-        kw["mpi_options_for_pjm"] = list(req.mpi_options_for_pjm)
-    if req.gfscache:
-        kw["gfscache"] = req.gfscache
-    if req.spack_modules:
-        kw["spack_modules"] = list(req.spack_modules)
-    if exec_profile.environments:
-        kw["environments"] = dict(exec_profile.environments)
-    if exec_profile.mpi_options:
-        kw["mpi_options"] = list(exec_profile.mpi_options)
-    if exec_profile.arguments:
-        kw["arguments"] = list(exec_profile.arguments)
     return kw
 
 

@@ -84,8 +84,8 @@ def test_run_fugaku_job_local_mock(tmp_path: Path, monkeypatch):
         walltime="00:05:00",
     )
     req = FugakuJobRequest(
-        queue_name="regular-c",
-        project="gz09",
+        queue_name="small",
+        project="ra000000",
         executable="/bin/echo",
         job_name=job_name,
     )
