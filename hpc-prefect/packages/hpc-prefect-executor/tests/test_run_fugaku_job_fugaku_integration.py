@@ -41,6 +41,7 @@ def test_run_fugaku_job_real_pjsub(tmp_path: Path, monkeypatch):
         pytest.skip("Set FUGAKU_RSCGRP and FUGAKU_PROJECT for Fugaku integration test.")
 
     timeout_seconds = int(os.getenv("FUGAKU_TEST_TIMEOUT", "900"))
+    gfscache = os.getenv("FUGAKU_GFSCACHE", "/vol0002")
     artifact_calls: list[dict[str, Any]] = []
 
     class _LoggerStub:
@@ -72,6 +73,7 @@ def test_run_fugaku_job_real_pjsub(tmp_path: Path, monkeypatch):
         project=project,
         executable=str(executable),
         job_name="fugaku-integration",
+        gfscache=gfscache,
     )
 
     result = asyncio.run(
@@ -90,4 +92,3 @@ def test_run_fugaku_job_real_pjsub(tmp_path: Path, monkeypatch):
     assert result.state in {"EXT", "CCL"}
     assert isinstance(result.exit_status, int)
     assert len(artifact_calls) == 1
-
