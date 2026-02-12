@@ -10,7 +10,12 @@ from prefect_qiskit import QuantumRuntime
 from qiskit import QuantumCircuit
 from qiskit.transpiler import generate_preset_pass_manager
 
-from examples.miyabi_prefect_bitcount_demo.wrapper_block import BITLEN, BitCounterWrapperBlock
+try:
+    from examples.miyabi_prefect_bitcount_demo.wrapper_block import BITLEN, BitCounterWrapperBlock
+except ModuleNotFoundError:
+    # Supports direct script execution:
+    # python examples/miyabi_prefect_bitcount_demo/flow_wrapper.py ...
+    from wrapper_block import BITLEN, BitCounterWrapperBlock
 
 
 @flow(name="miyabi-bitcount-wrapper-flow")

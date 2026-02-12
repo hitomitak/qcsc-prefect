@@ -8,6 +8,20 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+
+def _import_wrapper_block_class():
+    try:
+        from examples.miyabi_prefect_bitcount_demo.wrapper_block import BitCounterWrapperBlock
+
+        return BitCounterWrapperBlock
+    except ModuleNotFoundError:
+        # Supports direct script execution:
+        # python examples/miyabi_prefect_bitcount_demo/create_blocks.py ...
+        from wrapper_block import BitCounterWrapperBlock
+
+        return BitCounterWrapperBlock
+
+
 def _env_int(name: str) -> int | None:
     raw = os.getenv(name, "").strip()
     if not raw:
@@ -25,15 +39,14 @@ def _resolve_example_path() -> Path:
     return Path(__file__).resolve().parent
 
 
-def _register_block_types() -> None:
+def _register_block_types(bit_counter_cls) -> None:
     from hpc_prefect_blocks.common.blocks import CommandBlock, ExecutionProfileBlock, HPCProfileBlock
-    from examples.miyabi_prefect_bitcount_demo.wrapper_block import BitCounterWrapperBlock
 
     block_types = [
         CommandBlock,
         ExecutionProfileBlock,
         HPCProfileBlock,
-        BitCounterWrapperBlock,
+        bit_counter_cls,
     ]
     for block_cls in block_types:
         register = getattr(block_cls, "register_type_and_schema", None)
@@ -127,7 +140,7 @@ def _env_values() -> dict[str, Any]:
 def main() -> None:
     args = _parse_args()
     from hpc_prefect_blocks.common.blocks import CommandBlock, ExecutionProfileBlock, HPCProfileBlock
-    from examples.miyabi_prefect_bitcount_demo.wrapper_block import BitCounterWrapperBlock
+    bit_counter_cls = _import_wrapper_block_class()
 
     config = _load_config_file(args.config)
     env = _env_values()
@@ -193,9 +206,9 @@ def main() -> None:
         _pick_value(args.options_variable_name, config.get("options_variable_name"), env.get("options_variable_name"), "miyabi-bitcount-options")
     ).strip()
 
-    _register_block_types()
+    _register_block_types(bit_counter_cls)
 
-    BitCounterWrapperBlock(
+    bit_counter_cls(
         root_dir=work_dir,
         executable=wrapper_exec,
         queue_name=queue,
