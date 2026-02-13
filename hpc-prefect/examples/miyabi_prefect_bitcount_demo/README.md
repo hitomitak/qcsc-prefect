@@ -123,6 +123,14 @@ After setup, `create_blocks.py` creates compatibility objects for legacy-style c
 
 So legacy-style flow code can keep `counter.get(bitstrings)` while using the current block architecture.
 
+If you write custom workflow code and want to hide block-to-runtime conversion, use:
+
+- `hpc_prefect_executor.run_job_from_blocks`
+
+This helper takes block names and internally builds runtime requests (`ExecutionProfile` and target-specific job request), then dispatches by `HPCProfileBlock.hpc_target` (`miyabi` / `fugaku`).
+With this, workflow code can stay unchanged while switching HPC by changing block instances.
+(`create_blocks.py` in this directory prepares Miyabi defaults. For other HPC targets, prepare equivalent block instances and keep the same workflow code.)
+
 ## Step 4. Run tutorial-style flow (legacy code style)
 
 ```bash

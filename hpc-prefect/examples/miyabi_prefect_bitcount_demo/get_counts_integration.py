@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import json
 from array import array
 from datetime import datetime, timezone
@@ -11,24 +10,9 @@ from prefect import task
 from prefect.blocks.core import Block
 from pydantic import Field
 
-from hpc_prefect_adapters.miyabi.builder import MiyabiJobRequest
-from hpc_prefect_blocks.common.blocks import CommandBlock, ExecutionProfileBlock, HPCProfileBlock
-from hpc_prefect_core.models.execution_profile import ExecutionProfile
-from hpc_prefect_executor.miyabi.run import run_miyabi_job
+from hpc_prefect_executor.from_blocks import run_job_from_blocks
 
 BITLEN = 10
-
-
-async def _resolve_loaded_block(value):
-    if inspect.isawaitable(value):
-        return await value
-    return value
-
-
-def _resolve_queue_and_project(hpc_block: HPCProfileBlock, resource_class: str) -> tuple[str, str]:
-    if resource_class == "gpu":
-        return hpc_block.queue_gpu, hpc_block.project_gpu
-    return hpc_block.queue_cpu, hpc_block.project_cpu
 
 
 def _make_job_work_dir(base_work_dir: Path) -> Path:
@@ -94,29 +78,6 @@ async def _get_inner(
     counter: BitCounter,
     bitstrings: list[str],
 ) -> dict[str, int]:
-    cmd = await _resolve_loaded_block(CommandBlock.load(counter.command_block_name))
-    profile_block = await _resolve_loaded_block(
-        ExecutionProfileBlock.load(counter.execution_profile_block_name)
-    )
-    hpc_block = await _resolve_loaded_block(HPCProfileBlock.load(counter.hpc_profile_block_name))
-
-    if profile_block.command_name != cmd.command_name:
-        raise ValueError(
-            f"ExecutionProfileBlock '{profile_block.profile_name}' is for command "
-            f"'{profile_block.command_name}', but command block is '{cmd.command_name}'."
-        )
-
-    executable = hpc_block.executable_map.get(cmd.executable_key)
-    if not executable:
-        raise KeyError(
-            f"Executable key '{cmd.executable_key}' was not found in "
-            f"HPCProfileBlock '{counter.hpc_profile_block_name}'."
-        )
-
-    queue, project = _resolve_queue_and_project(hpc_block, profile_block.resource_class)
-    if not project:
-        raise ValueError("Project is empty. Update HPCProfileBlock project_cpu/project_gpu.")
-
     base_work_dir = Path(counter.root_dir).expanduser().resolve()
     job_work_dir = _make_job_work_dir(base_work_dir)
 
@@ -124,34 +85,13 @@ async def _get_inner(
     with (job_work_dir / "input.bin").open("wb") as f:
         u32_values.tofile(f)
 
-    arguments = list(cmd.default_args)
-    if counter.user_args:
-        arguments.extend(counter.user_args)
-
-    exec_profile = ExecutionProfile(
-        command_key=cmd.command_name,
-        num_nodes=profile_block.num_nodes,
-        mpiprocs=profile_block.mpiprocs,
-        ompthreads=profile_block.ompthreads,
-        walltime=profile_block.walltime,
-        launcher=profile_block.launcher,
-        mpi_options=list(profile_block.mpi_options),
-        modules=list(profile_block.modules),
-        environments=dict(profile_block.environments),
-        arguments=arguments,
-    )
-
-    req = MiyabiJobRequest(
-        queue_name=queue,
-        project=project,
-        executable=executable,
-    )
-
-    result = await run_miyabi_job(
+    result = await run_job_from_blocks(
+        command_block_name=counter.command_block_name,
+        execution_profile_block_name=counter.execution_profile_block_name,
+        hpc_profile_block_name=counter.hpc_profile_block_name,
         work_dir=job_work_dir,
         script_filename=counter.script_filename,
-        exec_profile=exec_profile,
-        req=req,
+        user_args=list(counter.user_args),
         watch_poll_interval=5.0,
         timeout_seconds=1800,
         metrics_artifact_key=counter.metrics_artifact_key,
