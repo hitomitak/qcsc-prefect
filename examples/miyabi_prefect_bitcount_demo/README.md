@@ -9,14 +9,14 @@ The setup is script-driven so users mainly run scripts and choose block names at
 
 ## Directory
 
-- `/Users/hitomi/Project/hpc-execution-profiles/hpc-prefect/examples/miyabi_prefect_bitcount_demo/build_binaries.sh`
-- `/Users/hitomi/Project/hpc-execution-profiles/hpc-prefect/examples/miyabi_prefect_bitcount_demo/create_blocks.py`
-- `/Users/hitomi/Project/hpc-execution-profiles/hpc-prefect/examples/miyabi_prefect_bitcount_demo/bitcount_blocks.example.toml`
-- `/Users/hitomi/Project/hpc-execution-profiles/hpc-prefect/examples/miyabi_prefect_bitcount_demo/get_counts_integration.py`
-- `/Users/hitomi/Project/hpc-execution-profiles/hpc-prefect/examples/miyabi_prefect_bitcount_demo/wrapper_block.py`
-- `/Users/hitomi/Project/hpc-execution-profiles/hpc-prefect/examples/miyabi_prefect_bitcount_demo/flow_wrapper.py`
-- `/Users/hitomi/Project/hpc-execution-profiles/hpc-prefect/examples/miyabi_prefect_bitcount_demo/flow_optimized.py`
-- `/Users/hitomi/Project/hpc-execution-profiles/hpc-prefect/examples/miyabi_prefect_bitcount_demo/flow_tutorial_style.py`
+- `/Users/hitomi/Project/hpc-prefect/examples/miyabi_prefect_bitcount_demo/build_on_miyabi.sh`
+- `/Users/hitomi/Project/hpc-prefect/examples/miyabi_prefect_bitcount_demo/create_blocks.py`
+- `/Users/hitomi/Project/hpc-prefect/examples/miyabi_prefect_bitcount_demo/bitcount_blocks.example.toml`
+- `/Users/hitomi/Project/hpc-prefect/examples/miyabi_prefect_bitcount_demo/get_counts_integration.py`
+- `/Users/hitomi/Project/hpc-prefect/examples/miyabi_prefect_bitcount_demo/wrapper_block.py`
+- `/Users/hitomi/Project/hpc-prefect/examples/miyabi_prefect_bitcount_demo/flow_wrapper.py`
+- `/Users/hitomi/Project/hpc-prefect/examples/miyabi_prefect_bitcount_demo/flow_optimized.py`
+- `/Users/hitomi/Project/hpc-prefect/examples/miyabi_prefect_bitcount_demo/flow_tutorial_style.py`
 
 ## Prerequisites
 
@@ -32,14 +32,14 @@ The setup is script-driven so users mainly run scripts and choose block names at
 ## Step 1. Sync workspace dependencies
 
 ```bash
-cd /Users/hitomi/Project/hpc-execution-profiles/hpc-prefect
+cd /Users/hitomi/Project/hpc-prefect
 uv sync
 ```
 
 If needed, add Qiskit integration packages:
 
 ```bash
-cd /Users/hitomi/Project/hpc-execution-profiles/hpc-prefect
+cd /Users/hitomi/Project/hpc-prefect
 uv pip install prefect-qiskit qiskit
 ```
 
@@ -48,8 +48,8 @@ uv pip install prefect-qiskit qiskit
 Run this on a Miyabi environment where `mpiicpx` is available:
 
 ```bash
-cd /Users/hitomi/Project/hpc-execution-profiles/hpc-prefect
-./examples/miyabi_prefect_bitcount_demo/build_binaries.sh
+cd /Users/hitomi/Project/hpc-prefect
+./examples/miyabi_prefect_bitcount_demo/build_on_miyabi.sh
 ```
 
 This creates:
@@ -62,7 +62,7 @@ This creates:
 Use a config file (recommended):
 
 ```bash
-cd /Users/hitomi/Project/hpc-execution-profiles/hpc-prefect
+cd /Users/hitomi/Project/hpc-prefect
 cp examples/miyabi_prefect_bitcount_demo/bitcount_blocks.example.toml \
    examples/miyabi_prefect_bitcount_demo/bitcount_blocks.toml
 ```
@@ -76,7 +76,7 @@ Edit `examples/miyabi_prefect_bitcount_demo/bitcount_blocks.toml` and set only t
 Then run:
 
 ```bash
-cd /Users/hitomi/Project/hpc-execution-profiles/hpc-prefect
+cd /Users/hitomi/Project/hpc-prefect
 uv run python examples/miyabi_prefect_bitcount_demo/create_blocks.py \
   --config examples/miyabi_prefect_bitcount_demo/bitcount_blocks.toml
 ```
@@ -84,7 +84,7 @@ uv run python examples/miyabi_prefect_bitcount_demo/create_blocks.py \
 You can still override individual values from CLI arguments:
 
 ```bash
-cd /Users/hitomi/Project/hpc-execution-profiles/hpc-prefect
+cd /Users/hitomi/Project/hpc-prefect
 uv run python examples/miyabi_prefect_bitcount_demo/create_blocks.py \
   --config examples/miyabi_prefect_bitcount_demo/bitcount_blocks.toml \
   --shots 200000 \
@@ -134,7 +134,7 @@ With this, workflow code can stay unchanged while switching HPC by changing bloc
 ## Step 4. Run tutorial-style flow (legacy code style)
 
 ```bash
-cd /Users/hitomi/Project/hpc-execution-profiles/hpc-prefect
+cd /Users/hitomi/Project/hpc-prefect
 uv run python examples/miyabi_prefect_bitcount_demo/flow_tutorial_style.py
 ```
 
@@ -143,7 +143,7 @@ uv run python examples/miyabi_prefect_bitcount_demo/flow_tutorial_style.py
 This mirrors the legacy tutorial style with a wrapper block and `counter.get(bitstrings)`.
 
 ```bash
-cd /Users/hitomi/Project/hpc-execution-profiles/hpc-prefect
+cd /Users/hitomi/Project/hpc-prefect
 uv run python examples/miyabi_prefect_bitcount_demo/flow_wrapper.py \
   --runtime-block ibm-runner \
   --counter-block bit-counter-wrapper-demo \
@@ -165,7 +165,7 @@ This version uses the current codebase design:
 - `MPI_Scatterv` for non-even work distribution
 
 ```bash
-cd /Users/hitomi/Project/hpc-execution-profiles/hpc-prefect
+cd /Users/hitomi/Project/hpc-prefect
 uv run python examples/miyabi_prefect_bitcount_demo/flow_optimized.py \
   --runtime-block ibm-runner \
   --command-block cmd-bitcount-hist \

@@ -11,14 +11,14 @@ This example uses `run_fugaku_job` to submit a real `pjsub` job from Prefect Blo
 ## 1) Sync dependencies
 
 ```bash
-cd /Users/hitomi/Project/hpc-execution-profiles/hpc-prefect
+cd /Users/hitomi/Project/hpc-prefect
 uv sync
 ```
 
 ## 2) Register block types
 
 ```bash
-cd /Users/hitomi/Project/hpc-execution-profiles/hpc-prefect
+cd /Users/hitomi/Project/hpc-prefect
 uv run prefect block register -m hpc_prefect_blocks.miyabi.blocks
 ```
 
@@ -27,7 +27,7 @@ Note: The blocks are currently defined in `hpc_prefect_blocks.miyabi.blocks` but
 ## 3) Create demo Blocks
 
 ```bash
-cd /Users/hitomi/Project/hpc-execution-profiles/hpc-prefect
+cd /Users/hitomi/Project/hpc-prefect
 export FUGAKU_PROJECT=your_project_id
 export FUGAKU_RSCGRP=small
 export FUGAKU_GFSCACHE=/vol0002
@@ -48,7 +48,7 @@ export FUGAKU_DEMO_EXECUTABLE=/path/to/your/executable
 ## 4) Run the flow
 
 ```bash
-cd /Users/hitomi/Project/hpc-execution-profiles/hpc-prefect
+cd /Users/hitomi/Project/hpc-prefect
 uv run python -c "import asyncio; from examples.fugaku_prefect_hello_demo.flow import fugaku_prefect_block_hello_flow; print(asyncio.run(fugaku_prefect_block_hello_flow()))"
 ```
 
