@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "hpc-prefect-workspace"
 version = "0.0.0"
 description = "Monorepo workspace for HPC + Prefect integration"
-readme = "README.md"
+readme = "docs/concept.md"
 requires-python = ">=3.10"
 dependencies = []
 
