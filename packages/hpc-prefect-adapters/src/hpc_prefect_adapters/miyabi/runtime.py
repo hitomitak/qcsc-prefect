@@ -7,9 +7,16 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 
-class SubmitError(RuntimeError): ...
-class WaitTimeout(RuntimeError): ...
-class CancelError(RuntimeError): ...
+class SubmitError(RuntimeError):
+    """Raised when job submission fails."""
+
+
+class WaitTimeout(RuntimeError):
+    """Raised when waiting for final job status times out."""
+
+
+class CancelError(RuntimeError):
+    """Raised when job cancellation fails."""
 
 
 async def run_command(*args: str, cwd: Path | None = None) -> str:
@@ -33,6 +40,8 @@ async def run_command(*args: str, cwd: Path | None = None) -> str:
 
 @dataclass(frozen=True)
 class SubmitResult:
+    """Submission result payload returned by runtime ``submit`` methods."""
+
     job_id: str
     raw_output: str
 
@@ -49,6 +58,19 @@ class MiyabiPBSRuntime:
     QSTAT_OUT: ClassVar[re.Pattern] = re.compile(r"Job Id: (\d+\.\w+)\n((?:[ \t]+.*(?:\n|$))*)")
 
     async def submit(self, script_path: Path, *, cwd: Path | None = None) -> SubmitResult:
+        """Submit a PBS script with ``qsub``.
+
+        Args:
+            script_path: Path to the PBS script file.
+            cwd: Optional working directory for ``qsub`` execution.
+
+        Returns:
+            Parsed submission result including job id and raw output.
+
+        Raises:
+            SubmitError: If submission fails or job id cannot be parsed.
+        """
+
         try:
             stdout = await run_command("qsub", str(script_path), cwd=cwd)
         except Exception as e:
@@ -108,6 +130,15 @@ class MiyabiPBSRuntime:
             return {}
 
     async def cancel(self, job_id: str) -> None:
+        """Cancel a PBS job using ``qdel``.
+
+        Args:
+            job_id: Target PBS job id.
+
+        Raises:
+            CancelError: If cancellation fails.
+        """
+
         try:
             await run_command("qdel", job_id)
         except Exception as e:

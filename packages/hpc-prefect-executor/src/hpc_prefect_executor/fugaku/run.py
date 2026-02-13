@@ -16,6 +16,8 @@ MAX_LOG_SIZE = 10_000
 
 
 def truncate_log(text: str) -> str:
+    """Truncate large log text to the configured maximum length."""
+
     if len(text) > MAX_LOG_SIZE:
         return text[:MAX_LOG_SIZE] + f"... (truncated {len(text) - MAX_LOG_SIZE} chars)"
     return text
@@ -47,6 +49,8 @@ def _read_text_if_exists(path: Path) -> str:
 
 @dataclass(frozen=True)
 class FugakuRunResult:
+    """Normalized result returned by :func:`run_fugaku_job`."""
+
     job_id: str
     exit_status: int
     state: str
@@ -63,6 +67,27 @@ async def run_fugaku_job(
     timeout_seconds: float | None = None,
     metrics_artifact_key: str = "fugaku-job-metrics",
 ) -> FugakuRunResult:
+    """Execute a Fugaku job end-to-end from runtime models.
+
+    .. note::
+        This function is the high-level executor entrypoint. It internally
+        renders a script, submits it, waits for final status, captures logs,
+        parses stats, and publishes a metrics artifact.
+
+    Args:
+        work_dir: Working directory where scripts and job outputs are written.
+        script_filename: Job script filename to create in ``work_dir``.
+        exec_profile: Scheduler-independent execution profile.
+        req: Fugaku-specific scheduler request fields.
+        watch_poll_interval: Poll interval in seconds for job status checks.
+        timeout_seconds: Optional timeout for waiting final status.
+        metrics_artifact_key: Prefect artifact key for job metrics table.
+
+    Returns:
+        :class:`FugakuRunResult` containing job id, exit status, state, and
+        final scheduler status payload.
+    """
+
     logger = get_run_logger()
 
     script_basename = Path(script_filename).name
@@ -118,4 +143,3 @@ async def run_fugaku_job(
         state=str(final_status.get("ST", "")),
         job_status=final_status,
     )
-

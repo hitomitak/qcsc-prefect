@@ -109,6 +109,8 @@ def _read_text_if_exists(path: str | Path | None) -> str:
 
 @dataclass(frozen=True)
 class MiyabiRunResult:
+    """Normalized result returned by :func:`run_miyabi_job`."""
+
     job_id: str
     exit_status: int
     job_status: dict[str, Any]
@@ -124,14 +126,25 @@ async def run_miyabi_job(
     timeout_seconds: float | None = None,
     metrics_artifact_key: str = "miyabi-job-metrics",
 ) -> MiyabiRunResult:
-    """
-    End-to-end runner:
-      1) render/write PBS (Adapter builder)
-      2) submit/wait (Adapter runtime)
-      3) read Output/Error logs -> Prefect logs
-      4) create metrics table artifact (same as existing code)
+    """Execute a Miyabi job end-to-end from runtime models.
 
-    Note: No S3 bundling; only upload logs/metrics into Prefect DB as before.
+    .. note::
+        This function is the high-level executor entrypoint. It internally
+        renders a script, submits it, waits for final status, captures logs,
+        and publishes a metrics artifact.
+
+    Args:
+        work_dir: Working directory where scripts and job outputs are written.
+        script_filename: Job script filename to create in ``work_dir``.
+        exec_profile: Scheduler-independent execution profile.
+        req: Miyabi-specific scheduler request fields.
+        watch_poll_interval: Poll interval in seconds for job status checks.
+        timeout_seconds: Optional timeout for waiting final status.
+        metrics_artifact_key: Prefect artifact key for job metrics table.
+
+    Returns:
+        :class:`MiyabiRunResult` containing job id, exit status, and final
+        scheduler status payload.
     """
     logger = get_run_logger()
 

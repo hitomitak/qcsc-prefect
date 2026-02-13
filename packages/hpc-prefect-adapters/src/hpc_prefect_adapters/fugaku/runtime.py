@@ -7,12 +7,32 @@ from pathlib import Path
 from typing import Any
 
 
-class SubmitError(RuntimeError): ...
-class WaitTimeout(RuntimeError): ...
-class CancelError(RuntimeError): ...
+class SubmitError(RuntimeError):
+    """Raised when job submission fails."""
+
+
+class WaitTimeout(RuntimeError):
+    """Raised when waiting for final job status times out."""
+
+
+class CancelError(RuntimeError):
+    """Raised when job cancellation fails."""
 
 
 async def run_command(*args: str, cwd: Path | None = None) -> str:
+    """Run a command asynchronously and return decoded stdout.
+
+    Args:
+        *args: Command and arguments to execute.
+        cwd: Optional working directory for the command.
+
+    Returns:
+        Decoded standard output text.
+
+    Raises:
+        RuntimeError: If the command exits with a non-zero return code.
+    """
+
     proc = await asyncio.create_subprocess_exec(
         *args,
         cwd=str(cwd) if cwd else None,
@@ -29,11 +49,15 @@ async def run_command(*args: str, cwd: Path | None = None) -> str:
 
 @dataclass(frozen=True)
 class SubmitResult:
+    """Submission result payload returned by runtime ``submit`` methods."""
+
     job_id: str
     raw_output: str
 
 
 class FugakuPJMRuntime:
+    """Minimal async runtime for Fugaku PJM commands."""
+
     JOB_ID_RE = re.compile(r"Job\s+(\d+)\s+submitted\.?")
     PJSTAT_KEYS = [
         "JOB_ID",
@@ -63,6 +87,19 @@ class FugakuPJMRuntime:
     ]
 
     async def submit(self, script_path: Path, *, cwd: Path | None = None) -> SubmitResult:
+        """Submit a PJM script with ``pjsub``.
+
+        Args:
+            script_path: Path to the PJM script file.
+            cwd: Optional working directory for ``pjsub`` execution.
+
+        Returns:
+            Parsed submission result including job id and raw output.
+
+        Raises:
+            SubmitError: If submission fails or job id cannot be parsed.
+        """
+
         try:
             stdout = await run_command("pjsub", str(script_path), cwd=cwd)
         except Exception as e:
@@ -92,6 +129,20 @@ class FugakuPJMRuntime:
         watch_poll_interval: float = 10.0,
         timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
+        """Poll PJM status until a terminal state is reached.
+
+        Args:
+            job_id: Target PJM job id.
+            watch_poll_interval: Poll interval in seconds.
+            timeout_seconds: Optional timeout for waiting terminal status.
+
+        Returns:
+            Parsed final ``pjstat`` row.
+
+        Raises:
+            WaitTimeout: If timeout is exceeded.
+        """
+
         start = asyncio.get_running_loop().time()
         try:
             while True:
@@ -115,8 +166,16 @@ class FugakuPJMRuntime:
             return {}
 
     async def cancel(self, job_id: str) -> None:
+        """Cancel a PJM job using ``pjdel``.
+
+        Args:
+            job_id: Target PJM job id.
+
+        Raises:
+            CancelError: If cancellation fails.
+        """
+
         try:
             await run_command("pjdel", job_id)
         except Exception as e:
             raise CancelError(f"pjdel failed for job_id={job_id}") from e
-
