@@ -140,6 +140,7 @@ async def run_miyabi_job(
     script_path = write_script_file(work_dir=work_dir, filename=script_filename, text=script_text)
 
     # 2) submit & wait
+    logger.info(f"Create Script file in {script_path}")
     rt = MiyabiPBSRuntime()
     submit = await rt.submit(script_path, cwd=work_dir)
     job_id = submit.job_id

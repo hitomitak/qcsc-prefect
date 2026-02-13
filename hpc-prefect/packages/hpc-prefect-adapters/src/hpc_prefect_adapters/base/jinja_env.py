@@ -7,10 +7,6 @@ def make_env(pkg: str) -> Environment:
     pkg: e.g. "hpc_prefect_adapters.miyabi"
     """
     env = Environment(
-        loader=PackageLoader(pkg, "templates"),
-        autoescape=False,
-        undefined=StrictUndefined,
-        trim_blocks=True,
-        lstrip_blocks=True,
+        loader=PackageLoader(pkg, "templates")
     )
     return env
