@@ -157,7 +157,7 @@ def main() -> None:
     if not queue:
         raise RuntimeError("Set 'queue' in --config, --queue, or MIYABI_PBS_QUEUE.")
 
-    launcher = _pick_value(args.launcher, config.get("launcher"), env.get("launcher"), "mpiexec")
+    launcher = _pick_value(args.launcher, config.get("launcher"), env.get("launcher"), "mpiexec.hydra")
     walltime = _pick_value(args.walltime, config.get("walltime"), env.get("walltime"), "00:10:00")
 
     num_nodes = int(_pick_value(args.num_nodes, config.get("num_nodes"), env.get("num_nodes"), 2))

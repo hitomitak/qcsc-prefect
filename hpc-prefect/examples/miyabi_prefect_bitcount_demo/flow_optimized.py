@@ -4,7 +4,9 @@ import argparse
 import asyncio
 import inspect
 from array import array
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from prefect import flow
 from prefect.artifacts import create_table_artifact
@@ -48,6 +50,14 @@ def _read_hist_u64(path: Path) -> list[int]:
     if len(hist) != MAXVAL:
         raise ValueError(f"Unexpected histogram size: expected {MAXVAL}, got {len(hist)}")
     return [int(v) for v in hist]
+
+
+def _make_job_work_dir(base_work_dir: Path) -> Path:
+    base_work_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    job_dir = base_work_dir / f"job_{timestamp}_{uuid4().hex[:8]}"
+    job_dir.mkdir(parents=True, exist_ok=False)
+    return job_dir
 
 
 @flow(name="miyabi-bitcount-optimized-flow")
@@ -103,8 +113,9 @@ async def miyabi_bitcount_optimized_flow(
     results = await runtime.sampler([(isa,)], options=options)
     bitstrings = results[0].data.meas.get_bitstrings()
 
-    resolved_work_dir = Path(work_dir).expanduser().resolve()
-    _write_input_u32(resolved_work_dir, bitstrings)
+    resolved_base_work_dir = Path(work_dir).expanduser().resolve()
+    job_work_dir = _make_job_work_dir(resolved_base_work_dir)
+    _write_input_u32(job_work_dir, bitstrings)
 
     exec_profile = ExecutionProfile(
         command_key=cmd.command_name,
@@ -126,7 +137,7 @@ async def miyabi_bitcount_optimized_flow(
     )
 
     result = await run_miyabi_job(
-        work_dir=resolved_work_dir,
+        work_dir=job_work_dir,
         script_filename=script_filename,
         exec_profile=exec_profile,
         req=req,
@@ -137,7 +148,7 @@ async def miyabi_bitcount_optimized_flow(
     if result.exit_status != 0:
         raise RuntimeError(f"Optimized BitCount job failed: exit_status={result.exit_status}")
 
-    hist = _read_hist_u64(resolved_work_dir / "hist_u64.bin")
+    hist = _read_hist_u64(job_work_dir / "hist_u64.bin")
     counts = {
         format(i, f"0{BITLEN}b"): c
         for i, c in enumerate(hist)
@@ -154,7 +165,7 @@ async def miyabi_bitcount_optimized_flow(
         "job_id": result.job_id,
         "shots": int(sum(counts.values())),
         "num_unique_bitstrings": len(counts),
-        "work_dir": str(resolved_work_dir),
+        "work_dir": str(job_work_dir),
     }
 
 

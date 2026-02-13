@@ -69,7 +69,7 @@ Edit `examples/miyabi_prefect_bitcount_demo/bitcount_blocks.toml` and set only t
 
 - `project`
 - `queue`
-- `work_dir`
+- `work_dir` (base directory; each run creates `job_xxxx` under this path)
 
 Then run:
 
@@ -94,7 +94,7 @@ Legacy env vars are still supported for backward compatibility (`MIYABI_PBS_PROJ
 
 Defaulted keys (optional, no need to set unless you want to customize):
 
-- `launcher="mpiexec"`
+- `launcher="mpiexec.hydra"`
 - `walltime="00:10:00"`
 - `num_nodes=2`
 - `mpiprocs=5`
@@ -124,6 +124,7 @@ Generated artifacts include:
 
 - `sampler-count-dict-wrapper`
 - `miyabi-bitcount-wrapper-metrics`
+- Job script and output files in `<work_dir>/job_xxxx/`
 
 ## Step 4B. Run Optimized tutorial flow
 
@@ -147,6 +148,7 @@ Generated artifacts include:
 
 - `sampler-count-dict-optimized`
 - `miyabi-bitcount-optimized-metrics`
+- Job script and output files in `<work_dir>/job_xxxx/`
 
 ## What users still choose manually
 

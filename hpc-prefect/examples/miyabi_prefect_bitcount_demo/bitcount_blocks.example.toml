@@ -4,7 +4,7 @@ work_dir = "/work/gz00/${USER}/miyabi_bitcount_tutorial"
 
 # Everything below is optional.
 # If omitted, create_blocks.py uses built-in defaults:
-# launcher = "mpiexec"
+# launcher = "mpiexec.hydra"
 # walltime = "00:10:00"
 # num_nodes = 2
 # mpiprocs = 5
