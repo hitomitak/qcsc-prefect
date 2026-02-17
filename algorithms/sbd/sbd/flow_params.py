@@ -47,7 +47,7 @@ class CircuitParameters(BaseModel):
         default=100_000,
         description="The number of random seed trials to run layout with.",
         title="Sabre Layout Trials",
-        get=1,
+        ge=1,
     )
 
 

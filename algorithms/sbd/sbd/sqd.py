@@ -9,7 +9,6 @@ from prefect import get_run_logger, task
 from prefect.transactions import CommitMode, transaction
 from prefect.variables import Variable
 from prefect_qiskit import QuantumRuntime
-from prefect_sbd.sbd_job import SBDResult, SBDSolverJob
 from qcsc_workflow_utility.chem import ElectronicProperties, NpStrict1DArrayF64
 from qiskit.primitives.containers import BitArray
 from qiskit_addon_sqd.configuration_recovery import (
@@ -27,6 +26,7 @@ from .np_type_extension import (
     NpStrict1DArrayLL,
     NpStrict2DArrayBool,
 )
+from .solver_job import SBDResult, SBDSolverJob
 from .transpile_custom import find_optimal_layout, transpile_circuit
 
 # Convert Addon function into Prefect Task

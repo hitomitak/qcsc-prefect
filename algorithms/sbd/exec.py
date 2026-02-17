@@ -1,22 +1,17 @@
-# Workflow for observability demo on Miyabi
-#
-# Author: Naoki Kanazawa (knzwnao@jp.ibm.com)
-
-
-import asyncio
 import sys
 from pathlib import Path
 
-from src import riken_sqd_de
-from src.flow_params import FlowParameters
+from sbd.flow_params import FlowParameters
+from sbd.main import riken_sqd_de
 
 
 def main():
-    json_file = Path(sys.argv[1])
+    if len(sys.argv) < 2:
+        raise SystemExit("Usage: python algorithms/sbd/exec.py <params.json>")
+
+    json_file = Path(sys.argv[1]).expanduser().resolve()
     params = FlowParameters.model_validate_json(json_file.read_text())
-    
-    coro = riken_sqd_de(parameters=params)    
-    asyncio.run(coro)
+    riken_sqd_de(parameters=params)
 
 
 if __name__ == "__main__":

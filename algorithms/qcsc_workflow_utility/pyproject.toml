@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qcsc_workflow_utility"
+version = "0.1.0"
+description = "Common utilities for QCSC workflows"
+authors = [
+    { name = "Yuto Morohoshi", email = "mrhsyut@ibm.com" }
+]
+maintainers = [
+    { name = "Yuto Morohoshi", email = "mrhsyut@ibm.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "pydantic",
+    "pydantic-numpy",
+    "pyscf",
+    "prefect",
+]
+
+[tool.setuptools]
+packages = ["qcsc_workflow_utility"]
+package-dir = {"qcsc_workflow_utility" = "src/qcsc_workflow_utility"}
+include-package-data = true
+zip-safe = false

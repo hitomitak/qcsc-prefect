@@ -17,7 +17,7 @@ from qcsc_workflow_utility.chem import (
     NpStrict1DArrayF64,
     NpStrict2DArrayF64,
 )
-from prefect_sbd.sbd_job import SBDSolverJob
+from .solver_job import SBDSolverJob
 
 from .data_io import extend_table_artifact
 from .flow_params import FlowParameters

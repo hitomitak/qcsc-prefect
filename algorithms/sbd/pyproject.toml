@@ -19,15 +19,11 @@ dependencies = [
     "prefect-qiskit==0.2.0",
     "prefect[aws,ray]==3.4.24",
     "pydantic_numpy",
-    "prefect-sbd",
-    "prefect-miyabi",
     "qcsc_workflow_utility",
 ]
 
 [tool.uv.sources]
-prefect-sbd = { workspace = true }
-prefect-miyabi = { workspace = true }
-qcsc_workflow_utility = { workspace = true }
+qcsc_workflow_utility = { path = "../qcsc_workflow_utility", editable = true }
 
 [tool.setuptools]
 packages = ["sbd"]
