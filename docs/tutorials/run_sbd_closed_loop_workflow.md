@@ -286,7 +286,7 @@ In the Prefect console, click **Run** → **Custom run** and set as following. A
 | Field | Value / Example |
 |---|---|
 | FCIDump File | `/work/g00/z12345/hpc-prefect/algorithms/sbd/data/fcidump_N2_MO.txt` |
-| SQD Subspace Dimension (Optional) | `1000000` (start small for testing) |
+| SQD Subspace Dimension (Optional) | `10000000` (start small for testing) |
 | Differential Evolution Iterations (Optional)| `1` (start small for testing) |
 | Solver Block Ref | `sbd_solver_job/davidson-solver` |
 
