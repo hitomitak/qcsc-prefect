@@ -187,7 +187,7 @@ def main() -> None:
     walltime = str(_pick_value(args.walltime, config.get("walltime"), env.get("walltime"), "02:00:00")).strip()
 
     num_nodes = int(_pick_value(args.num_nodes, config.get("num_nodes"), env.get("num_nodes"), 1))
-    mpiprocs = int(_pick_value(args.mpiprocs, config.get("mpiprocs"), env.get("mpiprocs"), 48))
+    mpiprocs = int(_pick_value(args.mpiprocs, config.get("mpiprocs"), env.get("mpiprocs"), 4))
     ompthreads = int(_pick_value(args.ompthreads, config.get("ompthreads"), env.get("ompthreads"), 1))
 
     modules = _normalize_str_list(
@@ -221,10 +221,10 @@ def main() -> None:
     task_comm_size = int(_pick_value(args.task_comm_size, config.get("task_comm_size"), env.get("task_comm_size"), 1))
     adet_comm_size = int(_pick_value(args.adet_comm_size, config.get("adet_comm_size"), env.get("adet_comm_size"), 1))
     bdet_comm_size = int(_pick_value(args.bdet_comm_size, config.get("bdet_comm_size"), env.get("bdet_comm_size"), 1))
-    block = int(_pick_value(args.block, config.get("block"), env.get("block"), 10))
-    iteration = int(_pick_value(args.iteration, config.get("iteration"), env.get("iteration"), 2))
-    tolerance = float(_pick_value(args.tolerance, config.get("tolerance"), env.get("tolerance"), 1e-4))
-    carryover_ratio = float(_pick_value(args.carryover_ratio, config.get("carryover_ratio"), env.get("carryover_ratio"), 0.5))
+    block = int(_pick_value(args.block, config.get("block"), env.get("block"), 4))
+    iteration = int(_pick_value(args.iteration, config.get("iteration"), env.get("iteration"), 1))
+    tolerance = float(_pick_value(args.tolerance, config.get("tolerance"), env.get("tolerance"), 1e-2))
+    carryover_ratio = float(_pick_value(args.carryover_ratio, config.get("carryover_ratio"), env.get("carryover_ratio"), 0.1))
     solver_mode = str(_pick_value(args.solver_mode, config.get("solver_mode"), env.get("solver_mode"), "cpu")).strip()
 
     shots = int(_pick_value(args.shots, config.get("shots"), env.get("shots"), 500000))

@@ -25,7 +25,7 @@ Compatibility notes from old `prefect_sbd.sbd_job`:
 Build example:
 
 ```bash
-cd /Users/hitomi/Project/hpc-prefect/algorithms/sbd/native
+cd /work/gz00/z12345/hpc-prefect/algorithms/sbd/native
 bash ./build_sbd.sh
 realpath ./diag
 ```
@@ -35,7 +35,7 @@ realpath ./diag
 From repository root:
 
 ```bash
-cd /Users/hitomi/Project/hpc-prefect
+cd /work/gz00/z12345/hpc-prefect
 source ~/venv/prefect/bin/activate
 
 # hpc-prefect local packages
@@ -55,7 +55,7 @@ uv pip install -e algorithms/sbd
 Use config file:
 
 ```bash
-cd /Users/hitomi/Project/hpc-prefect
+cd /work/gz00/z12345/hpc-prefect
 cp algorithms/sbd/sbd_blocks.example.toml algorithms/sbd/sbd_blocks.toml
 vim algorithms/sbd/sbd_blocks.toml
 ```
@@ -71,6 +71,22 @@ python algorithms/sbd/create_blocks.py --config algorithms/sbd/sbd_blocks.toml
 ```toml
 sbd_executable = "/work/gz00/z12345/hpc-prefect/algorithms/sbd/native/diag"
 ```
+
+For memory stability on Miyabi, start from:
+
+```toml
+mpiprocs = 4
+mpi_options = ["-np", "4"]
+task_comm_size = 1
+adet_comm_size = 1
+bdet_comm_size = 1
+block = 4
+iteration = 1
+tolerance = 0.01
+carryover_ratio = 0.1
+```
+
+Then increase only if your target case runs without OOM.
 
 This creates:
 

@@ -1,6 +1,6 @@
 {
   "fcidump": "algorithms/sbd/data/fcidump_Fe4S4_MO.txt",
-  "sqd_dim": 100000000,
+  "sqd_dim": 200000,
   "circ_params": {
     "n_lucj_layers": 2,
     "use_reset_mitigation": true,
@@ -11,7 +11,7 @@
   },
   "de_params": {
     "num_walkers": 4,
-    "iterations": 3,
+    "iterations": 1,
     "randomization_factor": 0.2,
     "fxc": 0.6,
     "cr_prob": 0.9

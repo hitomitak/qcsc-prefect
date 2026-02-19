@@ -95,6 +95,7 @@ Copy config template:
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 cd /work/g00/z12345/hpc-prefect
+mkdir -p /work/g00/z12345/sbd_jobs
 cp algorithms/sbd/sbd_blocks.example.toml algorithms/sbd/sbd_blocks.toml
 ```
 
@@ -104,6 +105,17 @@ Edit `algorithms/sbd/sbd_blocks.toml` and set:
 - `queue`
 - `work_dir`
 - `sbd_executable`
+- `mpiprocs = 4`
+- `mpi_options = ["-np", "4"]`
+- `task_comm_size = 1`
+- `adet_comm_size = 1`
+- `bdet_comm_size = 1`
+- `block = 4`
+- `iteration = 1`
+- `tolerance = 0.01`
+- `carryover_ratio = 0.1`
+
+For Miyabi, start with low MPI parallelism (`-np 4`) to avoid memory OOM, then scale up only after confirming stability.
 
 Run block creation:
 
@@ -177,8 +189,9 @@ Open deployment `riken-sqd-de/riken_sqd_de`, then click:
 
 Set at least:
 
-- `FCIDump File`: path to FCIDUMP file (for example `algorithms/sbd/data/fcidump_N2_MO.txt`)
-- `Differential Evolution Iterations`: start from `2` for a quick run
+- `FCIDump File`: path to FCIDUMP file (for example `/work/gz00/z12345/hpc-prefect/algorithms/sbd/data/fcidump_N2_MO.txt`)
+- `SQD Subspace Dimension`: start from `200000` for a fast run
+- `Differential Evolution Iterations`: start from `1` for a fast run
 - `Solver Block Ref`: `sbd_solver_job/davidson-solver`
 
 Submit the run.
