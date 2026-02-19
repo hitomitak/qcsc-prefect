@@ -107,7 +107,7 @@ class FlowParameters(BaseModel):
     )
     
     sqd_dim: int = Field(
-        default=100_000_000,
+        default=100_000_0,
         description="Dimension of subsampled bitstrings for diagonalization.",
         title="SQD Subspace Dimension",
         ge=1,

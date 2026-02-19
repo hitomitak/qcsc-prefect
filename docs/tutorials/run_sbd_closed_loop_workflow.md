@@ -1,61 +1,90 @@
-# Run SBD Closed-Loop Workflow on Miyabi (hpc-prefect)
+# Run SBD Closed-loop Workflow (hpc-prefect)
 
-This tutorial explains how to run the SBD closed-loop workflow with the current
-`hpc-prefect` architecture.
+This tutorial walks us through reproducing a Sample-based Quantum Diagonalization (SQD) experiment using the `hpc-prefect` architecture.
+We will run a hybrid quantum-classical workflow using the [SBD](https://github.com/r-ccs-cms/sbd) solver to diagonalize a sparse chemistry Hamiltonian on the Miyabi-C environment, orchestrated via Prefect.
 
-Target scope in this version:
+<img src="./images/img-closed-loop.png" alt="sbd" width="90%"/><br>
 
-- Miyabi execution path only
-- block creation by script (no manual solver block editing in UI)
-
----
+The goal is to compute the ground state energy of N2-Mo State.
 
 ## Prerequisites
 
-Before starting, complete:
+Before starting, make sure:
 
-- [Create Your QCSC Workflow with Prefect](./create_qcsc_workflow.md)
-- [How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit.md)
-
-Also confirm:
-
-- `qsub` / `qstat` are available on Miyabi
-- a `QuantumRuntime` block exists (for example `ibm-runner`)
-- SBD executable `diag` has been built on Miyabi and you know its absolute path
+- You have completed [Create Your QCSC Workflow with Prefect](./create_qcsc_workflow.md).
+- You have completed [How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit.md).
 
 > [!IMPORTANT]
-> Replace `g00` and `z12345` with your actual group/account.
+> - Replace `g00` and `z12345` with your actual group and account name.
+> - There is currently an issue where the `~` (home) directory on mdx runs out of available space. As a workaround, we can use the `/large` or `/work` directory instead. In this tutorial, we use the `/work` directory.
+
+## 0. What changes from BitCounts?
+
+### What you did in BitCounts (quick recap)
+- **(HPC side)** Compile C++ and produce an executable (`get_counts`) — *build on the execution environment*.
+- **(Prefect side)** Register a Block type from Python code (e.g., `prefect block register -f ...`).
+- **(Flow side)** A Flow loads Blocks and Variables and runs tasks (quantum → HPC → post-process).
+
+### What SBD closed-loop adds
+- HPC execution expands from a single `get_counts` binary to a full **SBD solver (`diag`) + closed-loop logic**.
+- Additional Blocks are required (solver job block, etc.).
+- **Deployment (Deploy)** becomes important so that participants can run from the Prefect UI reliably.
+- Block creation is automated via script instead of manual UI editing.
 
 ---
+## 1. Big picture: Flow / Task / Block / Variable / Deployment
 
-## 0. Files used in this tutorial
+### 1.1 Minimal "where it runs" model
+- **MDX workflow client (mdx-cli)**: where the Prefect process runs the Flow (the "runner/worker" side)
+- **Miyabi-C**: where HPC binaries (e.g., `diag`) run via PBS/MPI
+- **IBM Quantum**: where quantum sampling runs via Qiskit Runtime (if used by the workflow)
 
-- `../../algorithms/sbd/create_blocks.py`
-- `../../algorithms/sbd/sbd_blocks.example.toml`
-- `../../algorithms/sbd/default_params/test_n2.json`
-- `../../algorithms/sbd/sbd/main.py`
-- `../../algorithms/sbd/sbd/sqd.py`
-- `../../algorithms/sbd/sbd/solver_job.py`
+### 1.2 Mapping to Prefect core concepts
+
+#### Flow (end-to-end experiment procedure)
+The entire closed-loop SQD experiment is implemented as a single Flow, including iterations, branching, and convergence checks.
+
+#### Tasks (individual steps)
+- Execute quantum sampling (IBM Quantum / Qiskit Runtime)
+- Subsampling / configuration recovery (Python on MDX)
+- Davidson diagonalization (PBS job on Miyabi-C)
+- Collect results and store artifacts (Prefect)
+
+#### Blocks (reusable "configuration + credentials")
+- **Quantum**: IBM Quantum credentials / runtime configuration
+- **HPC**: SBD solver job settings (queue, nodes, executable path, modules, etc.)
+- **Command**: Command execution settings
+- **Execution Profile**: MPI execution settings
+
+#### Variables (runtime parameters)
+- Quantum sampler options (shots, DD settings, etc.) and other run-time knobs are stored as Prefect Variables.
+
+#### Deployment (how the Flow becomes runnable from the UI)
+Deployment is the "launch entry" that tells Prefect:
+- which Flow to run,
+- under which deployment name,
+- and how it should be executed by a serving process.
 
 ---
+## 2. Tutorial steps
+![SBD Setup Flow](./images/img-sbd-setup-flow.png)
+### Step 1. SSH to the MDX workflow client (where the Flow is executed)
 
-## 1. Log in to MDX workflow client
+Connect to the MDX workflow client using SSH. This is where we will install the workflow.
 
 <img src="./images/icon-pc.png" alt="pc" width="50"/><br>
 ```bash
 ssh -A z12345@qii-kawasaki-miyabi-cli.cspp.cc.u-tokyo.ac.jp
 ```
 
-Activate your environment:
+Activate the environment:
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 source ~/venv/prefect/bin/activate
 ```
 
----
-
-## 2. Install required packages
+### Step 2. Install required packages (bring the Flow definition into your environment)
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
@@ -71,26 +100,84 @@ uv pip install -e algorithms/qcsc_workflow_utility
 uv pip install -e algorithms/sbd
 ```
 
+Check that the packages are installed correctly:
+
+<img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
+```bash
+uv pip list | grep -E "(hpc-prefect|sbd|qcsc)"
+
+hpc-prefect-adapters               0.1.0
+hpc-prefect-blocks                 0.1.0
+hpc-prefect-core                   0.1.0
+hpc-prefect-executor               0.1.0
+qcsc-workflow-utility              0.1.0
+sbd                                0.1.0
+```
+
 ---
 
-## 3. Prepare SBD executable path on Miyabi
+### Step 3. Build the SBD solver on Miyabi-C (prepare the HPC executable)
+#### 3.1 SSH to Miyabi-C
+> [!NOTE]
+> The operating system and computer architecture of the MDX workflow server differs from that of the Miyabi-C compute nodes.
+> To run programs written in compiled languages such as C++, it's important to build them directly on the environment where they will be executed.
 
-Build `diag` under `algorithms/sbd/native`:
+Open a new terminal and connect to the Miyabi-C login node:
+
+<img src="./images/icon-pc.png" alt="pc" width="50"/><br>
+```bash
+ssh -A z12345@miyabi-c.jcahpc.jp
+```
+
+Navigate to the directory and build:
 
 <img src="./images/icon-miyabi.png" alt="miyabi" width="50"/><br>
 ```bash
 cd /work/g00/z12345/hpc-prefect/algorithms/sbd/native
 bash ./build_sbd.sh
+```
+
+This process may take several minutes. After completion, a directory named `diag` in the `native` directory:
+
+<img src="./images/icon-miyabi.png" alt="miyabi" width="50"/><br>
+```bash
+ls -l | grep diag
+```
+
+Example output:
+
+```text
+-rwxr-x--- 1 z12345 g00 1542016 Nov 30 15:18 diag
+```
+
+Great! You have completed building SBD on Miyabi-C!
+
+#### 3.2 Record the absolute path of `diag` (you will paste it into the solver Block)
+Get the absolute path to the SBD executable:
+
+<img src="./images/icon-miyabi.png" alt="miyabi" width="50"/><br>
+```bash
 realpath ./diag
 ```
 
-Use this absolute path in Step 4 (`sbd_executable`).
+Example output:
+
+```text
+/work/g00/z12345/hpc-prefect/algorithms/sbd/native/diag
+```
+
+We will need this path in the next step.
+
+Once we completed this step, we can escape from the session (e.g. press `<ctrl> + d`) and log out from the Miyabi login node.
+Go back to the SSH shell of the MDX workflow server to proceed with the following steps.
 
 ---
 
-## 4. Generate Prefect blocks by script
+### Step 4. Generate Prefect blocks by script (Block Type vs Block Instance)
 
-Copy config template:
+This approach uses automated block creation via script instead of manual UI editing.
+
+#### 4.1 Create a job working directory and copy config template
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
@@ -99,106 +186,160 @@ mkdir -p /work/g00/z12345/sbd_jobs
 cp algorithms/sbd/sbd_blocks.example.toml algorithms/sbd/sbd_blocks.toml
 ```
 
-Edit `algorithms/sbd/sbd_blocks.toml` and set:
+If you use On-Prem prefect, you need to run prefect-auth login command to get access to prefect server.
 
-- `project`
-- `queue`
-- `work_dir`
-- `sbd_executable`
-- `mpiprocs = 4`
-- `mpi_options = ["-np", "4"]`
-- `task_comm_size = 1`
-- `adet_comm_size = 1`
-- `bdet_comm_size = 1`
-- `block = 4`
-- `iteration = 1`
-- `tolerance = 0.01`
-- `carryover_ratio = 0.1`
+<img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
+```bash
+prefect-auth login
+```
 
-For Miyabi, start with low MPI parallelism (`-np 4`) to avoid memory OOM, then scale up only after confirming stability.
+#### 4.2 Edit the configuration file
 
-Run block creation:
+Edit `algorithms/sbd/sbd_blocks.toml` and set the following parameters.
+
+Set at least:
+- project
+- queue
+- work_dir
+- sbd_executable
+
+| Parameter | Value / Example | Description |
+|---|---|---|
+| `project` | `g00` | Your Miyabi project name |
+| `queue` | `regular-c` | Queue name on Miyabi |
+| `work_dir` | `/work/g00/z12345/sbd_jobs` | Job working directory |
+| `sbd_executable` | `/work/g00/z12345/hpc-prefect/algorithms/sbd/native/diag` | Absolute path to diag executable |
+| `mpiprocs` | `8` | Number of MPI processes |
+| `mpi_options` | `["-np", "8"]` | MPI options |
+| `task_comm_size` | `1` | Task communicator size |
+| `adet_comm_size` | `1` | Alpha determinant communicator size |
+| `bdet_comm_size` | `1` | Beta determinant communicator size |
+| `block` | `4` | Block size |
+| `iteration` | `1` | Number of iterations |
+| `tolerance` | `0.01` | Convergence tolerance |
+| `carryover_ratio` | `0.1` | Carryover ratio |
+
+> [!NOTE]
+> For Miyabi, start with low MPI parallelism (`-np 8`) to avoid memory OOM, then scale up only after confirming stability.
+> Adding more processes yields shorter wall-clock time, but it demands more memory space to copy state vectors.
+> With too many processes, the job will be killed by out-of-memory (OOM-killed).
+
+#### 4.3 Run block creation script
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 python algorithms/sbd/create_blocks.py --config algorithms/sbd/sbd_blocks.toml
 ```
 
-This creates (default names):
+This creates the following blocks (default names):
 
-- `CommandBlock`: `cmd-sbd-diag`
-- `ExecutionProfileBlock`: `exec-sbd-mpi`
-- `HPCProfileBlock`: `hpc-miyabi-sbd`
-- `SBD Solver Job`: `davidson-solver`
-- Prefect Variable: `sqd_options`
+- **CommandBlock**: `cmd-sbd-diag`
+- **ExecutionProfileBlock**: `exec-sbd-mpi`
+- **HPCProfileBlock**: `hpc-miyabi-sbd`
+- **SBD Solver Job**: `davidson-solver`
+- **Prefect Variable**: `sqd_options`
 
----
-
-## 5. Check solver block and options
-
-Check solver block:
-
-<img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
-```bash
-prefect block inspect sbd_solver_job/davidson-solver
-```
-
-Check options variable:
-
-<img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
-```bash
-prefect variable inspect sqd_options
-```
-
-Optional override example:
-
-<img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
-```bash
-prefect variable set sqd_options '{"params":{"shots":500000}}' --overwrite
-```
+<img src="./images/img-closed-blocks.img" alt="blocks" width="90%"/><br>
 
 ---
 
-## 6. Deploy the SBD flow
+### Step 5. Deploy SBD Work Flow
 
-Start a detached session:
+**Deploy = register a Flow as a runnable entry point (Deployment) so it can be started from the Prefect UI/CLI by name.**
+
+Having Python code on disk is not enough for stable UI-driven execution. Deployment records "what to run" and "how to run it".
+
+Start a screen session:
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 screen -S sbd-workflow
 ```
 
-Deploy:
+Activate environment and deploy:
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 cd /work/g00/z12345/hpc-prefect
+source ~/venv/prefect/bin/activate
 sbd-deploy
 ```
 
-Detach screen: `<ctrl> + a`, then `d`.
+You should see:
+
+```text
+Your flow 'riken-sqd-de' is being served and polling for scheduled runs!
+
+To trigger a run for this flow, use the following command:
+
+        $ prefect deployment run 'riken-sqd-de/riken_sqd_de'
+
+You can also run your flow via the Prefect UI: ...
+```
+
+Detach the screen session (`<ctrl> + a`, then `d`).
+
+### Step 6. Provide Workflow Parameters
+
+In the Prefect console, click **Run** → **Custom run** and set as following. Any fields not explicitly specified may remain at their default values.
+
+| Field | Value / Example |
+|---|---|
+| FCIDump File | `/work/g00/z12345/hpc-prefect/algorithms/sbd/data/fcidump_N2_MO.txt` |
+| SQD Subspace Dimension (Optional) | `1000000` (start small for testing) |
+| Differential Evolution Iterations (Optional)| `1` (start small for testing) |
+| Solver Block Ref | `sbd_solver_job/davidson-solver` |
+
+> [!NOTE]
+> For this tutorial, the number of iterations is set to 1 for a quick test, but feel free to increase it as needed.
+
+
+![Setup SBD Workflow Parameters](./images/img-sbd-workflow-paramaters-small.png)
+
+### Step 7. Execute the Workflow
+
+Click **Start Now** → **Submit**.
+
+![SBD Flow Run](./images/img-sbd-flow-run.png)
+
+After the run completes, check the `sqd-telemetry` artifact. It should contain intermediate energies. The final energy should converge around -134.94 Hartree for N2.
+
+![SQD Telemetry](./images/img-sqd-telemetry.png)
+
+### Step 8. Cleanup
+Follow [How to shutdown the workflow](../howto/howto_shutdown_workflow.md).
 
 ---
 
-## 7. Run from Prefect Web Portal
+## 3. What happens when you "Submit" from the Prefect UI?
 
-Open deployment `riken-sqd-de/riken_sqd_de`, then click:
+### 3.1 What the UI actually creates
+When you choose **Run → Custom run → Submit**, the Prefect server creates a **Flow Run request** for a specific Deployment, with the parameters you provided.
 
-- **Run**
-- **Custom run**
+### 3.2 What actually executes the Flow (the key mental model)
+The process started by `sbd-deploy` is the **serving process**. It:
+1. polls the Prefect server for new Flow Runs,
+2. when it finds one, it executes the Flow **on mdx-cli**.
 
-Set at least:
+> If the `screen` session dies (or `sbd-deploy` stops), the UI can still create Flow Runs, but there is no active "runner" to pick them up — so the run will not progress.
 
-- `FCIDump File`: path to FCIDUMP file (for example `/work/gz00/z12345/hpc-prefect/algorithms/sbd/data/fcidump_N2_MO.txt`)
-- `SQD Subspace Dimension`: start from `200000` for a fast run
-- `Differential Evolution Iterations`: start from `1` for a fast run
-- `Solver Block Ref`: `sbd_solver_job/davidson-solver`
+### 3.3 Confirm the information of the deployment
+Instead of memorizing filenames, teach participants to trace the entry point:
 
-Submit the run.
+1) List deployments
+```bash
+prefect deployment ls
+```
 
----
+2) Inspect the deployment (shows the entry point / flow reference)
+```bash
+prefect deployment inspect 'riken-sqd-de/riken_sqd_de'
+```
 
-## 8. What happens in this architecture
+3) Locate the Flow definition in the repo
+The flow is defined in `algorithms/sbd/sbd/main.py`
+
+### 3.4 What happens in this architecture
 
 1. `walker_sqd` loads `SBDSolverJob` by name.
 2. `SBDSolverJob.run(...)` prepares `fcidump.txt` and `AlphaDets.bin`.
@@ -213,9 +354,79 @@ This keeps workflow code stable while HPC settings are controlled by block insta
 
 ---
 
-## 9. Cleanup
+## Appendix: Using GPU Solvers and Custom Solver Blocks
 
-When finished:
+This section explains how to:
+1. Create a GPU-enabled SBD solver Block
+2. Select which Solver to use at run time
+3. Add custom Solver configurations without modifying the workflow code
 
-- stop serving process (screen session)
-- optionally follow [How to shutdown the workflow](../howto/howto_shutdown_workflow.md)
+This is an advanced usage of the SBD closed-loop workflow.
+
+### A. Creating a GPU Solver Block
+You already created a CPU solver Block:
+```
+davidson-solver
+```
+Now, we will create a GPU-enabled version.
+
+#### A.1 Edit configuration for GPU
+
+Copy and edit the configuration file:
+
+```bash
+cp algorithms/sbd/sbd_blocks.toml algorithms/sbd/sbd_blocks_gpu.toml
+```
+
+Edit `algorithms/sbd/sbd_blocks_gpu.toml` and change:
+
+| Parameter | Value / Example |
+|---|---|
+| `block_name` | `davidson-solver-gpu` |
+| `queue` | `regular-g` |
+| `sbd_executable` | `/work/g00/z12345/hpc-prefect/algorithms/sbd/native/diag` (GPU version) |
+| `launcher` | `mpirun` |
+| `mpiprocs` | `1` |
+| `mpi_options` | `["-n", "1"]` |
+| `solver_mode` | `gpu` |
+
+#### A.2 Create the GPU Block
+
+Run:
+
+```bash
+python algorithms/sbd/create_blocks.py --config algorithms/sbd/sbd_blocks_gpu.toml
+```
+
+### B. How the Workflow Selects a Solver
+
+The workflow does not hard-code Solver names.
+Instead, it accepts a Block reference at run time.
+
+The format is:
+
+```
+<block_type_slug>/<block_name>
+```
+
+For example:
+
+```
+sbd_solver_job/davidson-solver
+sbd_solver_job/davidson-solver-gpu
+```
+
+### C. Selecting the Solver at Run Time
+
+When launching a run from the Prefect UI:
+1. Click Run → Custom run
+2. Set the parameter:
+
+| Field	| Example |
+|---|---|
+| Solver Block Ref | sbd_solver_job/davidson-solver-gpu |
+
+This tells the workflow to use the GPU solver Block.
+
+----
+*END OF TUTORIAL*

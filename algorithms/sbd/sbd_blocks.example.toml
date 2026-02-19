@@ -2,16 +2,16 @@
 project = "gz00"
 queue = "regular-c"
 work_dir = "/work/gz00/<user>/sbd_jobs"
-sbd_executable = "/work/gz00/<user>/hpc-prefect/algorithms/sbd/native"
+sbd_executable = "/work/gz00/<user>/hpc-prefect/algorithms/sbd/native/diag"
 
 # Optional execution profile
 launcher = "mpiexec.hydra"
 walltime = "02:00:00"
 num_nodes = 1
-mpiprocs = 4
+mpiprocs = 8
 ompthreads = 1
 modules = ["intel/2023.2.0", "impi/2021.10.0"]
-mpi_options = ["-np", "4"]
+mpi_options = ["-np", "8"]
 
 # Optional block/variable names
 command_block_name = "cmd-sbd-diag"
