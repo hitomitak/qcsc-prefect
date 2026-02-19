@@ -1,222 +1,75 @@
-# HPC Workflow Execution Design
+# HPC Prefect
 
-This document specifies an HPC workflow execution architecture
-to run the same workflow code across multiple HPC systems (e.g. Fugaku, Miyabi, Slurm) without modification.
+This repository provides a modular workspace for portable HPC workflow orchestration with Prefect.
+It is designed so the same workflow code can run across multiple HPC systems by switching profile blocks.
 
-The key idea is to separate execution intent from execution environment
-and to encode HPC expertise in centrally managed profiles.
-
----
-
-## 1. Design Goals
-
-- Enable one workflow to run on multiple HPC systems (Fugaku, Miyabi, Slurm)
-  without modification
-- Reduce user burden by eliminating the need to write HPC-specific job blocks
-- Support future schedulers (e.g. Slurm) without redesign
-
----
-
-## 2. Architectural Overview
+The workspace is organized into four core packages:
 
 ```
-[ Workflow ]
-   │  (algorithm logic + run-time parameters)
-   ▼
-[ Command Block ]
-   │  What to run (logical executable name)
-   ▼
-[ Execution Profile Block ]
-   │  HOW this command should be run
-   ▼
-[ Tuning Parameters ]   ← user-adjustable (optional)
-   │
-   ▼
-[ HPC Profile Block ]
-   │  WHERE / SYSTEM-specific resolution
-   ▼
-[ Executor ]
+hpc-prefect/
+├── docs
+│   └── concept.md
+├── examples
+│   ├── fugaku_prefect_hello_demo
+│   ├── miyabi_prefect_bitcount_demo
+│   └── miyabi_prefect_hello_demo
+├── packages
+│   ├── hpc-prefect-core
+│   ├── hpc-prefect-blocks
+│   ├── hpc-prefect-adapters
+│   └── hpc-prefect-executor
+├── pyproject.toml
+└── .pre-commit-config.yaml
 ```
 
----
+## Repository Structure
 
-## 3. Block Types
+- `packages/hpc-prefect-core/`
+  Common execution model definitions (for example `ExecutionProfile`) shared by all targets.
+- `packages/hpc-prefect-blocks/`
+  Prefect Block schemas for command, execution profile, and HPC profile layers.
+- `packages/hpc-prefect-adapters/`
+  Target-specific script builders and runtime adapters (currently Miyabi/PBS and Fugaku/PJM).
+- `packages/hpc-prefect-executor/`
+  High-level execution entrypoints that resolve blocks and dispatch to target runtimes.
+- `examples/`
+  End-to-end runnable examples for Miyabi and Fugaku.
+- `docs/`
+  Concept and architecture documents for the block-based execution model.
 
-### 3.1 Command Block
+## Documentation
 
-**Purpose**
-- Define what command is executed
+- Concept and architecture:
+  - [HPC-Prefect Concept](./docs/concept.md)
+- Example guides:
+  - [Miyabi BitCount Tutorial](./docs/tutorials/create_qcsc_workflow.md)
+  - [Miyabi Hello Demo](./examples/miyabi_prefect_hello_demo/README.md)
+  - [Fugaku Hello Demo](./examples/fugaku_prefect_hello_demo/README.md)
 
-**Characteristics**
-- No absolute paths
-- No scheduler or resource logic
-- No module/environment configuration
+## Code Management
 
-**Examples**
-- `cmd-diag`
-- `cmd-sbd`
+Code quality checks are configured with pre-commit (`.pre-commit-config.yaml`):
 
----
+- `ruff check --fix`
+- `ruff format`
+- basic repository hygiene hooks (`check-yaml`, trailing whitespace, EOF fix, merge conflict checks)
 
-### 3.2 Execution Profile Block (Admin task)
+## Versioning Policy
 
-**Purpose**
-- Provide a execution baseline for a specific command
+Each sub-package under `packages/` maintains its own version in its own `pyproject.toml`.
+The root project is a workspace coordinator (`hpc-prefect-workspace`) and is not intended for distribution.
 
-**Characteristics**
-- One Execution Profile per command 
-- Safe, pre-validated defaults
-- Intended to cover common use cases
+## Contribution Guidelines
 
-**Typical contents**
-- resource class (`cpu` / `gpu`)
-- default node count
-- default walltime
-- default launcher
-- default MPI hints
-- default modules / environment variables
-- execution semantics (placement intent)
+1. Install pre-commit hooks:
+   - `pre-commit install`
+2. Run checks before commit:
+   - `pre-commit run --all-files`
+3. Run tests as needed:
+   - `uv run pytest`
 
-**Examples**
-- `exec-diag-n2`
-- `exec-diag-n16`
-- `exec-diag-gpu`
+When adding a new HPC target, include:
 
-```yaml
-common:
-  launcher: mpi
-  ranks: 16
-  threads_per_rank: 1
-
-overrides:
-  miyabi:
-    placement:
-      ranks_per_node: 16
-    env:
-      modules: ["intelmpi"]
-  fugaku:
-    placement:
-      ranks_per_node: 48
-    env:
-      spack: ["fjmpi"]
-```
-
----
-
-### 3.3 HPC Profile Block (Admin task, environment-specific)
-
-**Purpose**
-- Resolve execution intent into concrete HPC-specific settings
-
-**Responsibilities**
-- Scheduler type (PJM / PBS / Slurm)
-- Batch template and submission logic
-- Resource-class → queue / resource-group mapping
-- Executable path resolution
-- Enforcement of system limits
-
-**Examples**
-- `hpc-fugaku`
-- `hpc-miyabi`
-
----
-
-### 3.4 UserContext Block
-
-**Purpose**
-- Resolve execution identity information
-
-**Responsibilities**
-- Map `hpc_identity` → group / account / project
-- Absorb differences between HPC environments
-- Eliminate manual specification of group/account by users
-
----
-
-## 4. Run-Time Parameters Specification
-
-### 4.1 Required Parameters
-
-```
-hpc_target: string
-  - e.g. "fugaku", "miyabi"
-
-hpc_identity: string
-  - user identifier (e.g. "z30541")
-
-exec_profile: string
-  - baseline execution profile (e.g. "exec-diag-n16")
-```
-
----
-
-### 5.2 Algorithm Parameters
-
-Algorithm-specific inputs (files, numerical parameters, etc.)
-are passed unchanged and are outside the scope of this specification.
-
----
-
-### 5.3 Optional Tuning Parameters (User-adjustable)
-
-Users may optionally provide tuning parameters to adjust resource usage
-relative to the selected execution profile.
-
-```yaml
-tuning:
-  nodes: int
-  walltime: string
-  ranks_per_node: int
-  threads_per_rank: int
-  mem_gib: int
-```
-
-#### Design Intent
-- Tuning parameters allow lightweight customization
-- Users can adapt execution to problem size without creating new profiles
-
----
-
-## 6. Example: `exec-diag-n16` with User Tuning
-
-### User Input
-
-```yaml
-exec_profile: exec-diag-n16
-tuning:
-  nodes: 32
-  threads_per_rank: 4
-```
-
-### Resolution
-
-- Execution Profile provides baseline intent (`diag`, CPU, large-scale)
-- User tuning overrides node count and threading
-
-Workflow code remains unchanged.
-
----
-
-## 8. Responsibility Split
-
-### Administrators
-- Define and maintain:
-  - HPC Profiles
-  - Execution Profiles
-  - UserContext mappings
-- Encode best practices and policies
-- Control safety and validation rules
-
-### Users
-- Write workflow logic
-- Select execution profiles
-- Adjust tuning parameters as needed
-- Focus on algorithm development
-
----
-
-## 9. Summary
-
-This architecture replaces user-written HPC job definitions with
-centrally managed execution profiles, while still allowing users
-to tune resource usage in a controlled and transparent way.
+- adapter implementation under `packages/hpc-prefect-adapters/`
+- executor integration under `packages/hpc-prefect-executor/`
+- at least one runnable example under `examples/`
