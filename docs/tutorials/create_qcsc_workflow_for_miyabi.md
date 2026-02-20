@@ -21,8 +21,8 @@ Key principles in this tutorial:
 
 You will see these terms:
 - **Flow**: the end-to-end workflow entrypoint
-  - `examples/miyabi_prefect_bitcount_demo/flow_optimized.py`
-  - `examples/miyabi_prefect_bitcount_demo/flow_tutorial_style.py`
+  - `examples/prefect_bitcount_demo/flow_optimized.py`
+  - `examples/prefect_bitcount_demo/flow_tutorial_style.py`
 - **Task**: individual units executed inside a flow
   - Optimized flow task 1 (`quantum-sampling-task` in `flow_optimized.py`): quantum sampling and `input.bin` preparation
   - Optimized flow task 2 (`hpc-bitcount-task` in `flow_optimized.py`): HPC execution and count reconstruction
@@ -97,12 +97,12 @@ Before starting, make sure:
 
 ## Existing files used in this tutorial
 
-- `../../examples/miyabi_prefect_bitcount_demo/build_on_miyabi.sh`
-- `../../examples/miyabi_prefect_bitcount_demo/create_blocks.py`
-- `../../examples/miyabi_prefect_bitcount_demo/bitcount_blocks.example.toml`
-- `../../examples/miyabi_prefect_bitcount_demo/get_counts_integration.py`
-- `../../examples/miyabi_prefect_bitcount_demo/flow_optimized.py`
-- `../../examples/miyabi_prefect_bitcount_demo/flow_tutorial_style.py`
+- `../../examples/prefect_bitcount_demo/build_on_miyabi.sh`
+- `../../examples/prefect_bitcount_demo/create_blocks.py`
+- `../../examples/prefect_bitcount_demo/bitcount_blocks.example.toml`
+- `../../examples/prefect_bitcount_demo/get_counts_integration.py`
+- `../../examples/prefect_bitcount_demo/flow_optimized.py`
+- `../../examples/prefect_bitcount_demo/flow_tutorial_style.py`
 
 All steps below use these files as-is.
 
@@ -221,20 +221,20 @@ Create a directory:
 <img src="./images/icon-miyabi.png" alt="miyabi" width="50"/><br>
 ```bash
 cd /work/g00/z12345/hpc-prefect
-./examples/miyabi_prefect_bitcount_demo/build_on_miyabi.sh
+./examples/prefect_bitcount_demo/build_on_miyabi.sh
 ```
 
 Generated binaries:
 
-- `examples/miyabi_prefect_bitcount_demo/bin/get_counts_json`
-- `examples/miyabi_prefect_bitcount_demo/bin/get_counts_hist`
+- `examples/prefect_bitcount_demo/bin/get_counts_json`
+- `examples/prefect_bitcount_demo/bin/get_counts_hist`
 
 ### Step 4.1. What `get_counts_json` and `get_counts_hist` do
 
 Source code:
 
-- `examples/miyabi_prefect_bitcount_demo/src/get_counts_json.cpp`
-- `examples/miyabi_prefect_bitcount_demo/src/get_counts_hist.cpp`
+- `examples/prefect_bitcount_demo/src/get_counts_json.cpp`
+- `examples/prefect_bitcount_demo/src/get_counts_hist.cpp`
 
 Both programs implement the same core MPI bit-count pipeline:
 
@@ -261,13 +261,14 @@ Differences:
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 mkdir -p /work/gz00/z12345/miyabi_tutorial
-cp examples/miyabi_prefect_bitcount_demo/bitcount_blocks.example.toml \
-   examples/miyabi_prefect_bitcount_demo/bitcount_blocks.toml
-vim examples/miyabi_prefect_bitcount_demo/bitcount_blocks.toml
+cp examples/prefect_bitcount_demo/bitcount_blocks.example.toml \
+   examples/prefect_bitcount_demo/bitcount_blocks.toml
+vim examples/prefect_bitcount_demo/bitcount_blocks.toml
 ```
 
 Set at least the following keys in `bitcount_blocks.toml`:
 
+- `hpc_target = "miyabi"`
 - `project`
 - `queue`
 - `work_dir` (base directory where each run creates a `job_xxxx` directory)
@@ -278,16 +279,18 @@ Set at least the following keys in `bitcount_blocks.toml`:
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-python examples/miyabi_prefect_bitcount_demo/create_blocks.py \
-  --config examples/miyabi_prefect_bitcount_demo/bitcount_blocks.toml
+python examples/prefect_bitcount_demo/create_blocks.py \
+  --config examples/prefect_bitcount_demo/bitcount_blocks.toml \
+  --hpc-target miyabi
 ```
 
 Optional CLI overrides:
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-run python examples/miyabi_prefect_bitcount_demo/create_blocks.py \
-  --config examples/miyabi_prefect_bitcount_demo/bitcount_blocks.toml \
+python examples/prefect_bitcount_demo/create_blocks.py \
+  --config examples/prefect_bitcount_demo/bitcount_blocks.toml \
+  --hpc-target miyabi \
   --shots 200000 \
   --num-nodes 4 \
   --mpiprocs 8
@@ -316,7 +319,7 @@ Use `flow_optimized.py` with block names as runtime parameters:
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-python examples/miyabi_prefect_bitcount_demo/flow_optimized.py \
+python examples/prefect_bitcount_demo/flow_optimized.py \
   --runtime-block ibm-runner \
   --command-block cmd-bitcount-hist \
   --execution-profile-block exec-bitcount-mpi \
@@ -334,7 +337,7 @@ We can also monitor the progress on the Prefect console:
 
 Code location:
 
-- `../../examples/miyabi_prefect_bitcount_demo/flow_optimized.py`
+- `../../examples/prefect_bitcount_demo/flow_optimized.py`
 
 This flow is an end-to-end implementation that connects quantum sampling and HPC bit counting
 with two Prefect tasks.
@@ -368,7 +371,7 @@ You can run `flow_tutorial_style.py` directly:
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-python examples/miyabi_prefect_bitcount_demo/flow_tutorial_style.py
+python examples/prefect_bitcount_demo/flow_tutorial_style.py
 ```
 
 This flow uses `BitCounter.load("miyabi-tutorial")`.
@@ -437,13 +440,13 @@ from get_counts_integration import BitCounter
 New (when running from `hpc-prefect` root):
 
 ```python
-from examples.miyabi_prefect_bitcount_demo.get_counts_integration import BitCounter
+from examples.prefect_bitcount_demo.get_counts_integration import BitCounter
 ```
 
 If `BITLEN` is also used:
 
 ```python
-from examples.miyabi_prefect_bitcount_demo.get_counts_integration import BITLEN, BitCounter
+from examples.prefect_bitcount_demo.get_counts_integration import BITLEN, BitCounter
 ```
 
 ---

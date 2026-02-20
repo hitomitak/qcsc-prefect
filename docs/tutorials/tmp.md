@@ -10,7 +10,7 @@ The goal is to compute the ground state energy of N2-Mo State.
 
 Before starting, make sure:
 
-- You have completed [Create Your QCSC Workflow with Prefect](./create_qcsc_workflow.md).
+- You have completed [Create Your QCSC Workflow with Prefect](./create_qcsc_workflow_for_miyabi.md).
 
 > [!IMPORTANT]
 > - Replace `g00` and `z12345` with your actual group and account name.

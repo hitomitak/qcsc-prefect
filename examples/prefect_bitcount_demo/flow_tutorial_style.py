@@ -12,7 +12,7 @@ from qiskit.transpiler import generate_preset_pass_manager
 try:
     from get_counts_integration import BITLEN, BitCounter
 except ModuleNotFoundError:
-    from examples.miyabi_prefect_bitcount_demo.get_counts_integration import BITLEN, BitCounter
+    from examples.prefect_bitcount_demo.get_counts_integration import BITLEN, BitCounter
 
 
 @flow(name="miyabi_tutorial")

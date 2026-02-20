@@ -11,7 +11,7 @@ hpc-prefect/
 │   └── concept.md
 ├── examples
 │   ├── fugaku_prefect_hello_demo
-│   ├── miyabi_prefect_bitcount_demo
+│   ├── prefect_bitcount_demo
 │   └── miyabi_prefect_hello_demo
 ├── packages
 │   ├── hpc-prefect-core
@@ -42,7 +42,8 @@ hpc-prefect/
 - Concept and architecture:
   - [HPC-Prefect Concept](./docs/concept.md)
 - Example guides:
-  - [Miyabi BitCount Tutorial](./docs/tutorials/create_qcsc_workflow.md)
+  - [BitCount Tutorial for Miyabi](./docs/tutorials/create_qcsc_workflow_for_miyabi.md)
+  - [BitCount Tutorial for Fugaku](./docs/tutorials/create_qcsc_workflow_for_fugaku.md)
   - [Miyabi Hello Demo](./examples/miyabi_prefect_hello_demo/README.md)
   - [Fugaku Hello Demo](./examples/fugaku_prefect_hello_demo/README.md)
 

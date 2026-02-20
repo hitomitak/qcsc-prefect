@@ -99,7 +99,7 @@ async def run_hpc_bitcount_from_input(
         script_filename=script_filename,
         watch_poll_interval=5.0,
         timeout_seconds=1800,
-        metrics_artifact_key="miyabi-bitcount-optimized-metrics",
+        metrics_artifact_key="bitcount-optimized-metrics",
     )
     if result.exit_status != 0:
         raise RuntimeError(f"Optimized BitCount job failed: exit_status={result.exit_status}")
@@ -117,8 +117,8 @@ async def run_hpc_bitcount_from_input(
     }
 
 
-@flow(name="miyabi-bitcount-optimized-flow")
-async def miyabi_bitcount_optimized_flow(
+@flow(name="prefect-bitcount-optimized-flow")
+async def prefect_bitcount_optimized_flow(
     *,
     runtime_block_name: str = "ibm-runner",
     command_block_name: str = "cmd-bitcount-hist",
@@ -126,8 +126,8 @@ async def miyabi_bitcount_optimized_flow(
     hpc_profile_block_name: str = "hpc-miyabi-bitcount",
     options_variable_name: str = "miyabi-bitcount-options",
     default_shots: int = 100000,
-    work_dir: str = "./work/miyabi_bitcount_optimized",
-    script_filename: str = "bitcount_optimized.pbs",
+    work_dir: str = "./work/prefect_bitcount_optimized",
+    script_filename: str = "bitcount_optimized.job",
 ):
     job_work_dir = await run_quantum_sampling_and_prepare_input(
         runtime_block_name=runtime_block_name,
@@ -158,21 +158,24 @@ async def miyabi_bitcount_optimized_flow(
     }
 
 
+miyabi_bitcount_optimized_flow = prefect_bitcount_optimized_flow
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run optimized Miyabi BitCount tutorial flow.")
+    parser = argparse.ArgumentParser(description="Run optimized BitCount tutorial flow.")
     parser.add_argument("--runtime-block", default="ibm-runner")
     parser.add_argument("--command-block", default="cmd-bitcount-hist")
     parser.add_argument("--execution-profile-block", default="exec-bitcount-mpi")
     parser.add_argument("--hpc-profile-block", default="hpc-miyabi-bitcount")
     parser.add_argument("--options-variable", default="miyabi-bitcount-options")
     parser.add_argument("--shots", type=int, default=100000)
-    parser.add_argument("--work-dir", default="./work/miyabi_bitcount_optimized")
-    parser.add_argument("--script-filename", default="bitcount_optimized.pbs")
+    parser.add_argument("--work-dir", default="./work/prefect_bitcount_optimized")
+    parser.add_argument("--script-filename", default="bitcount_optimized.job")
     args = parser.parse_args()
 
     print(
         asyncio.run(
-            miyabi_bitcount_optimized_flow(
+            prefect_bitcount_optimized_flow(
                 runtime_block_name=args.runtime_block,
                 command_block_name=args.command_block,
                 execution_profile_block_name=args.execution_profile_block,
