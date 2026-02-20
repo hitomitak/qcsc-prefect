@@ -1,11 +1,11 @@
 # Create Your QCSC Workflow with Prefect for Fugaku
 
-This tutorial follows the same structure as the Miyabi tutorial, but targets Fugaku for HPC execution.
-It shows how to run the BitCount workflow by preparing blocks with `hpc_target="fugaku"` and executing the existing optimized flow.
+This hands-on tutorial guides you through building a small C++ program on the Fugaku environment and integrating it into a Prefect workflow using a custom `FugakuJobBlock` class.
+On the Prefect workflow, we also use [Prefect Qiskit](https://github.com/qiskit-community/prefect-qiskit) to show how to write a complete QCSC workflow from scratch.
 
 Our objective is to compute a count dictionary of sampler bitstrings using MPI programming on the QCSC architecture.
 
-![Count BitStrings Flow](./images/img-counts-flow.png)
+![Count BitStrings Flow](./images/img-counts-flow-fugaku.png)
 
 Key principles in this tutorial:
 
@@ -33,44 +33,28 @@ You will see these terms:
 - **Variable**: server-side runtime parameters
   - `fugaku-bitcount-options`
 
-> `flow_tutorial_style.py` is Miyabi-only in this repository. Fugaku uses `flow_optimized.py`.
-
 ## What you need
 
-- **Accounts / IDs**:
-  - Common: (a) Fugaku account, (b) IBM Cloud API key + Service CRN (Quantum), (c) IBMid
-  - Prefect backend (choose one): On-Prem Prefect account (MDX) or Prefect Cloud account/workspace
-- **Runtime environment**:
-  - A shell where `prefect` CLI is available
-  - Fugaku scheduler commands are available (`pjsub`, `pjstat`)
-
-## Choose your Prefect backend (On-Prem or Cloud)
-
-This tutorial supports both backends. Choose one backend first, then use it consistently for:
-
-- opening the Web Portal
-- creating blocks/variables (`create_blocks.py`)
-- running the flow
-
-| Item | On-Prem Prefect (MDX) | Prefect Cloud |
-|---|---|---|
-| Web Portal | Your organization-hosted Prefect UI | `https://app.prefect.cloud` |
-| Authentication | SSO (often IBMid) | Prefect Cloud account + API key |
-| CLI setup | `prefect-auth login` | `prefect cloud login --key <PREFECT_API_KEY>` |
-| Scope of blocks/variables | Stored in on-prem workspace | Stored in selected cloud workspace |
+- **Accounts / IDs**: (a) Fugaku account, (b) Prefect Web Portal account (API Key), (c) IBM Cloud API key + Service CRN (Quantum)
+- **Local tools**: SSH client and a modern browser.  
 
 ---
 
 ## Prerequisites (One-time setup)
 
+The whole process image is : 
+
+![Prerequisites Flow](./images/img-prerequisites-fugaku.png)
+
 Before starting, make sure:
 
-- You have completed [Step1: How to Set Up Python Environment on the MDX Workflow Client](../howto/howto_setup_python_env.md).
-- You have completed [Step3: How to Connect to Prefect Web Portal on MDX](../howto/howto_connect_to_prefect_on_mdx.md).
-- You have completed [Step4: How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit.md).
+- You have completed [Step1 : How to Set Up Python Environment on Fugaku Pre/Post Node](../howto/howto_setup_python_env_fugaku.md).
+- You have completed [Step2 : How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit_fugaku.md).
 
 > [!IMPORTANT]
-> Replace account and project placeholders with your actual values.
+> Replace `ra00000`, `u12345` and `vol0000x` with your actual group, account name and mount volume.
+
+---
 
 ## Existing files used in this tutorial
 
@@ -87,25 +71,31 @@ All steps below use these files as-is.
 
 ## Create BitCounts Workflow on Fugaku
 
-## Step 1. Enter your runtime environment
+## Step 1: Log in to Fugaku and execute the interact session for Pre/Post Node
 
-Use a shell where both Prefect CLI and Fugaku scheduler commands are available.
-In many setups this is a Fugaku login node (or a connected host with `pjsub`/`pjstat`).
-
-Example:
-
+<img src="./images/icon-pc.png" alt="login" width="70"/><br>
 ```bash
 ssh -A <your_account>@<fugaku_login_host>
 ```
 
-Activate your virtual environment:
+Execute the interact session for Pre/Post Node in the login node.
 
+<img src="./images/icon-login-fugaku.png" alt="login" width="70"/><br>
 ```bash
-source ~/venv/prefect/bin/activate
+srun -p mem2 -n 1 --mem 4G --time=60 --pty bash -i
+```
+## Step 2. Create a Project Directory (Pre/Post Node)
+
+Create a project directory:
+
+<img src="./images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
+```bash
+mkdir fugaku_tutorial && cd fugaku_tutorial
 ```
 
-## Step 2. Clone hpc-prefect repository and install packages
+## Step 2. Clone hpc-prefect repository and install packages (Pre/Post Node)
 
+<img src="./images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
 cd /path/to/work
 
@@ -120,30 +110,24 @@ uv pip install --no-deps \
   -e packages/hpc-prefect-executor
 ```
 
-## Step 3. Prepare Prefect and Quantum runtime
+## Step 3. Prepare Prefect and Quantum runtime (Pre/Post Node)
 
-On-Prem example:
+Use Fugaku cloud profile
 
+<img src="./images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
-prefect-auth login
-prefect profile use mdx
+prefect profile use cloud-fugaku
 ```
 
-Cloud example:
+## Step 4. Build MPI program on Fugaku (Login Node)
 
+<img src="./images/icon-pc.png" alt="login" width="70"/><br>
 ```bash
-prefect cloud login --key <PREFECT_API_KEY>
-prefect profile use cloud
+ssh -A <your_account>@<fugaku_login_host>
 ```
 
-Confirm Quantum runtime block:
-
-```bash
-prefect block inspect quantum-runtime/ibm-runner
-```
-
-## Step 4. Build MPI program on Fugaku
-
+Open a new terminal and connect to the login node and execute the build script.
+<img src="./images/icon-login-fugaku.png" alt="login" width="70"/><br>
 ```bash
 cd /path/to/work/hpc-prefect
 ./examples/prefect_bitcount_demo/build_on_fugaku.sh
@@ -153,6 +137,18 @@ Generated binaries:
 
 - `examples/prefect_bitcount_demo/bin/get_counts_json`
 - `examples/prefect_bitcount_demo/bin/get_counts_hist`
+
+Get the absolute path to the `get_counts` executable:
+
+<img src="./images/icon-login-fugaku.png" alt="login" width="70"/><br>
+```bash
+realpath ./examples/prefect_bitcount_demo/bin/get_counts_hist
+```
+Example output:
+
+```text
+/vol000x/mdt6/data/ra00000/u12345/hpc-prefect/examples/prefect_bitcount_demo/bin/get_counts_hist
+```
 
 ### Step 4.1. What `get_counts_json` and `get_counts_hist` do
 
@@ -175,8 +171,9 @@ Differences:
 
 ---
 
-## Step 5. Prepare block configuration file
+## Step 5. Prepare block configuration file (Pre/Post Node)
 
+<img src="./images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
 cd /path/to/work/hpc-prefect
 cp examples/prefect_bitcount_demo/bitcount_blocks.example.toml \
@@ -200,8 +197,9 @@ Optional Fugaku keys:
 
 ---
 
-## Step 6. Generate blocks by script
+## Step 6. Generate blocks by script (Pre/Post Node)
 
+<img src="./images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
 python examples/prefect_bitcount_demo/create_blocks.py \
   --config examples/prefect_bitcount_demo/bitcount_blocks.toml \
@@ -221,10 +219,11 @@ python examples/prefect_bitcount_demo/create_blocks.py \
 
 ---
 
-## Step 7. Run workflow by specifying block names
+## Step 7. Run workflow by specifying block names (Pre/Post Node)
 
 Use `flow_optimized.py` with Fugaku block names:
 
+<img src="./images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
 python examples/prefect_bitcount_demo/flow_optimized.py \
   --runtime-block ibm-runner \
