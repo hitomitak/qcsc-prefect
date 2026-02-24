@@ -1,7 +1,9 @@
-# Run SBD Closed-loop Workflow (hpc-prefect)
+# Run SBD Closed-loop Workflow on Miyabi (hpc-prefect)
 
 This tutorial walks us through reproducing a Sample-based Quantum Diagonalization (SQD) experiment using the `hpc-prefect` architecture.
 We will run a hybrid quantum-classical workflow using the [SBD](https://github.com/r-ccs-cms/sbd) solver to diagonalize a sparse chemistry Hamiltonian on the Miyabi-C environment, orchestrated via Prefect.
+
+For Fugaku, see [Run SBD Closed-loop Workflow on Fugaku](./run_sbd_closed_loop_workflow_fugaku.md).
 
 <img src="./images/img-closed-loop.png" alt="sbd" width="90%"/><br>
 

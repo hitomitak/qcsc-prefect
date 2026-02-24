@@ -26,6 +26,19 @@ bash ./build_sbd.sh
 > This build script is adapted for the Miyabi-C environment.
 > Build in other environments may require modification of the compiler command and flags.
 
+## Building the Executable on Fugaku
+
+For Fugaku, use the dedicated script:
+
+```bash
+bash ./build_sbd_fugaku.sh
+```
+
+> [!NOTE]
+> Ensure a Fugaku MPI C++ compiler is available in `PATH` (for example `mpiFCCpx`).
+> The script defaults to `mpiFCCpx` with Fugaku-oriented flags and `-SSL2`.
+> You can override `CCCOM`, `CCFLAGS`, and `SYSLIB` via environment variables if your site requires different settings.
+
 Upon successful compilation, an executable named `diag` will be created in this directory:
 
 ```text
@@ -47,4 +60,13 @@ You can override upstream repository location:
 SBD_REPO_URL="https://github.com/r-ccs-cms/sbd.git" \
 SBD_DIR="/path/to/local/sbd" \
 bash ./build_sbd.sh
+```
+
+For Fugaku build settings:
+
+```bash
+CCCOM="mpiFCCpx" \
+CCFLAGS="-Nclang -std=c++17 -stdlib=libc++ -Kfast,openmp -Xpreprocessor -fopenmp" \
+SYSLIB="-SSL2" \
+bash ./build_sbd_fugaku.sh
 ```

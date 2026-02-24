@@ -1,7 +1,7 @@
-# SBD Closed-Loop Workflow on hpc-prefect (Miyabi)
+# SBD Closed-Loop Workflow on hpc-prefect (Miyabi/Fugaku)
 
 This workflow performs SQD closed-loop optimization and runs SBD diagonalization
-jobs on Miyabi through the current `hpc-prefect` architecture.
+jobs on Miyabi or Fugaku through the current `hpc-prefect` architecture.
 
 The old `prefect-sbd` / `prefect-miyabi` runtime path is replaced by:
 
@@ -17,16 +17,22 @@ Compatibility notes from old `prefect_sbd.sbd_job`:
 
 ## Prerequisites
 
-- You can submit Miyabi jobs (`qsub` / `qstat`).
+- You can submit HPC jobs on your target system (`qsub` / `qstat` for Miyabi, `pjsub` / `pjstat` for Fugaku).
 - Prefect API is reachable (On-Prem or Cloud profile is active).
 - `QuantumRuntime` block exists (for example `ibm-runner`).
-- SBD executable (`diag`) is already built on Miyabi and you know its absolute path.
+- SBD executable (`diag`) is already built on your target HPC system and you know its absolute path.
 
-Build example:
+Build examples:
 
 ```bash
+# Miyabi
 cd /work/gz00/z12345/hpc-prefect/algorithms/sbd/native
 bash ./build_sbd.sh
+realpath ./diag
+
+# Fugaku
+cd /work/gz00/z12345/hpc-prefect/algorithms/sbd/native
+bash ./build_sbd_fugaku.sh
 realpath ./diag
 ```
 
@@ -50,7 +56,7 @@ uv pip install -e algorithms/qcsc_workflow_utility
 uv pip install -e algorithms/sbd
 ```
 
-## Create SBD Blocks (Miyabi)
+## Create SBD Blocks (Miyabi/Fugaku)
 
 Use config file:
 
@@ -62,8 +68,16 @@ vim algorithms/sbd/sbd_blocks.toml
 
 Run block generator:
 
+Miyabi:
+
 ```bash
-python algorithms/sbd/create_blocks.py --config algorithms/sbd/sbd_blocks.toml
+python algorithms/sbd/create_blocks.py --config algorithms/sbd/sbd_blocks.toml --hpc-target miyabi
+```
+
+Fugaku:
+
+```bash
+python algorithms/sbd/create_blocks.py --config algorithms/sbd/sbd_blocks.toml --hpc-target fugaku
 ```
 
 `sbd_executable` should point to your built binary, for example:
@@ -91,8 +105,8 @@ Then increase only if your target case runs without OOM.
 This creates:
 
 - `CommandBlock` (default: `cmd-sbd-diag`)
-- `ExecutionProfileBlock` (default: `exec-sbd-mpi`)
-- `HPCProfileBlock` (default: `hpc-miyabi-sbd`)
+- `ExecutionProfileBlock` (default: `exec-sbd-mpi` for Miyabi, `exec-sbd-fugaku` for Fugaku)
+- `HPCProfileBlock` (default: `hpc-miyabi-sbd` for Miyabi, `hpc-fugaku-sbd` for Fugaku)
 - `SBD Solver Job` block (default: `davidson-solver`)
 - Prefect Variable `sqd_options`
 

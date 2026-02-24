@@ -45,9 +45,10 @@ def _set_variable(variable_name: str, value: Any) -> None:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Create Prefect blocks for SBD workflow on Miyabi.")
+    parser = argparse.ArgumentParser(description="Create Prefect blocks for SBD workflow (Miyabi or Fugaku).")
     parser.add_argument("--config", type=Path, help="Path to TOML/JSON config file.")
 
+    parser.add_argument("--hpc-target", choices=["miyabi", "fugaku"])
     parser.add_argument("--project")
     parser.add_argument("--queue")
     parser.add_argument("--work-dir")
@@ -60,6 +61,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--ompthreads", type=int)
     parser.add_argument("--modules", nargs="+")
     parser.add_argument("--mpi-options", nargs="*")
+
+    parser.add_argument("--fugaku-gfscache")
+    parser.add_argument("--fugaku-spack-modules", nargs="+")
+    parser.add_argument("--fugaku-mpi-options-for-pjm", nargs="*")
+
+    parser.add_argument("--script-filename")
+    parser.add_argument("--metrics-artifact-key")
 
     parser.add_argument("--command-block-name")
     parser.add_argument("--execution-profile-block-name")
@@ -130,23 +138,50 @@ def _env_values() -> dict[str, Any]:
             return None
         return [item.strip() for item in raw.split(",") if item.strip()]
 
+    def env_first_str(*names: str) -> str | None:
+        for name in names:
+            raw = os.getenv(name, "").strip()
+            if raw:
+                return raw
+        return None
+
+    def env_first_int(*names: str) -> int | None:
+        for name in names:
+            value = env_int(name)
+            if value is not None:
+                return value
+        return None
+
+    def env_first_csv(*names: str) -> list[str] | None:
+        for name in names:
+            value = env_csv(name)
+            if value:
+                return value
+        return None
+
     return {
-        "project": os.getenv("MIYABI_PBS_PROJECT", "").strip() or None,
-        "queue": os.getenv("MIYABI_PBS_QUEUE", "").strip() or None,
-        "work_dir": os.getenv("SBD_WORK_DIR", "").strip() or None,
-        "sbd_executable": os.getenv("SBD_EXECUTABLE", "").strip() or None,
-        "launcher": os.getenv("MIYABI_LAUNCHER", "").strip() or None,
-        "walltime": os.getenv("MIYABI_WALLTIME", "").strip() or None,
-        "num_nodes": env_int("MIYABI_NUM_NODES"),
-        "mpiprocs": env_int("MIYABI_MPIPROCS"),
-        "ompthreads": env_int("MIYABI_OMPTHREADS"),
-        "modules": env_csv("MIYABI_MODULES"),
-        "mpi_options": env_csv("MIYABI_MPI_OPTIONS"),
-        "command_block_name": os.getenv("SBD_CMD_BLOCK_NAME", "").strip() or None,
-        "execution_profile_block_name": os.getenv("SBD_EXEC_PROFILE_BLOCK_NAME", "").strip() or None,
-        "hpc_profile_block_name": os.getenv("SBD_HPC_PROFILE_BLOCK_NAME", "").strip() or None,
-        "solver_block_name": os.getenv("SBD_SOLVER_BLOCK_NAME", "").strip() or None,
-        "options_variable_name": os.getenv("SBD_OPTIONS_VARIABLE", "").strip() or None,
+        "hpc_target": env_first_str("SBD_HPC_TARGET"),
+        "project": env_first_str("SBD_PROJECT", "MIYABI_PBS_PROJECT", "FUGAKU_PROJECT"),
+        "queue": env_first_str("SBD_QUEUE", "MIYABI_PBS_QUEUE", "FUGAKU_RSCGRP"),
+        "work_dir": env_first_str("SBD_WORK_DIR"),
+        "sbd_executable": env_first_str("SBD_EXECUTABLE"),
+        "launcher": env_first_str("SBD_LAUNCHER", "MIYABI_LAUNCHER", "FUGAKU_LAUNCHER"),
+        "walltime": env_first_str("SBD_WALLTIME", "MIYABI_WALLTIME", "FUGAKU_WALLTIME"),
+        "num_nodes": env_first_int("SBD_NUM_NODES", "MIYABI_NUM_NODES", "FUGAKU_NUM_NODES"),
+        "mpiprocs": env_first_int("SBD_MPIPROCS", "MIYABI_MPIPROCS", "FUGAKU_MPIPROCS"),
+        "ompthreads": env_first_int("SBD_OMPTHREADS", "MIYABI_OMPTHREADS", "FUGAKU_OMPTHREADS"),
+        "modules": env_first_csv("SBD_MODULES", "MIYABI_MODULES"),
+        "mpi_options": env_first_csv("SBD_MPI_OPTIONS", "MIYABI_MPI_OPTIONS", "FUGAKU_MPI_OPTIONS"),
+        "fugaku_gfscache": env_first_str("FUGAKU_GFSCACHE"),
+        "fugaku_spack_modules": env_first_csv("FUGAKU_SPACK_MODULES"),
+        "fugaku_mpi_options_for_pjm": env_first_csv("FUGAKU_MPI_OPTIONS_FOR_PJM"),
+        "script_filename": env_first_str("SBD_SCRIPT_FILENAME"),
+        "metrics_artifact_key": env_first_str("SBD_METRICS_ARTIFACT_KEY"),
+        "command_block_name": env_first_str("SBD_CMD_BLOCK_NAME"),
+        "execution_profile_block_name": env_first_str("SBD_EXEC_PROFILE_BLOCK_NAME"),
+        "hpc_profile_block_name": env_first_str("SBD_HPC_PROFILE_BLOCK_NAME"),
+        "solver_block_name": env_first_str("SBD_SOLVER_BLOCK_NAME"),
+        "options_variable_name": env_first_str("SBD_OPTIONS_VARIABLE"),
         "task_comm_size": env_int("SBD_TASK_COMM_SIZE"),
         "adet_comm_size": env_int("SBD_ADET_COMM_SIZE"),
         "bdet_comm_size": env_int("SBD_BDET_COMM_SIZE"),
@@ -154,9 +189,9 @@ def _env_values() -> dict[str, Any]:
         "iteration": env_int("SBD_ITERATION"),
         "tolerance": env_float("SBD_TOLERANCE"),
         "carryover_ratio": env_float("SBD_CARRYOVER_RATIO"),
-        "solver_mode": os.getenv("SBD_SOLVER_MODE", "").strip() or None,
+        "solver_mode": env_first_str("SBD_SOLVER_MODE"),
         "shots": env_int("SBD_SHOTS"),
-        "sqd_options_json": os.getenv("SBD_OPTIONS_JSON", "").strip() or None,
+        "sqd_options_json": env_first_str("SBD_OPTIONS_JSON"),
     }
 
 
@@ -170,52 +205,104 @@ def main() -> None:
     sbd_solver_cls = _import_sbd_solver_block()
     _register_block_types(sbd_solver_cls)
 
+    hpc_target = str(_pick_value(args.hpc_target, config.get("hpc_target"), env.get("hpc_target"), "miyabi")).strip().lower()
+    if hpc_target not in {"miyabi", "fugaku"}:
+        raise RuntimeError("'hpc_target' must be either 'miyabi' or 'fugaku'.")
+    is_miyabi = hpc_target == "miyabi"
+
     project = _pick_value(args.project, config.get("project"), env.get("project"))
     if not project:
-        raise RuntimeError("Set 'project' in --config, --project, or MIYABI_PBS_PROJECT.")
+        raise RuntimeError("Set 'project' in --config/--project or SBD_PROJECT/MIYABI_PBS_PROJECT/FUGAKU_PROJECT.")
+
     queue = _pick_value(args.queue, config.get("queue"), env.get("queue"))
     if not queue:
-        raise RuntimeError("Set 'queue' in --config, --queue, or MIYABI_PBS_QUEUE.")
+        raise RuntimeError("Set 'queue' in --config/--queue or SBD_QUEUE/MIYABI_PBS_QUEUE/FUGAKU_RSCGRP.")
+
     work_dir = _pick_value(args.work_dir, config.get("work_dir"), env.get("work_dir"))
     if not work_dir:
         raise RuntimeError("Set 'work_dir' in --config, --work-dir, or SBD_WORK_DIR.")
+
     sbd_executable = _pick_value(args.sbd_executable, config.get("sbd_executable"), env.get("sbd_executable"))
     if not sbd_executable:
         raise RuntimeError("Set 'sbd_executable' in --config, --sbd-executable, or SBD_EXECUTABLE.")
 
-    launcher = str(_pick_value(args.launcher, config.get("launcher"), env.get("launcher"), "mpiexec.hydra")).strip()
+    launcher_default = "mpiexec.hydra" if is_miyabi else "mpiexec"
+    launcher = str(_pick_value(args.launcher, config.get("launcher"), env.get("launcher"), launcher_default)).strip()
     walltime = str(_pick_value(args.walltime, config.get("walltime"), env.get("walltime"), "02:00:00")).strip()
 
     num_nodes = int(_pick_value(args.num_nodes, config.get("num_nodes"), env.get("num_nodes"), 1))
     mpiprocs = int(_pick_value(args.mpiprocs, config.get("mpiprocs"), env.get("mpiprocs"), 4))
     ompthreads = int(_pick_value(args.ompthreads, config.get("ompthreads"), env.get("ompthreads"), 1))
 
+    modules_default = ["intel/2023.2.0", "impi/2021.10.0"] if is_miyabi else []
     modules = _normalize_str_list(
-        _pick_value(args.modules, config.get("modules"), env.get("modules"), ["intel/2023.2.0", "impi/2021.10.0"])
+        _pick_value(args.modules, config.get("modules"), env.get("modules"), modules_default)
     )
     mpi_options = _normalize_str_list(
         _pick_value(args.mpi_options, config.get("mpi_options"), env.get("mpi_options"), [])
     )
 
+    fugaku_gfscache = str(
+        _pick_value(args.fugaku_gfscache, config.get("fugaku_gfscache"), env.get("fugaku_gfscache"), "/vol0002")
+    ).strip()
+    fugaku_spack_modules = _normalize_str_list(
+        _pick_value(args.fugaku_spack_modules, config.get("fugaku_spack_modules"), env.get("fugaku_spack_modules"), [])
+    )
+    fugaku_mpi_options_for_pjm = _normalize_str_list(
+        _pick_value(
+            args.fugaku_mpi_options_for_pjm,
+            config.get("fugaku_mpi_options_for_pjm"),
+            env.get("fugaku_mpi_options_for_pjm"),
+            [],
+        )
+    )
+
     command_block_name = str(
         _pick_value(args.command_block_name, config.get("command_block_name"), env.get("command_block_name"), "cmd-sbd-diag")
     ).strip()
+
     execution_profile_block_name = str(
         _pick_value(
             args.execution_profile_block_name,
             config.get("execution_profile_block_name"),
             env.get("execution_profile_block_name"),
-            "exec-sbd-mpi",
+            "exec-sbd-mpi" if is_miyabi else "exec-sbd-fugaku",
         )
     ).strip()
+
     hpc_profile_block_name = str(
-        _pick_value(args.hpc_profile_block_name, config.get("hpc_profile_block_name"), env.get("hpc_profile_block_name"), "hpc-miyabi-sbd")
+        _pick_value(
+            args.hpc_profile_block_name,
+            config.get("hpc_profile_block_name"),
+            env.get("hpc_profile_block_name"),
+            "hpc-miyabi-sbd" if is_miyabi else "hpc-fugaku-sbd",
+        )
     ).strip()
+
     solver_block_name = str(
         _pick_value(args.solver_block_name, config.get("solver_block_name"), env.get("solver_block_name"), "davidson-solver")
     ).strip()
+
     options_variable_name = str(
         _pick_value(args.options_variable_name, config.get("options_variable_name"), env.get("options_variable_name"), "sqd_options")
+    ).strip()
+
+    script_filename = str(
+        _pick_value(
+            args.script_filename,
+            config.get("script_filename"),
+            env.get("script_filename"),
+            "sbd_solver.pbs" if is_miyabi else "sbd_solver.pjm",
+        )
+    ).strip()
+
+    metrics_artifact_key = str(
+        _pick_value(
+            args.metrics_artifact_key,
+            config.get("metrics_artifact_key"),
+            env.get("metrics_artifact_key"),
+            "miyabi-sbd-metrics" if is_miyabi else "fugaku-sbd-metrics",
+        )
     ).strip()
 
     task_comm_size = int(_pick_value(args.task_comm_size, config.get("task_comm_size"), env.get("task_comm_size"), 1))
@@ -251,22 +338,37 @@ def main() -> None:
         environments={},
     ).save(execution_profile_block_name, overwrite=True)
 
-    HPCProfileBlock(
-        hpc_target="miyabi",
-        queue_cpu=str(queue),
-        queue_gpu="regular-g",
-        project_cpu=str(project),
-        project_gpu=str(project),
-        executable_map={"sbd_diag": str(Path(str(sbd_executable)).expanduser().resolve())},
-    ).save(hpc_profile_block_name, overwrite=True)
+    executable_path = str(Path(str(sbd_executable)).expanduser().resolve())
+
+    if is_miyabi:
+        HPCProfileBlock(
+            hpc_target="miyabi",
+            queue_cpu=str(queue),
+            queue_gpu="regular-g",
+            project_cpu=str(project),
+            project_gpu=str(project),
+            executable_map={"sbd_diag": executable_path},
+        ).save(hpc_profile_block_name, overwrite=True)
+    else:
+        HPCProfileBlock(
+            hpc_target="fugaku",
+            queue_cpu=str(queue),
+            queue_gpu=str(queue),
+            project_cpu=str(project),
+            project_gpu=str(project),
+            executable_map={"sbd_diag": executable_path},
+            gfscache=fugaku_gfscache or None,
+            spack_modules=fugaku_spack_modules or [],
+            mpi_options_for_pjm=fugaku_mpi_options_for_pjm or [],
+        ).save(hpc_profile_block_name, overwrite=True)
 
     sbd_solver_cls(
         root_dir=str(Path(str(work_dir)).expanduser().resolve()),
         command_block_name=command_block_name,
         execution_profile_block_name=execution_profile_block_name,
         hpc_profile_block_name=hpc_profile_block_name,
-        script_filename="sbd_solver.pbs",
-        metrics_artifact_key="miyabi-sbd-metrics",
+        script_filename=script_filename,
+        metrics_artifact_key=metrics_artifact_key,
         task_comm_size=task_comm_size,
         adet_comm_size=adet_comm_size,
         bdet_comm_size=bdet_comm_size,
@@ -284,7 +386,7 @@ def main() -> None:
         options_value = {"params": {"shots": shots}}
     _set_variable(options_variable_name, options_value)
 
-    print("Saved blocks and variable for SBD workflow (Miyabi)")
+    print(f"Saved blocks and variable for SBD workflow (target={hpc_target})")
     print(f"  SBD solver block: {solver_block_name}")
     print(f"  Command block: {command_block_name}")
     print(f"  Execution profile block: {execution_profile_block_name}")
@@ -292,6 +394,8 @@ def main() -> None:
     print(f"  Options variable: {options_variable_name}")
     print(f"  Work directory: {Path(str(work_dir)).expanduser().resolve()}")
     print(f"  SBD executable: {Path(str(sbd_executable)).expanduser().resolve()}")
+    print(f"  Script filename: {script_filename}")
+    print(f"  Metrics artifact key: {metrics_artifact_key}")
 
 
 if __name__ == "__main__":
