@@ -70,6 +70,7 @@ All steps below use these files as-is.
 ---
 
 ## Create BitCounts Workflow on Fugaku
+![BitCounts Setup Flow](./images/img-counts-setup-flow-fugaku.png)
 
 ## Step 1: Log in to Fugaku and execute the interact session for Pre/Post Node
 
@@ -84,7 +85,7 @@ Execute the interact session for Pre/Post Node in the login node.
 ```bash
 srun -p mem2 -n 1 --mem 4G --time=60 --pty bash -i
 ```
-## Step 2. Create a Project Directory (Pre/Post Node)
+## Step 2. Create a Project Directory repository(Pre/Post Node)
 
 Create a project directory:
 
@@ -93,7 +94,7 @@ Create a project directory:
 mkdir fugaku_tutorial && cd fugaku_tutorial
 ```
 
-## Step 2. Clone hpc-prefect repository and install packages (Pre/Post Node)
+## Step 3. Prepare Prefect and Quantum runtime (Pre/Post Node)
 
 <img src="./images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
@@ -111,7 +112,6 @@ uv pip install --no-deps \
   -e packages/hpc-prefect-executor
 ```
 
-## Step 3. Prepare Prefect and Quantum runtime (Pre/Post Node)
 
 Use Fugaku cloud profile
 
@@ -128,6 +128,7 @@ ssh -A <your_account>@<fugaku_login_host>
 ```
 
 Open a new terminal and connect to the login node and execute the build script.
+
 <img src="./images/icon-login-fugaku.png" alt="login" width="70"/><br>
 ```bash
 cd /path/to/work/hpc-prefect
@@ -255,20 +256,3 @@ Execution sequence:
 8. Read `hist_u64.bin`, reconstruct counts, publish artifact
 
 ---
-
-## Step 8. Legacy tutorial-style note
-
-`flow_tutorial_style.py` is intentionally Miyabi-only in this repository.
-For Fugaku, use `flow_optimized.py` and pass Fugaku block names.
-
----
-
-## Step 9. Import path for previous assets
-
-If old code imported local `BitCounter` directly, use the repository path import:
-
-```python
-from examples.prefect_bitcount_demo.get_counts_integration import BITLEN, BitCounter
-```
-
-(Again, `BitCounter` flow style is supported for Miyabi only.)
