@@ -46,5 +46,6 @@ tolerance = 0.01
 carryover_ratio = 0.1
 solver_mode = "cpu"
 
-# Optional runtime options variable (default if omitted: {"params":{"shots":500000}})
-shots = 500000
+# Optional runtime options variable
+# default if omitted: {"params":{"shots":500000}} for miyabi, {"params":{"shots":50000}} for fugaku
+shots = 50000 # Fugaku tutorial baseline; override for your workload

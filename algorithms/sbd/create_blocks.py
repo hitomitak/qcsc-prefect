@@ -86,7 +86,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--shots", type=int)
     parser.add_argument(
         "--sqd-options-json",
-        help="Raw JSON for Prefect variable value (e.g. '{\"params\": {\"shots\": 500000}}').",
+        help="Raw JSON for Prefect variable value (e.g. '{\"params\": {\"shots\": 50000}}').",
     )
     return parser.parse_args()
 
@@ -314,7 +314,8 @@ def main() -> None:
     carryover_ratio = float(_pick_value(args.carryover_ratio, config.get("carryover_ratio"), env.get("carryover_ratio"), 0.1))
     solver_mode = str(_pick_value(args.solver_mode, config.get("solver_mode"), env.get("solver_mode"), "cpu")).strip()
 
-    shots = int(_pick_value(args.shots, config.get("shots"), env.get("shots"), 500000))
+    shots_default = 500000 if is_miyabi else 50000
+    shots = int(_pick_value(args.shots, config.get("shots"), env.get("shots"), shots_default))
     sqd_options_json = _pick_value(args.sqd_options_json, config.get("sqd_options_json"), env.get("sqd_options_json"))
 
     CommandBlock(

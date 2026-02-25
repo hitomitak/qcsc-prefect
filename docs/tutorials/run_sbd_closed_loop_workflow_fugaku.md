@@ -82,7 +82,7 @@ Execute the interact session for Pre/Post Node in the login node.
 
 <img src="./images/icon-login-fugaku.png" alt="login" width="70"/><br>
 ```bash
-srun -p mem2 -n 1 --mem 4G --time=60 --pty bash -i
+srun -p mem2 -n 1 --mem 8G --time=60 --pty bash -i
 ```
 
 ## Step 2. Prepare Prefect and Quantum runtime (Pre/Post Node)
@@ -186,6 +186,7 @@ Edit `algorithms/sbd/sbd_blocks.toml` and set at least:
 - `queue`
 - `work_dir`
 - `sbd_executable`
+- `num_nodes = 2`
 - `fugaku_gfscache`
 
 | Parameter | Value / Example | Description |
@@ -195,12 +196,13 @@ Edit `algorithms/sbd/sbd_blocks.toml` and set at least:
 | `queue` | `small` | Fugaku resource group (`rscgrp`) |
 | `work_dir` | `/work/<group>/<user>/sbd_jobs` | Job working directory |
 | `sbd_executable` | `/work/<group>/<user>/hpc-prefect/algorithms/sbd/native/diag` | Absolute path to executable |
+| `num_nodes` | `2` | Number of allocated nodes for this tutorial |
 | `launcher` | `mpiexec` | MPI launcher |
-| `mpiprocs` | `8` | Number of MPI processes |
-| `mpi_options` | `[]` or site-specific options | MPI options for launcher |
+| `mpiprocs` | `2` | Number of MPI processes |
+| `mpi_options` | `["-n", "2"]` | MPI options for launcher |
+| `shots` | `50000` | Prefect variable value for SQD sampling (`sqd_options.params.shots`) |
 | `fugaku_gfscache` | `/vol0002` | Optional GFSCACHE setting |
 | `fugaku_spack_modules` | site-specific list | Optional Spack modules |
-| `fugaku_mpi_options_for_pjm` | site-specific list | Optional `#PJM --mpi` options |
 
 #### 4.3 Run block creation script
 
@@ -225,6 +227,17 @@ This creates the following blocks (default names):
 
 **Deploy = register a Flow as a runnable entry point (Deployment) so it can be started from the Prefect UI/CLI by name.**
 
+Set Ray runtime parameter before deploy:
+
+<img src="./images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
+```bash
+export PREFECT_RAY_NUM_CPUS=2
+```
+
+> [!NOTE]
+> `SBD_TASK_RUNNER` is `ray` by default.  
+> If Ray is unstable in your environment, use `export SBD_TASK_RUNNER=concurrent` for troubleshooting.
+
 Deploy:
 <img src="./images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
@@ -238,7 +251,7 @@ In the Prefect console, click **Run** → **Custom run** and set at least:
 | Field | Value / Example |
 |---|---|
 | FCIDump File | `/path/to/work/hpc-prefect/algorithms/sbd/data/fcidump_N2_MO.txt` |
-| SQD Subspace Dimension (Optional) | `10000000` (start small for testing) |
+| SQD Subspace Dimension (Optional) | `1000000` |
 | Differential Evolution Iterations (Optional) | `1` (start small for testing) |
 | Solver Block Ref | `sbd_solver_job/davidson-solver` |
 

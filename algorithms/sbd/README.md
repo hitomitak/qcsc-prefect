@@ -121,6 +121,9 @@ python algorithms/sbd/exec.py algorithms/sbd/default_params/test_n2.json
 Deploy entrypoint:
 
 ```bash
+# For Fugaku + Ray stability (recommended)
+export PREFECT_RAY_NUM_CPUS=2
+
 sbd-deploy
 ```
 

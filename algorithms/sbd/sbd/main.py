@@ -41,7 +41,15 @@ def _build_task_runner():
     if mode == "concurrent":
         return ConcurrentTaskRunner()
 
-    ray_cpus = int(os.getenv("PREFECT_RAY_NUM_CPUS", str(os.cpu_count() or 8)))
+    # Keep legacy behavior when PREFECT_RAY_NUM_CPUS is not explicitly set.
+    ray_cpus_raw = os.getenv("PREFECT_RAY_NUM_CPUS", "").strip()
+    if not ray_cpus_raw:
+        return RayTaskRunner
+
+    for key, value in THREAD_ENV.items():
+        os.environ.setdefault(key, value)
+
+    ray_cpus = int(ray_cpus_raw)
     return RayTaskRunner(
         init_kwargs={
             "num_cpus": ray_cpus,
