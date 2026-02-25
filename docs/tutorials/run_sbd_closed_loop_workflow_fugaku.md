@@ -172,6 +172,7 @@ Example output:
 ```
 We will use this path in the next step.
 
+<img src="./images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```
 cp algorithms/sbd/sbd_blocks.example.toml algorithms/sbd/sbd_blocks.toml
 vim algorithms/sbd/sbd_blocks.toml
@@ -239,6 +240,7 @@ export PREFECT_RAY_NUM_CPUS=2
 > If Ray is unstable in your environment, use `export SBD_TASK_RUNNER=concurrent` for troubleshooting.
 
 Deploy:
+
 <img src="./images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
 sbd-deploy
@@ -267,10 +269,6 @@ After the run completes, check the `sqd-telemetry` artifact. It should contain i
 
 <img src="./images/img-sqd-telemetry.png" alt="telemetry" width="90%"/><br>
 
-### Step 8. Cleanup
-
-Follow [How to shutdown the workflow](../howto/howto_shutdown_workflow.md).
-
 ---
 
 ## 3. What happens when you "Submit" from the Prefect UI?
@@ -288,11 +286,17 @@ The process started by `sbd-deploy` is the **serving process**. It:
 ### 3.3 Confirm deployment information
 
 1) List deployments
+
+<img src="./images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
+
 ```bash
 prefect deployment ls
 ```
 
 2) Inspect deployment
+
+<img src="./images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
+
 ```bash
 prefect deployment inspect 'riken-sqd-de/riken_sqd_de'
 ```
