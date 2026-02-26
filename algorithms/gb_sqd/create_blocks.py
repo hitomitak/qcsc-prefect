@@ -124,7 +124,7 @@ def main() -> None:
     # Merge config and CLI args (CLI args take precedence)
     def get_value(arg_name: str, config_key: str | None = None, default=None):
         """Get value from CLI args, config, or default."""
-        key = config_key if config_key is not None else arg_name.replace("_", "")
+        key = config_key if config_key is not None else arg_name
         arg_value = getattr(args, arg_name, None)
         if arg_value is not None:
             return arg_value

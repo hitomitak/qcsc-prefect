@@ -15,7 +15,7 @@ This package provides Prefect workflows for running ExtSQD and TrimSQD algorithm
 
 ```bash
 cd hpc-prefect/algorithms/gb_sqd
-pip install -e .
+uv pip install -e .
 ```
 
 ## Native Binary
