@@ -1,0 +1,40 @@
+# Example configuration for GB SQD Prefect blocks
+# Copy this file and customize for your environment
+
+# HPC target: "miyabi" or "fugaku"
+hpc_target = "miyabi"
+
+# Project/group name
+project = "gz00"
+
+# Queue/resource group name
+queue = "regular-c"
+
+# Working directory for job outputs
+work_dir = "~/work/gb_sqd"
+
+# Execution parameters
+num_nodes = 2
+mpiprocs = 5
+ompthreads = 1
+walltime = "00:30:00"
+
+# Path to gb-demo executable (optional, defaults to ../../build/gb-demo)
+# executable = "/path/to/custom/gb-demo"
+
+# Modules to load (optional)
+# modules = ["intel/2023.2.0", "impi/2021.10.0"]
+
+# MPI options (optional)
+# mpi_options = []
+
+# Fugaku-specific settings (ignored for Miyabi)
+# fugaku_gfscache = "/vol0004:/vol0002"
+# fugaku_spack_modules = []
+# fugaku_mpi_options_for_pjm = ["max-proc-per-node=1"]
+
+# Block names (optional, will use defaults if not specified)
+# command_block_name_ext = "cmd-gb-sqd-ext"
+# command_block_name_trim = "cmd-gb-sqd-trim"
+# execution_profile_block_name = "exec-gb-sqd-miyabi"
+# hpc_profile_block_name = "hpc-miyabi-gb-sqd"
