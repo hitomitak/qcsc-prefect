@@ -26,7 +26,30 @@ The C++ implementation is maintained in a separate repository:
 
 ## Quick Start
 
-### 1. Create Prefect Blocks
+### 1. Create Configuration File
+
+Copy the example configuration and customize it:
+
+```bash
+cp gb_sqd_blocks.example.toml gb_sqd_blocks.toml
+vim gb_sqd_blocks.toml
+```
+
+Edit the following required fields:
+- `hpc_target`: "miyabi" or "fugaku"
+- `project`: Your project/group name
+- `queue`: Queue/resource group name
+- `work_dir`: Working directory for job outputs
+
+### 2. Create Prefect Blocks
+
+Using configuration file (recommended):
+
+```bash
+python create_blocks.py --config gb_sqd_blocks.toml
+```
+
+Or specify parameters directly:
 
 ```bash
 python create_blocks.py \
@@ -36,7 +59,16 @@ python create_blocks.py \
     --work-dir ~/work/gb_sqd
 ```
 
-### 2. Run Workflow
+You can also override config file values with CLI arguments:
+
+```bash
+python create_blocks.py \
+    --config gb_sqd_blocks.toml \
+    --num-nodes 4 \
+    --walltime 02:00:00
+```
+
+### 3. Run Workflow
 
 ```python
 from gb_sqd.main import ext_sqd_simple_flow

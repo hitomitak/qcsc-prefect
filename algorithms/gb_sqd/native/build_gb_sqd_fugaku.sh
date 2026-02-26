@@ -17,16 +17,21 @@ echo ""
 # Clone or update the source repository
 if [ ! -d "$SOURCE_DIR" ]; then
     echo "Cloning source code from GitHub..."
-    git clone "$REPO_URL" "$SOURCE_DIR"
+    git clone --recurse-submodules "$REPO_URL" "$SOURCE_DIR"
 else
     echo "Source directory exists. Updating..."
     cd "$SOURCE_DIR"
     git pull
+    git submodule update --init --recursive
     cd "$GB_SQD_DIR"
 fi
 
 echo ""
 echo "Source code location: $SOURCE_DIR"
+echo "Initializing submodules..."
+cd "$SOURCE_DIR"
+git submodule update --init --recursive
+cd "$GB_SQD_DIR"
 
 # Check if CMakeLists.txt exists
 if [ ! -f "$SOURCE_DIR/CMakeLists.txt" ]; then
