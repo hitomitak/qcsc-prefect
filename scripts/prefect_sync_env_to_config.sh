@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Sync Prefect settings from a .env file into Prefect config (profile-scoped).
+Sync Prefect settings from a auth-file file into Prefect config (profile-scoped).
 
 Usage:
   scripts/prefect_sync_env_to_config.sh [options]
@@ -20,8 +20,8 @@ Default synced keys:
   - PREFECT_CLIENT_CUSTOM_HEADERS
 
 Examples:
-  scripts/prefect_sync_env_to_config.sh -e .env -p mdx
-  scripts/prefect_sync_env_to_config.sh -e /path/to/.env --all-prefect-vars
+  scripts/prefect_sync_env_to_config.sh -e auth-file -p mdx
+  scripts/prefect_sync_env_to_config.sh -e /path/to/auth-file --all-prefect-vars
 EOF
 }
 
@@ -33,7 +33,7 @@ run_cmd() {
   fi
 }
 
-ENV_FILE=".env"
+ENV_FILE="auth-file"
 PROFILE=""
 SYNC_ALL=0
 DRY_RUN=0

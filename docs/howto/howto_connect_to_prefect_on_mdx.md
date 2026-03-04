@@ -38,7 +38,7 @@ Activate your virtual environment:
 ```bash
 source ~/venv/prefect/bin/activate
 ```
-### Step 2: Storage setup on MDX 
+### Step 2: Storage setup on MDX and Clone git repository
 
 The home directory size on the MDX workflow client may be limited.
 You can place Prefect local files on `/large`:
@@ -48,6 +48,14 @@ You can place Prefect local files on `/large`:
 mkdir -p /large/z12345/.prefect
 mv ~/.prefect ~/.prefect.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
 ln -sfn /large/z12345/.prefect ~/.prefect
+```
+
+After this, you clone the tutorial repository:
+
+<img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
+```bash
+cd /work/gz00/z12345
+git clone git@github.com:hitomitak/hpc-prefect.git
 ```
 
 ### Step 3: Choose your Prefect backend
@@ -99,7 +107,7 @@ Create and use an on-prem profile:
 ```bash
 prefect profile create mdx
 prefect profile use mdx
-prefect config set PREFECT_API_URL="https://prefect-portal.example.org/z12345/api"
+/work/gz00/z12345/hpc-prefect/scripts/prefect_sync_env_to_config.sh -p mdx
 ```
 
 Check current configuration:

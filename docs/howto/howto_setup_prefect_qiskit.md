@@ -45,11 +45,12 @@ Switch to the Prefect profile:
 prefect profile use mdx
 ```
 
-Update your the prefect token (Only On-Prem Prefect):
+Update your the prefect token (Only On-Prem Prefect) if token is expired:
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 prefect-auth login
+/work/gz00/z12345/hpc-prefect/scripts/prefect_sync_env_to_config.sh -p mdx
 ```
 
 ### Step 4: Register IBM Quantum Blocks

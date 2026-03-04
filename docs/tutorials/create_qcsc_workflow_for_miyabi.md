@@ -22,11 +22,9 @@ Key principles in this tutorial:
 You will see these terms:
 - **Flow**: the end-to-end workflow entrypoint
   - `examples/prefect_bitcount_demo/flow_optimized.py`
-  - `examples/prefect_bitcount_demo/flow_tutorial_style.py`
 - **Task**: individual units executed inside a flow
   - Optimized flow task 1 (`quantum-sampling-task` in `flow_optimized.py`): quantum sampling and `input.bin` preparation
   - Optimized flow task 2 (`hpc-bitcount-task` in `flow_optimized.py`): HPC execution and count reconstruction
-  - Legacy-style HPC task (`counter.get(bitstrings)`, implemented in `get_counts_integration.py`)
 - **Block**: reusable server-side configuration stored in Prefect
   - `IBM Quantum Credentials` : IBM Cloud CRN + API key 
   - `QuantumRuntime` block: `ibm-runner` (pre-created)
@@ -36,7 +34,6 @@ You will see these terms:
   - `BitCounter` block: `miyabi-tutorial` (legacy-style facade)
 - **Variable**: server-side runtime parameters
   - `miyabi-bitcount-options` (optimized flow)
-  - `miyabi-tutorial` (legacy-compatible flow)
 
 
 ## What you need
@@ -123,7 +120,7 @@ ssh -A z12345@mdx-workflow.example.org
 
 ## Step 2. Clone hpc-prefect repository
 
-Clone hpc-prefect repository
+If you haven't clone hpc-prefect repository, please clone it.
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
@@ -170,19 +167,21 @@ prefect                   3.6.17
 
 ## Step 3. Prepare for Execution
 
-Update your prefect token (Only On Prem)
-
-<img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
-```bash
-prefect-auth login
-```
-
 Switch the prefect profile to `mdx`:
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 prefect profile use mdx
 ```
+
+Update your prefect token (Only On Prem) if your token is expired.
+
+<img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
+```bash
+prefect-auth login
+/work/gz00/z12345/hpc-prefect/scripts/prefect_sync_env_to_config.sh -p mdx
+```
+
 
 Make sure the Quantum Runtime block exist:
 
@@ -259,6 +258,8 @@ Differences:
 ---
 
 ## Step 5. Prepare block configuration file
+
+Back to MDX termial, 
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
