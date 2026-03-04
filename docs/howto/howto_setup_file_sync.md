@@ -13,7 +13,7 @@ Before you begin, ensure the following:
 
 ## Instructions
 > [!IMPORTANT]  
-> Replace `g00` and `z12345` with your actual group and account name.
+> Replace `gz00` and `z12345` with your actual group and account name.
 
 ### Step 1. Log in to the Workflow Client
 
@@ -21,7 +21,7 @@ Connect to the MDX workflow Client:
 
 <img src="./images/icon-pc.png" alt="pc" width="50"/><br>
 ```bash
-ssh -A z12345@qii-kawasaki-miyabi-cli.cspp.cc.u-tokyo.ac.jp
+ssh -A z12345@mdx-workflow.example.org
 ```
 
 ### Step 2. Configure SSH Keepalive
@@ -74,7 +74,7 @@ Mount the remote storage using `sshfs`:
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-sshfs miyabi-c.jcahpc.jp:/work/gz00/z12345 /work/gz00/z12345
+sshfs miyabi-c.example.org:/work/gz00/z12345 /work/gz00/z12345
 ```
 
 You will be prompted to authenticate with the Miyabi login node.
@@ -86,11 +86,11 @@ This requires:
 Example output:
 
 ```
-The authenticity of host 'miyabi-c.jcahpc.jp (210.137.243.194)' can't be established.
+The authenticity of host 'hpc-login.example.org (203.0.113.10)' can't be established.
 ED25519 key fingerprint is SHA256:...
 This key is not known by any other names
 Are you sure you want to continue connecting (yes/no/[fingerprint])? yes
-(z12345@miyabi-c.jcahpc.jp) Verification code: 123456
+(z12345@miyabi-c.example.org) Verification code: 123456
 ```
 
 Your Miyabi shared storage is now mounted and accessible from the MDX workflow server.

@@ -2,7 +2,7 @@
 
 This guide explains two supported ways to use Prefect from MDX:
 
-- **Option A: On-Prem Prefect on MDX** (`qii-kawasaki-miyabi-serv`)
+- **Option A: On-Prem Prefect on MDX** (`prefect-portal-host`)
 - **Option B: Prefect Cloud** (`https://app.prefect.cloud`)
 
 Choose one backend and use it consistently for block creation, variable creation, and flow runs.
@@ -29,7 +29,7 @@ Connect to the MDX workflow client:
 
 <img src="./images/icon-pc.png" alt="pc" width="50"/><br>
 ```bash
-ssh -A z12345@qii-kawasaki-miyabi-cli.cspp.cc.u-tokyo.ac.jp
+ssh -A z12345@mdx-workflow.example.org
 ```
 
 Activate your virtual environment:
@@ -38,8 +38,19 @@ Activate your virtual environment:
 ```bash
 source ~/venv/prefect/bin/activate
 ```
+### Step 2: Storage setup on MDX 
 
-### Step 2: Choose your Prefect backend
+The home directory size on the MDX workflow client may be limited.
+You can place Prefect local files on `/large`:
+
+<img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
+```bash
+mkdir -p /large/z12345/.prefect
+mv ~/.prefect ~/.prefect.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
+ln -sfn /large/z12345/.prefect ~/.prefect
+```
+
+### Step 3: Choose your Prefect backend
 
 Use either **A (On-Prem)** or **B (Prefect Cloud)**.
 
@@ -50,7 +61,7 @@ Use either **A (On-Prem)** or **B (Prefect Cloud)**.
 Open the following URL in your browser:
 
 ```bash
-https://qii-kawasaki-miyabi-serv.cspp.cc.u-tokyo.ac.jp/z12345/
+https://prefect-portal.example.org/z12345/
 ```
 
 You will be redirected to the SSO login page.
@@ -73,7 +84,7 @@ prefect-auth login
 # Using SSO login flow.
 
 # Please open this URL in your browser and log in via SSO:
-https://us-south.appid.cloud.ibm.com/oauth/v4/xxxxxxxxx/authorization?client_id=xxxxxxxxxxxxxxxxx&response_type=code&scope=openid%20email%20profile%20offline_access&redirect_uri=https%3A%2F%2Fqii-kawasaki-miyabi-serv.cspp.cc.u-tokyo.ac.jp%2Ftoken-callback&state=xxxxxxxxxxxx
+https://us-south.appid.cloud.ibm.com/oauth/v4/xxxxxxxxx/authorization?client_id=xxxxxxxxxxxxxxxxx&response_type=code&scope=openid%20email%20profile%20offline_access&redirect_uri=https%3A%2F%2Fprefect-portal.example.org%2Ftoken-callback&state=xxxxxxxxxxxx
 
 After login, copy the URL you were redirected to and paste the 'code' parameter below.
 
@@ -88,7 +99,7 @@ Create and use an on-prem profile:
 ```bash
 prefect profile create mdx
 prefect profile use mdx
-prefect config set PREFECT_API_URL="https://qii-kawasaki-miyabi-serv.cspp.cc.u-tokyo.ac.jp/z12345/api"
+prefect config set PREFECT_API_URL="https://prefect-portal.example.org/z12345/api"
 ```
 
 Check current configuration:
@@ -102,7 +113,7 @@ Expected values include:
 
 ```text
 PREFECT_PROFILE='mdx'
-PREFECT_API_URL='https://qii-kawasaki-miyabi-serv.cspp.cc.u-tokyo.ac.jp/z12345/api'
+PREFECT_API_URL='https://prefect-portal.example.org/z12345/api'
 PREFECT_CLIENT_CUSTOM_HEADERS='{"Authorization":"Bearer ..."}'
 ```
 
@@ -148,19 +159,8 @@ PREFECT_API_URL='https://api.prefect.cloud/api/accounts/.../workspaces/...'
 
 ---
 
-### Step 4: Optional storage setup on MDX (recommended)
 
-The home directory size on the MDX workflow client may be limited.
-You can place Prefect local files on `/large`:
-
-<img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
-```bash
-mkdir -p /large/z12345/.prefect
-mv ~/.prefect ~/.prefect.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
-ln -sfn /large/z12345/.prefect ~/.prefect
-```
-
-### Step 5: Test Run
+### Step 4: Test Run
 
 Run a simple flow to verify your selected backend is reachable:
 

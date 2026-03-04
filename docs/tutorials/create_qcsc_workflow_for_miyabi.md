@@ -68,7 +68,7 @@ Before the hands-on, confirm the identity mapping below. Mismatched emails are a
 | System | What you use to sign in | Must match other emails? (common policy) | Notes |
 |---|---|---|---|
 | Miyabi-C / HPC | HPC account + SSH key + OTP | No | Common for both backends |
-| MDX workflow client| SSH to `qii-kawasaki-miyabi-cli` | No | Common for both backends |
+| MDX workflow client| SSH to `mdx-workflow-host` | No | Common for both backends |
 | Prefect (On-Prem) | SSO account (often IBMid) | Often YES (org policy) | Use your organization policy |
 | Prefect Cloud | Prefect Cloud user + API key | Not required | On free tier, metadata retention is 7 days|
 | IBM Quantum (IBM Cloud) | Service CRN + API key | No | Common for both backends |
@@ -85,13 +85,15 @@ The whole process image is :
 
 Before starting, make sure:
 
-- You have completed [Step1 : How to Set Up Python Environment on the MDX Workflow Client](../howto/howto_setup_python_env.md).
+- You have completed 
+  - [Step1 : SSH Connection Setup for MDX and Miyabi-C with Git Configuration](../howto/howto_setup_ssh_keys_for_mdx_and_miyabi.md)
+  - [Step1 : How to Set Up Python Environment on the MDX Workflow Client](../howto/howto_setup_python_env.md).
 - You have completed [Step2 : How to Set Up File Sync Between MDX and Miyabi-C](../howto/howto_setup_file_sync.md).
 - You have completed [Step3 : How to Connect to Prefect Web Portal on MDX](../howto/howto_connect_to_prefect_on_mdx.md).
 - You have completed [Step4 : How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit.md).
 
 > [!IMPORTANT]
-> Replace `g00` and `z12345` with your actual group and account name.
+> Replace `gz00` and `z12345` with your actual group and account name.
 
 
 
@@ -116,7 +118,7 @@ Connect to the MDX workflow client using SSH. This is where we will develop the 
 
 <img src="./images/icon-pc.png" alt="pc" width="50"/><br>
 ```bash
-ssh -A z12345@qii-kawasaki-miyabi-cli.cspp.cc.u-tokyo.ac.jp
+ssh -A z12345@mdx-workflow.example.org
 ```
 
 ## Step 2. Clone hpc-prefect repository
@@ -125,7 +127,7 @@ Clone hpc-prefect repository
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-cd /work/g00/z12345
+cd /work/gz00/z12345
 git clone git@github.com:hitomitak/hpc-prefect.git
 ```
 
@@ -140,7 +142,7 @@ Install necessary packages:
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-cd /work/g00/z12345/hpc-prefect
+cd /work/gz00/z12345/hpc-prefect
 uv pip install prefect-qiskit
 uv pip install --no-deps \
   -e packages/hpc-prefect-core \
@@ -211,7 +213,7 @@ Open a new terminal and connect to the Miyabi-C login node:
 
 <img src="./images/icon-pc.png" alt="pc" width="50"/><br>
 ```bash
-ssh -A z12345@miyabi-c.jcahpc.jp
+ssh -A z12345@miyabi-c.example.org
 ```
 
 You will be prompted to enter a verification code. Open your authenticator app and input the OTP.
@@ -220,7 +222,7 @@ Create a directory:
 
 <img src="./images/icon-miyabi.png" alt="miyabi" width="50"/><br>
 ```bash
-cd /work/g00/z12345/hpc-prefect
+cd /work/gz00/z12345/hpc-prefect
 ./examples/prefect_bitcount_demo/build_on_miyabi.sh
 ```
 

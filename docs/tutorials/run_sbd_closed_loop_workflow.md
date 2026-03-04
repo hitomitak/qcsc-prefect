@@ -76,7 +76,7 @@ Connect to the MDX workflow client using SSH. This is where we will install the 
 
 <img src="./images/icon-pc.png" alt="pc" width="50"/><br>
 ```bash
-ssh -A z12345@qii-kawasaki-miyabi-cli.cspp.cc.u-tokyo.ac.jp
+ssh -A z12345@mdx-workflow.example.org
 ```
 
 Activate the environment:
@@ -128,7 +128,7 @@ Open a new terminal and connect to the Miyabi-C login node:
 
 <img src="./images/icon-pc.png" alt="pc" width="50"/><br>
 ```bash
-ssh -A z12345@miyabi-c.jcahpc.jp
+ssh -A z12345@miyabi-c.example.org
 ```
 
 Navigate to the directory and build:

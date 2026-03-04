@@ -22,7 +22,7 @@ Connect to MDX workflow client:
 
 <img src="./images/icon-pc.png" alt="pc" width="50"/><br>
 ```bash
-ssh -A z12345@qii-kawasaki-miyabi-cli.cspp.cc.u-tokyo.ac.jp
+ssh -A z12345@mdx-workflow.example.org
 ```
 
 ### Step 2: Install `uv` Package Manager
@@ -45,13 +45,14 @@ uv venv ~/venv/prefect -p 3.12
 
 This will install Python 3.12 and set up a new environment named `prefect`.
 
-### Step 4: Activate the Environment
+### Step 4: Activate the Environment and Install Prefect.
 
 Activate the virtual environment:
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 source ~/venv/prefect/bin/activate
+ uv pip install prefect
 ```
 
 Your Python environment is now ready for workflow development.

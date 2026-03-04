@@ -24,7 +24,7 @@ uv pip install -e ./qii-miyabi-kawasaki/algorithms/skqd_z2lgt
 ```
 
 ```bash
-ssh miyabi-c.jcahpc.jp
+ssh hpc-login.example.org
 uv venv ~/venv/skqd_z2lgt_x86_64 -p 3.12
 source ~/venv/skqd_z2lgt_x86_64/bin/activate
 uv pip install -e ./qii-miyabi-kawasaki/algorithms/skqd_z2lgt

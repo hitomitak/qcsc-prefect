@@ -17,7 +17,7 @@ Connect to MDX Workflow Client.
 
 <img src="./images/icon-pc.png" alt="pc" width="50"/><br>
 ```bash
-ssh -A z12345@qii-kawasaki-miyabi-cli.cspp.cc.u-tokyo.ac.jp
+ssh -A z12345@mdx-workflow.example.org
 ```
 
 ### Step 2: Install Prefect Qiskit Package

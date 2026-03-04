@@ -4,7 +4,7 @@
 
 <img src="./images/icon-pc.png" alt="pc" width="50"/><br>
 ```bash
-ssh -A z12345@qii-kawasaki-miyabi-cli.cspp.cc.u-tokyo.ac.jp
+ssh -A z12345@mdx-workflow.example.org
 ```
 
 ## Step 2. Exit the Screen Session
@@ -31,4 +31,4 @@ There are screens on:
 1 Sockets in /run/screen/S-z12345.
 ```
 > [!NOTE]
-> If you want to logout the Prefect portal, please delete the cookie for https://qii-kawasaki-miyabi-serv.cspp.cc.u-tokyo.ac.jp with your web browser. 
+> If you want to logout the Prefect portal, please delete the cookie for https://prefect-portal.example.org with your web browser. 
