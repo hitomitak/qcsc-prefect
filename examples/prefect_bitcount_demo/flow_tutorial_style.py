@@ -11,15 +11,18 @@ from qiskit.transpiler import generate_preset_pass_manager
 
 try:
     from get_counts_integration import BITLEN, BitCounter
+    from options_resolver import resolve_sampler_options_and_work_dir
 except ModuleNotFoundError:
     from examples.prefect_bitcount_demo.get_counts_integration import BITLEN, BitCounter
+    from examples.prefect_bitcount_demo.options_resolver import resolve_sampler_options_and_work_dir
 
 
 @flow(name="miyabi_tutorial")
 async def main():
     runtime = await QuantumRuntime.load("ibm-runner")
     counter = await BitCounter.load("miyabi-tutorial")
-    options = await Variable.get("miyabi-tutorial")
+    options_raw = await Variable.get("miyabi-tutorial")
+    sampler_options, _ = resolve_sampler_options_and_work_dir(options_raw, default_shots=100000)
 
     target = await runtime.get_target()
     qc_ghz = QuantumCircuit(BITLEN)
@@ -35,7 +38,7 @@ async def main():
     isa = pm.run(qc_ghz)
     pub_like = (isa,)
 
-    results = await runtime.sampler([pub_like], options=options)
+    results = await runtime.sampler([pub_like], options=sampler_options)
     bitstrings = results[0].data.meas.get_bitstrings()
     counts = await counter.get(bitstrings)
 

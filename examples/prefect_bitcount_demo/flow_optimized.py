@@ -16,8 +16,16 @@ from qiskit.transpiler import generate_preset_pass_manager
 
 from hpc_prefect_executor.from_blocks import run_job_from_blocks
 
+try:
+    from options_resolver import resolve_sampler_options_and_work_dir
+except ModuleNotFoundError:
+    from examples.prefect_bitcount_demo.options_resolver import (
+        resolve_sampler_options_and_work_dir,
+    )
+
 BITLEN = 10
 MAXVAL = 1 << BITLEN
+DEFAULT_BASE_WORK_DIR = "./work/prefect_bitcount_optimized"
 
 
 def _write_input_u32(work_dir: Path, bitstrings: list[str]) -> None:
@@ -50,12 +58,16 @@ async def run_quantum_sampling_and_prepare_input(
     runtime_block_name: str,
     options_variable_name: str,
     default_shots: int,
-    work_dir: str,
+    work_dir: str | None,
 ) -> str:
     runtime = await QuantumRuntime.load(runtime_block_name)
-    options = await Variable.get(
+    options_raw = await Variable.get(
         options_variable_name,
         default={"params": {"shots": default_shots}},
+    )
+    sampler_options, options_work_dir = resolve_sampler_options_and_work_dir(
+        options_raw,
+        default_shots=default_shots,
     )
 
     target = await runtime.get_target()
@@ -72,10 +84,11 @@ async def run_quantum_sampling_and_prepare_input(
     )
     isa = pm.run(qc_ghz)
 
-    results = await runtime.sampler([(isa,)], options=options)
+    results = await runtime.sampler([(isa,)], options=sampler_options)
     bitstrings = results[0].data.meas.get_bitstrings()
 
-    resolved_base_work_dir = Path(work_dir).expanduser().resolve()
+    selected_work_dir = work_dir or options_work_dir or DEFAULT_BASE_WORK_DIR
+    resolved_base_work_dir = Path(selected_work_dir).expanduser().resolve()
     job_work_dir = _make_job_work_dir(resolved_base_work_dir)
     _write_input_u32(job_work_dir, bitstrings)
     return str(job_work_dir)
@@ -126,7 +139,7 @@ async def prefect_bitcount_optimized_flow(
     hpc_profile_block_name: str = "hpc-miyabi-bitcount",
     options_variable_name: str = "miyabi-bitcount-options",
     default_shots: int = 100000,
-    work_dir: str = "./work/prefect_bitcount_optimized",
+    work_dir: str | None = None,
     script_filename: str = "bitcount_optimized.job",
 ):
     job_work_dir = await run_quantum_sampling_and_prepare_input(
@@ -169,7 +182,15 @@ if __name__ == "__main__":
     parser.add_argument("--hpc-profile-block", default="hpc-miyabi-bitcount")
     parser.add_argument("--options-variable", default="miyabi-bitcount-options")
     parser.add_argument("--shots", type=int, default=100000)
-    parser.add_argument("--work-dir", default="./work/prefect_bitcount_optimized")
+    parser.add_argument(
+        "--work-dir",
+        default=None,
+        help=(
+            "Base working directory. "
+            "If omitted, uses 'work_dir' from --options-variable when present, "
+            f"otherwise falls back to {DEFAULT_BASE_WORK_DIR!r}."
+        ),
+    )
     parser.add_argument("--script-filename", default="bitcount_optimized.job")
     args = parser.parse_args()
 

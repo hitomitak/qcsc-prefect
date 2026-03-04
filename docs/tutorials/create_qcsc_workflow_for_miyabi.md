@@ -307,7 +307,7 @@ python examples/prefect_bitcount_demo/create_blocks.py \
 | ExecutionProfileBlock | `exec-bitcount-mpi` | Nodes, MPI settings, walltime, modules |
 | HPCProfileBlock | `hpc-miyabi-bitcount` | Miyabi queue/project/executable resolution |
 | BitCounter Block | `miyabi-tutorial` | Backward-compatible facade |
-| Prefect Variable | `miyabi-bitcount-options` | Sampler options (shots, etc.) |
+| Prefect Variable | `miyabi-bitcount-options` | Sampler options + base `work_dir` for `flow_optimized.py` |
 | Prefect Variable | `miyabi-tutorial` | Backward-compatible options name |
 
 At this stage, users do not need to define block classes manually.
@@ -332,6 +332,11 @@ python examples/prefect_bitcount_demo/flow_optimized.py \
 
 In this mode, the main user inputs are block names.
 
+`flow_optimized.py` resolves the base work directory in this order:
+1. `--work-dir` (if provided)
+2. `work_dir` stored in `--options-variable`
+3. fallback: `./work/prefect_bitcount_optimized`
+
 We can also monitor the progress on the Prefect console:
 
 ![Get Counts Flow Run](./images/img-get-counts-new.png)
@@ -349,7 +354,7 @@ Execution sequence:
 
 1. **Task: `quantum-sampling-task`**
 2. Load the Prefect `QuantumRuntime` block (default: `ibm-runner`).
-3. Load sampler options from a Prefect Variable (default: `miyabi-bitcount-options`).
+3. Load sampler options (and optional `work_dir`) from a Prefect Variable (default: `miyabi-bitcount-options`).
 4. Build a 10-qubit GHZ circuit, transpile it, and run `runtime.sampler(...)`.
 5. Convert sampled bitstrings to `uint32` values and write `input.bin` in a per-run job directory.
 6. **Task: `hpc-bitcount-task`**

@@ -79,6 +79,11 @@ python examples/prefect_bitcount_demo/flow_optimized.py \
   --script-filename bitcount_optimized.pjm
 ```
 
+`flow_optimized.py` resolves the base work directory in this order:
+1. `--work-dir` (if provided)
+2. `work_dir` in the options variable (`miyabi-bitcount-options` / `fugaku-bitcount-options`)
+3. fallback: `./work/prefect_bitcount_optimized`
+
 ## Run legacy tutorial-style flow (Miyabi only)
 
 ```bash

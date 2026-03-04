@@ -93,8 +93,13 @@ def _register_block_types(*custom_block_classes) -> None:
             register()
 
 
-def _set_variable(variable_name: str, shots: int) -> None:
-    value = json.dumps({"params": {"shots": shots}})
+def _set_variable(variable_name: str, shots: int, work_dir: str) -> None:
+    value = json.dumps(
+        {
+            "sampler_options": {"params": {"shots": shots}},
+            "work_dir": str(Path(work_dir).expanduser().resolve()),
+        }
+    )
     subprocess.run(
         ["prefect", "variable", "set", variable_name, value, "--overwrite"],
         check=True,
@@ -348,7 +353,7 @@ def main() -> None:
             mpi_options_for_pjm=fugaku_mpi_options_for_pjm or [],
         ).save(hpc_block_name, overwrite=True)
 
-    _set_variable(options_variable_name, shots)
+    _set_variable(options_variable_name, shots, work_dir)
 
     if is_miyabi:
         bit_counter_cls(
@@ -363,7 +368,7 @@ def main() -> None:
         ).save(bitcounter_block_name, overwrite=True)
 
         if tutorial_variable_name and tutorial_variable_name != options_variable_name:
-            _set_variable(tutorial_variable_name, shots)
+            _set_variable(tutorial_variable_name, shots, work_dir)
 
     print(f"Saved blocks and variables for BitCount demo (target={hpc_target})")
     print(f"  Command block: {cmd_block_name}")
