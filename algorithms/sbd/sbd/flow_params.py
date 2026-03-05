@@ -62,7 +62,7 @@ class DEParameters(BaseModel):
     )
     
     iterations: int = Field(
-        default=20,
+        default=1,
         description="Number of DE optimization iterations.",
         title="Differential Evolution Iterations",
         ge=1,

@@ -17,7 +17,7 @@ Before starting, make sure:
 - You have completed [How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit.md).
 
 > [!IMPORTANT]
-> - Replace `g00` and `z12345` with your actual group and account name.
+> - Replace `gz00` and `z12345` with your actual group and account name.
 > - There is currently an issue where the `~` (home) directory on mdx runs out of available space. As a workaround, we can use the `/large` or `/work` directory instead. In this tutorial, we use the `/work` directory.
 
 ## 0. What changes from BitCounts?
@@ -32,6 +32,26 @@ Before starting, make sure:
 - Additional Blocks are required (solver job block, etc.).
 - **Deployment (Deploy)** becomes important so that participants can run from the Prefect UI reliably.
 - Block creation is automated via script instead of manual UI editing.
+
+### What is `SBDSolverJob` and why it appears here
+
+`SBDSolverJob` is a **workflow-facing facade block** for the SBD domain. It is used so users can select one solver preset from the UI (for example CPU/GPU variants) with:
+
+```
+sbd_solver_job/<block_name>
+```
+
+Important: this does **not** replace the 3-block architecture.
+
+- `CommandBlock` = WHAT executable to run
+- `ExecutionProfileBlock` = HOW to run (MPI/walltime/modules)
+- `HPCProfileBlock` = WHERE to run (queue/project/target)
+- `SBDSolverJob` = SBD-specific wrapper that stores:
+  - references to the three blocks above
+  - SBD-specific runtime arguments (`task_comm_size`, `block`, `iteration`, etc.)
+  - job file conventions (`root_dir`, `script_filename`)
+
+At runtime, `SBDSolverJob.run(...)` eventually calls `run_job_from_blocks(...)` and delegates actual submission to those three base blocks.
 
 ---
 ## 1. Big picture: Flow / Task / Block / Variable / Deployment
@@ -90,7 +110,7 @@ source ~/venv/prefect/bin/activate
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-cd /work/g00/z12345/hpc-prefect
+cd /work/gz00/z12345/hpc-prefect
 
 uv pip install --no-deps \
   -e packages/hpc-prefect-core \
@@ -135,7 +155,7 @@ Navigate to the directory and build:
 
 <img src="./images/icon-miyabi.png" alt="miyabi" width="50"/><br>
 ```bash
-cd /work/g00/z12345/hpc-prefect/algorithms/sbd/native
+cd /work/gz00/z12345/hpc-prefect/algorithms/sbd/native
 bash ./build_sbd.sh
 ```
 
@@ -149,7 +169,7 @@ ls -l | grep diag
 Example output:
 
 ```text
--rwxr-x--- 1 z12345 g00 1542016 Nov 30 15:18 diag
+-rwxr-x--- 1 z12345 gz00 1542016 Nov 30 15:18 diag
 ```
 
 Great! You have completed building SBD on Miyabi-C!
@@ -165,7 +185,7 @@ realpath ./diag
 Example output:
 
 ```text
-/work/g00/z12345/hpc-prefect/algorithms/sbd/native/diag
+/work/gz00/z12345/hpc-prefect/algorithms/sbd/native/diag
 ```
 
 We will need this path in the next step.
@@ -183,16 +203,17 @@ This approach uses automated block creation via script instead of manual UI edit
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-cd /work/g00/z12345/hpc-prefect
-mkdir -p /work/g00/z12345/sbd_jobs
+cd /work/gz00/z12345/hpc-prefect
+mkdir -p /work/gz00/z12345/sbd_jobs
 cp algorithms/sbd/sbd_blocks.example.toml algorithms/sbd/sbd_blocks.toml
 ```
 
-If you use On-Prem prefect, you need to run prefect-auth login command to get access to prefect server.
+Update your prefect token (Only On Prem) if your token is expired.
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 prefect-auth login
+/work/gz00/z12345/hpc-prefect/scripts/prefect_sync_env_to_config.sh -p mdx
 ```
 
 #### 4.2 Edit the configuration file
@@ -207,10 +228,10 @@ Set at least:
 
 | Parameter | Value / Example | Description |
 |---|---|---|
-| `project` | `g00` | Your Miyabi project name |
+| `project` | `gz00` | Your Miyabi project name |
 | `queue` | `regular-c` | Queue name on Miyabi |
-| `work_dir` | `/work/g00/z12345/sbd_jobs` | Job working directory |
-| `sbd_executable` | `/work/g00/z12345/hpc-prefect/algorithms/sbd/native/diag` | Absolute path to diag executable |
+| `work_dir` | `/work/gz00/z12345/sbd_jobs` | Job working directory |
+| `sbd_executable` | `/work/gz00/z12345/hpc-prefect/algorithms/sbd/native/diag` | Absolute path to diag executable |
 | `mpiprocs` | `8` | Number of MPI processes |
 | `mpi_options` | `["-np", "8"]` | MPI options |
 | `task_comm_size` | `1` | Task communicator size |
@@ -241,6 +262,12 @@ This creates the following blocks (default names):
 - **SBD Solver Job**: `davidson-solver`
 - **Prefect Variable**: `sqd_options`
 
+`davidson-solver` is the block you later pass as `Solver Block Ref` in the UI.
+Internally, this block points to:
+- `cmd-sbd-diag`
+- `exec-sbd-mpi`
+- `hpc-miyabi-sbd`
+
 <img src="./images/img-closed-blocks.img" alt="blocks" width="90%"/><br>
 
 ---
@@ -262,7 +289,7 @@ Activate environment and deploy:
 
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-cd /work/g00/z12345/hpc-prefect
+cd /work/gz00/z12345/hpc-prefect
 source ~/venv/prefect/bin/activate
 sbd-deploy
 ```
@@ -287,10 +314,14 @@ In the Prefect console, click **Run** → **Custom run** and set as following. A
 
 | Field | Value / Example |
 |---|---|
-| FCIDump File | `/work/g00/z12345/hpc-prefect/algorithms/sbd/data/fcidump_N2_MO.txt` |
-| SQD Subspace Dimension (Optional) | `10000000` (start small for testing) |
+| FCIDump File | `/work/gz00/z12345/hpc-prefect/algorithms/sbd/data/fcidump_N2_MO.txt` |
+| SQD Subspace Dimension (Optional) | `1000000` (start small for testing) |
 | Differential Evolution Iterations (Optional)| `1` (start small for testing) |
 | Solver Block Ref | `sbd_solver_job/davidson-solver` |
+
+`Solver Block Ref` means: "which `SBDSolverJob` preset should this run use?"
+- It is a stable entry point for users.
+- HPC details are still resolved through the underlying 3 blocks.
 
 > [!NOTE]
 > For this tutorial, the number of iterations is set to 1 for a quick test, but feel free to increase it as needed.
@@ -386,7 +417,7 @@ Edit `algorithms/sbd/sbd_blocks_gpu.toml` and change:
 |---|---|
 | `block_name` | `davidson-solver-gpu` |
 | `queue` | `regular-g` |
-| `sbd_executable` | `/work/g00/z12345/hpc-prefect/algorithms/sbd/native/diag` (GPU version) |
+| `sbd_executable` | `/work/gz00/z12345/hpc-prefect/algorithms/sbd/native/diag` (GPU version) |
 | `launcher` | `mpirun` |
 | `mpiprocs` | `1` |
 | `mpi_options` | `["-n", "1"]` |

@@ -31,6 +31,26 @@ Before starting, make sure:
 - **Deployment (Deploy)** becomes important so that participants can run from the Prefect UI reliably.
 - Block creation is automated via script instead of manual UI editing.
 
+### What is `SBDSolverJob` and why it appears here
+
+`SBDSolverJob` is a **workflow-facing facade block** for the SBD domain. It is used so users can select one solver preset from the UI (for example CPU/GPU variants) with:
+
+```
+sbd_solver_job/<block_name>
+```
+
+Important: this does **not** replace the 3-block architecture.
+
+- `CommandBlock` = WHAT executable to run
+- `ExecutionProfileBlock` = HOW to run (MPI/walltime/modules)
+- `HPCProfileBlock` = WHERE to run (queue/project/target)
+- `SBDSolverJob` = SBD-specific wrapper that stores:
+  - references to the three blocks above
+  - SBD-specific runtime arguments (`task_comm_size`, `block`, `iteration`, etc.)
+  - job file conventions (`root_dir`, `script_filename`)
+
+At runtime, `SBDSolverJob.run(...)` eventually calls `run_job_from_blocks(...)` and delegates actual submission to those three base blocks.
+
 ---
 ## 1. Big picture: Flow / Task / Block / Variable / Deployment
 
@@ -219,7 +239,14 @@ This creates the following blocks (default names):
 - **CommandBlock**: `cmd-sbd-diag`
 - **ExecutionProfileBlock**: `exec-sbd-fugaku`
 - **HPCProfileBlock**: `hpc-fugaku-sbd`
+- **SBD Solver Job**: `davidson-solver`
 - **Prefect Variable**: `sqd_options`
+
+`davidson-solver` is the block you later pass as `Solver Block Ref` in the UI.
+Internally, this block points to:
+- `cmd-sbd-diag`
+- `exec-sbd-fugaku`
+- `hpc-fugaku-sbd`
 
 ---
 
@@ -255,6 +282,10 @@ In the Prefect console, click **Run** → **Custom run** and set at least:
 | SQD Subspace Dimension (Optional) | `1000000` |
 | Differential Evolution Iterations (Optional) | `1` (start small for testing) |
 | Solver Block Ref | `sbd_solver_job/davidson-solver` |
+
+`Solver Block Ref` means: "which `SBDSolverJob` preset should this run use?"
+- It is a stable entry point for users.
+- HPC details are still resolved through the underlying 3 blocks.
 
 <img src="./images/img-sbd-workflow-paramaters-small.png" alt="params" width="90%"/><br>
 
