@@ -291,6 +291,7 @@ Activate environment and deploy:
 ```bash
 cd /work/gz00/z12345/hpc-prefect
 source ~/venv/prefect/bin/activate
+export PREFECT_RAY_NUM_CPUS=2
 sbd-deploy
 ```
 
