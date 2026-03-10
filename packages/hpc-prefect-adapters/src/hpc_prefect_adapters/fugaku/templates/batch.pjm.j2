@@ -7,6 +7,11 @@
 {% if num_nodes %}
 #PJM -L "node={{ num_nodes }}"
 {% endif %}
+{% if pjm_resources %}
+{% for resource in pjm_resources %}
+#PJM -L "{{ resource }}"
+{% endfor %}
+{% endif %}
 {% if group_name %}
 #PJM -g {{ group_name }}                      
 {% endif %}
@@ -23,15 +28,20 @@
 #PJM -S
 #PJM --spath {{ stat_path }}
 #PJM --name {{ job_name }}
-{% if environments %}
-{% for k, v in environments.items() %}
-export {{ k }}="{{ v }}"
+{% if modules %}
+{% for module in modules %}
+module load {{ module }}
 {% endfor %}
 {% endif %}
 {% if spack_modules %}
 . /vol0004/apps/oss/spack/share/spack/setup-env.sh
 {% for module in spack_modules %}
 spack load {{ module }}
+{% endfor %}
+{% endif %}
+{% if environments %}
+{% for k, v in environments.items() %}
+export {{ k }}="{{ v }}"
 {% endfor %}
 {% endif %}
 {% if launcher == "single" %}

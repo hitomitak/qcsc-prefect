@@ -86,6 +86,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--fugaku-gfscache", help="Fugaku GFS cache (overrides config)")
     parser.add_argument("--fugaku-spack-modules", nargs="*", help="Fugaku spack modules (overrides config)")
     parser.add_argument("--fugaku-mpi-options-for-pjm", nargs="*", help="Fugaku MPI options for PJM (overrides config)")
+    parser.add_argument(
+        "--fugaku-pjm-resources",
+        nargs="*",
+        help='Additional Fugaku PJM -L directives such as "freq=2000,eco_state=2" (overrides config)',
+    )
     
     # Block names (override config)
     parser.add_argument(
@@ -188,15 +193,17 @@ def main() -> None:
     # Determine launcher
     launcher = get_value("launcher")
     if launcher is None:
-        launcher = "mpiexec.hydra" if is_miyabi else "mpiexec"
+        launcher = "mpiexec.hydra" if is_miyabi else "mpirun"
     
     # Get modules
     modules = get_value("modules")
     if modules is None:
-        modules = ["intel/2023.2.0", "impi/2021.10.0"] if is_miyabi else []
+        modules = ["intel/2023.2.0", "impi/2021.10.0"] if is_miyabi else ["LLVM/llvmorg-21.1.0"]
     
     # Get MPI options
-    mpi_options = get_value("mpi_options", default=[])
+    mpi_options = get_value("mpi_options")
+    if mpi_options is None:
+        mpi_options = [] if is_miyabi else ["-n", str(num_nodes)]
     
     # Determine executable path
     executable = get_value("executable")
@@ -288,6 +295,17 @@ def main() -> None:
     print("\nCreating ExecutionProfileBlock...")
     
     def _save_execution_profile(*, block_name: str, profile_name: str, command_name: str) -> None:
+        environments = (
+            {
+                "KMP_AFFINITY": "granularity=fine,compact,1,0",
+            }
+            if is_miyabi
+            else {
+                "OMP_NUM_THREADS": str(ompthreads),
+                "UTOFU_SWAP_PROTECT": "1",
+                "LD_LIBRARY_PATH": "/lib64:$LD_LIBRARY_PATH",
+            }
+        )
         ExecutionProfileBlock(
             profile_name=profile_name,
             command_name=command_name,
@@ -299,9 +317,7 @@ def main() -> None:
             launcher=launcher,
             mpi_options=mpi_options,
             modules=modules,
-            environments={
-                "KMP_AFFINITY": "granularity=fine,compact,1,0",
-            },
+            environments=environments,
         ).save(block_name, overwrite=True)
         print(f"  ✓ {block_name}")
 
@@ -347,6 +363,7 @@ def main() -> None:
         fugaku_gfscache = get_value("fugaku_gfscache", default="/vol0004:/vol0002")
         fugaku_spack_modules = get_value("fugaku_spack_modules", default=[])
         fugaku_mpi_options = get_value("fugaku_mpi_options_for_pjm", default=["max-proc-per-node=1"])
+        fugaku_pjm_resources = get_value("fugaku_pjm_resources", default=["freq=2000,eco_state=2"])
         
         HPCProfileBlock(
             hpc_target="fugaku",
@@ -358,6 +375,7 @@ def main() -> None:
             gfscache=fugaku_gfscache,
             spack_modules=fugaku_spack_modules,
             mpi_options_for_pjm=fugaku_mpi_options,
+            pjm_resources=fugaku_pjm_resources,
         ).save(hpc_block_name, overwrite=True)
     
     print(f"  ✓ {hpc_block_name}")

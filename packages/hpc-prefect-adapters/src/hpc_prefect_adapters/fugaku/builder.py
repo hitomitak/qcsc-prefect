@@ -20,6 +20,7 @@ class FugakuJobRequest:
     gfscache: str | None = None
     mpi_options_for_pjm: list[str] | None = None
     spack_modules: list[str] | None = None
+    pjm_resources: list[str] | None = None
 
 
 def to_fugaku_template_kwargs(
@@ -56,8 +57,10 @@ def to_fugaku_template_kwargs(
         "stdout_path": str(stdout_path),
         "stderr_path": str(stderr_path),
         "stat_path": str(stat_path),
+        "pjm_resources": list(req.pjm_resources or []),
         "mpi_options_for_pjm": list(req.mpi_options_for_pjm or []),
         "gfscache": req.gfscache,
+        "modules": list(exec_profile.modules or []),
         "spack_modules": list(req.spack_modules or []),
         "environments": dict(exec_profile.environments or {}),
         "mpi_options": list(exec_profile.mpi_options or []),

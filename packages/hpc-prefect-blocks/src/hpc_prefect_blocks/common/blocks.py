@@ -61,3 +61,7 @@ class HPCProfileBlock(Block):
     gfscache: str | None = Field(default=None, title="Fugaku: GFS Cache Path (PJM_LLIO_GFSCACHE)")
     spack_modules: list[str] = Field(default_factory=list, title="Fugaku: Spack Modules")
     mpi_options_for_pjm: list[str] = Field(default_factory=list, title="Fugaku: MPI Options for PJM")
+    pjm_resources: list[str] = Field(
+        default_factory=list,
+        title="Fugaku: Additional PJM -L Directives",
+    )

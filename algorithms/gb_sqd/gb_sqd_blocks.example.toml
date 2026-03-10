@@ -23,15 +23,22 @@ walltime = "00:30:00"
 # executable = "/path/to/custom/gb-demo"
 
 # Modules to load (optional)
+# Miyabi example:
 # modules = ["intel/2023.2.0", "impi/2021.10.0"]
+# Fugaku example:
+# modules = ["LLVM/llvmorg-21.1.0"]
 
 # MPI options (optional)
+# Miyabi example:
 # mpi_options = []
+# Fugaku example:
+# mpi_options = ["-n", "4"]
 
 # Fugaku-specific settings (ignored for Miyabi)
 # fugaku_gfscache = "/vol0004:/vol0002"
 # fugaku_spack_modules = []
 # fugaku_mpi_options_for_pjm = ["max-proc-per-node=1"]
+# fugaku_pjm_resources = ["freq=2000,eco_state=2"]
 
 # Block names (optional, will use defaults if not specified)
 # command_block_name_ext = "cmd-gb-sqd-ext"

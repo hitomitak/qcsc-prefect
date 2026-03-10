@@ -45,3 +45,5 @@ gb_sqd_blocks.toml
 
 # Cloned source repository
 gb_demo_2026/
+
+data/*

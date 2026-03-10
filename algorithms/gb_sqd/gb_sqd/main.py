@@ -18,6 +18,9 @@ if (_project_root / "packages").exists():
 
 from hpc_prefect_executor.from_blocks import run_job_from_blocks
 
+from .bulk import bulk_gb_sqd_flow
+from .cli_args import build_ext_sqd_user_args, build_trim_sqd_user_args
+
 
 @flow(name="GB-SQD-ExtSQD-Simple")
 async def ext_sqd_simple_flow(
@@ -37,6 +40,10 @@ async def ext_sqd_simple_flow(
     adet_comm_size: int = 1,
     bdet_comm_size: int = 1,
     task_comm_size: int = 1,
+    adet_comm_size_final: int | None = None,
+    bdet_comm_size_final: int | None = None,
+    task_comm_size_final: int | None = None,
+    do_carryover_in_recovery: bool = False,
     carryover_threshold: float = 1.0e-2,
     carryover_ratio: float = 0.5,
     with_hf: bool = False,
@@ -82,31 +89,29 @@ async def ext_sqd_simple_flow(
     work_path = Path(work_dir).expanduser().resolve()
     work_path.mkdir(parents=True, exist_ok=True)
     
-    # Build command arguments
-    user_args = [
-        "--fcidump", str(fcidump_file),
-        "--count_dict_file", str(count_dict_file),
-        "--mode", "ext_sqd",
-        "--num_recovery", str(num_recovery),
-        "--num_batches", str(num_batches),
-        "--num_samples_per_batch", str(num_samples_per_batch),
-        "--iteration", str(iteration),
-        "--block", str(block),
-        "--tolerance", str(tolerance),
-        "--max_time", str(max_time),
-        "--adet_comm_size", str(adet_comm_size),
-        "--bdet_comm_size", str(bdet_comm_size),
-        "--task_comm_size", str(task_comm_size),
-        "--carryover_threshold", str(carryover_threshold),
-        "--carryover_ratio", str(carryover_ratio),
-        "--output_dir", str(work_path),
-    ]
-    
-    if with_hf:
-        user_args.append("--with_hf")
-    
-    if verbose:
-        user_args.append("-v")
+    user_args = build_ext_sqd_user_args(
+        fcidump_file=fcidump_file,
+        count_dict_file=count_dict_file,
+        output_dir=work_path,
+        num_recovery=num_recovery,
+        num_batches=num_batches,
+        num_samples_per_batch=num_samples_per_batch,
+        iteration=iteration,
+        block=block,
+        tolerance=tolerance,
+        max_time=max_time,
+        adet_comm_size=adet_comm_size,
+        bdet_comm_size=bdet_comm_size,
+        task_comm_size=task_comm_size,
+        adet_comm_size_final=adet_comm_size_final,
+        bdet_comm_size_final=bdet_comm_size_final,
+        task_comm_size_final=task_comm_size_final,
+        do_carryover_in_recovery=do_carryover_in_recovery,
+        carryover_threshold=carryover_threshold,
+        carryover_ratio=carryover_ratio,
+        with_hf=with_hf,
+        verbose=verbose,
+    )
     
     logger.info(f"Work directory: {work_path}")
     logger.info(f"FCIDUMP: {fcidump_file}")
@@ -166,6 +171,9 @@ async def trim_sqd_simple_flow(
     adet_comm_size_combined: int | None = None,
     bdet_comm_size_combined: int | None = None,
     task_comm_size_combined: int | None = None,
+    adet_comm_size_final: int | None = None,
+    bdet_comm_size_final: int | None = None,
+    task_comm_size_final: int | None = None,
     carryover_ratio_batch: float = 0.1,
     carryover_ratio_combined: float = 0.5,
     carryover_threshold: float = 1.0e-2,
@@ -214,39 +222,32 @@ async def trim_sqd_simple_flow(
     work_path = Path(work_dir).expanduser().resolve()
     work_path.mkdir(parents=True, exist_ok=True)
     
-    # Build command arguments
-    user_args = [
-        "--fcidump", str(fcidump_file),
-        "--count_dict_file", str(count_dict_file),
-        "--mode", "trim_sqd",
-        "--num_recovery", str(num_recovery),
-        "--num_batches", str(num_batches),
-        "--num_samples_per_recovery", str(num_samples_per_recovery),
-        "--iteration", str(iteration),
-        "--block", str(block),
-        "--tolerance", str(tolerance),
-        "--max_time", str(max_time),
-        "--adet_comm_size", str(adet_comm_size),
-        "--bdet_comm_size", str(bdet_comm_size),
-        "--task_comm_size", str(task_comm_size),
-        "--carryover_ratio_batch", str(carryover_ratio_batch),
-        "--carryover_ratio_combined", str(carryover_ratio_combined),
-        "--carryover_threshold", str(carryover_threshold),
-        "--output_dir", str(work_path),
-    ]
-    
-    if adet_comm_size_combined is not None:
-        user_args.extend(["--adet_comm_size_combined", str(adet_comm_size_combined)])
-    if bdet_comm_size_combined is not None:
-        user_args.extend(["--bdet_comm_size_combined", str(bdet_comm_size_combined)])
-    if task_comm_size_combined is not None:
-        user_args.extend(["--task_comm_size_combined", str(task_comm_size_combined)])
-    
-    if with_hf:
-        user_args.append("--with_hf")
-    
-    if verbose:
-        user_args.append("-v")
+    user_args = build_trim_sqd_user_args(
+        fcidump_file=fcidump_file,
+        count_dict_file=count_dict_file,
+        output_dir=work_path,
+        num_recovery=num_recovery,
+        num_batches=num_batches,
+        num_samples_per_recovery=num_samples_per_recovery,
+        iteration=iteration,
+        block=block,
+        tolerance=tolerance,
+        max_time=max_time,
+        adet_comm_size=adet_comm_size,
+        bdet_comm_size=bdet_comm_size,
+        task_comm_size=task_comm_size,
+        adet_comm_size_combined=adet_comm_size_combined,
+        bdet_comm_size_combined=bdet_comm_size_combined,
+        task_comm_size_combined=task_comm_size_combined,
+        adet_comm_size_final=adet_comm_size_final,
+        bdet_comm_size_final=bdet_comm_size_final,
+        task_comm_size_final=task_comm_size_final,
+        carryover_ratio_batch=carryover_ratio_batch,
+        carryover_ratio_combined=carryover_ratio_combined,
+        carryover_threshold=carryover_threshold,
+        with_hf=with_hf,
+        verbose=verbose,
+    )
     
     logger.info(f"Work directory: {work_path}")
     logger.info(f"FCIDUMP: {fcidump_file}")

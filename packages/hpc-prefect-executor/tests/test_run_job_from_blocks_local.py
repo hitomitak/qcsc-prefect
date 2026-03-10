@@ -55,6 +55,7 @@ class _HPCProfileBlockStub:
         gfscache: str | None = None,
         spack_modules: list[str] | None = None,
         mpi_options_for_pjm: list[str] | None = None,
+        pjm_resources: list[str] | None = None,
     ) -> None:
         self.hpc_target = hpc_target
         self.executable_map = executable_map
@@ -65,6 +66,7 @@ class _HPCProfileBlockStub:
         self.gfscache = gfscache
         self.spack_modules = spack_modules or []
         self.mpi_options_for_pjm = mpi_options_for_pjm or []
+        self.pjm_resources = pjm_resources or []
 
 
 def _patch_block_loading(monkeypatch, command, profile, hpc):
@@ -146,6 +148,7 @@ def test_run_job_from_blocks_dispatches_to_fugaku(monkeypatch, tmp_path: Path):
         gfscache="/vol0002",
         spack_modules=["fjmpi"],
         mpi_options_for_pjm=["max-proc-per-node=48"],
+        pjm_resources=["freq=2000,eco_state=2"],
     )
     _patch_block_loading(monkeypatch, command, profile, hpc)
 
@@ -185,4 +188,5 @@ def test_run_job_from_blocks_dispatches_to_fugaku(monkeypatch, tmp_path: Path):
     assert captured["req"].gfscache == "/vol0002"
     assert captured["req"].spack_modules == ["fjmpi"]
     assert captured["req"].mpi_options_for_pjm == ["max-proc-per-node=48"]
+    assert captured["req"].pjm_resources == ["freq=2000,eco_state=2"]
     assert captured["metrics_artifact_key"] == "fugaku-metrics"

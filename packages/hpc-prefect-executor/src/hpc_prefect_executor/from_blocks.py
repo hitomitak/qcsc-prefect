@@ -134,6 +134,7 @@ async def run_job_from_blocks(
             gfscache=hpc_block.gfscache or "/vol0002",
             spack_modules=list(hpc_block.spack_modules) if hpc_block.spack_modules else [],
             mpi_options_for_pjm=list(hpc_block.mpi_options_for_pjm) if hpc_block.mpi_options_for_pjm else [],
+            pjm_resources=list(hpc_block.pjm_resources) if hpc_block.pjm_resources else [],
         )
         return await run_fugaku_job(
             work_dir=resolved_work_dir,
