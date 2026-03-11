@@ -10,7 +10,7 @@ from prefect import flow, get_run_logger
 from prefect.task_runners import ConcurrentTaskRunner
 
 from .discovery import discover_target_directories
-from .tasks import bulk_target_run_task
+from .target_overrides import merge_target_job_parameters, prepare_target_overrides
 
 
 def _batched(items: list[Path], batch_size: int) -> Iterable[list[Path]]:
@@ -36,6 +36,12 @@ def _write_summary(output_root_dir: str | Path, summary: dict[str, Any]) -> None
     path.write_text(json.dumps(summary, indent=2))
 
 
+def _get_bulk_target_run_task():
+    from .tasks import bulk_target_run_task
+
+    return bulk_target_run_task
+
+
 @flow(name="GB-SQD-Bulk", task_runner=ConcurrentTaskRunner())
 def bulk_gb_sqd_flow(
     *,
@@ -56,6 +62,7 @@ def bulk_gb_sqd_flow(
     command_block_name: str | None = None,
     execution_profile_block_name: str | None = None,
     hpc_profile_block_name: str = "hpc-fugaku-gb-sqd",
+    target_overrides: dict[str, dict[str, Any]] | None = None,
     num_recovery: int = 1,
     num_batches: int = 1,
     num_samples_per_batch: int = 1,
@@ -110,8 +117,9 @@ def bulk_gb_sqd_flow(
 
     command_name = command_block_name or _default_command_block_name(mode)
     execution_name = execution_profile_block_name or _default_execution_profile_block_name(mode)
+    input_root_path = Path(input_root_dir).expanduser().resolve()
 
-    job_parameters = {
+    shared_job_parameters = {
         "num_recovery": num_recovery,
         "num_batches": num_batches,
         "num_samples_per_batch": num_samples_per_batch,
@@ -137,8 +145,14 @@ def bulk_gb_sqd_flow(
         "with_hf": with_hf,
         "verbose": verbose,
     }
+    discovered_relative_paths = [target.relative_to(input_root_path).as_posix() for target in discovered]
+    prepared_target_overrides = prepare_target_overrides(
+        discovered_relative_paths=discovered_relative_paths,
+        target_overrides=target_overrides,
+        allowed_parameter_names=shared_job_parameters.keys(),
+    )
+    bulk_target_run_task = _get_bulk_target_run_task()
 
-    input_root_path = Path(input_root_dir).expanduser().resolve()
     results: list[dict[str, Any]] = []
     stop_early = False
     for batch in _batched(discovered, concurrency):
@@ -146,6 +160,11 @@ def bulk_gb_sqd_flow(
         for target in batch:
             relative_path = target.relative_to(input_root_path).as_posix()
             target_name = relative_path.replace("/", "__") or "root"
+            job_parameters, parameter_overrides = merge_target_job_parameters(
+                base_job_parameters=shared_job_parameters,
+                target_overrides=prepared_target_overrides,
+                relative_path=relative_path,
+            )
             future = bulk_target_run_task.submit(
                 target_name=target_name,
                 mode=mode,
@@ -164,6 +183,7 @@ def bulk_gb_sqd_flow(
                 skip_completed=skip_completed,
                 max_attempts=max_target_task_retries + 1,
                 job_parameters=job_parameters,
+                parameter_overrides=parameter_overrides,
             )
             future_entries.append((relative_path, future))
 
@@ -188,6 +208,7 @@ def bulk_gb_sqd_flow(
         "input_root_dir": str(input_root_path),
         "output_root_dir": str(resolved_output_root),
         "total_discovered_targets": len(discovered),
+        "configured_target_overrides": prepared_target_overrides,
         "processed_targets": len(results),
         "skipped_targets": sum(1 for result in results if result.get("status") == "skipped"),
         "succeeded_targets": sum(1 for result in results if result.get("status") == "success"),

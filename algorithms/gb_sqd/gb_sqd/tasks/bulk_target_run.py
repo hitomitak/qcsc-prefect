@@ -13,12 +13,15 @@ from prefect import get_run_logger, task
 
 _project_root = Path(__file__).resolve().parents[4]
 if (_project_root / "packages").exists():
+    sys.path.insert(0, str(_project_root / "packages" / "hpc-prefect-core" / "src"))
+    sys.path.insert(0, str(_project_root / "packages" / "hpc-prefect-adapters" / "src"))
     sys.path.insert(0, str(_project_root / "packages" / "hpc-prefect-blocks" / "src"))
     sys.path.insert(0, str(_project_root / "packages" / "hpc-prefect-executor" / "src"))
 
 from hpc_prefect_blocks.common.blocks import HPCProfileBlock
 from hpc_prefect_executor.from_blocks import run_job_from_blocks
 
+from ..artifact_keys import bulk_metrics_artifact_key
 from ..cli_args import build_ext_sqd_user_args, build_trim_sqd_user_args
 from ..fugaku_queue import wait_for_queue_slot
 
@@ -163,6 +166,7 @@ async def bulk_target_run_task(
     skip_completed: bool,
     max_attempts: int,
     job_parameters: dict[str, Any],
+    parameter_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one monolithic GB-SQD job for a discovered target directory."""
 
@@ -182,6 +186,7 @@ async def bulk_target_run_task(
         raise NonRetryableBulkError(f"Count dictionary file not found: {count_dict_path}")
 
     target_output_root = Path(output_root_dir).expanduser().resolve() / Path(relative_path)
+    applied_overrides = dict(parameter_overrides or {})
     status = _load_status(target_output_root)
     if skip_completed and _is_successful_status(status):
         logger.info("Skipping completed target: %s", relative_path)
@@ -194,6 +199,7 @@ async def bulk_target_run_task(
             "latest_job_id": status.get("latest_job_id"),
             "energy_final": status.get("energy_final"),
             "energy_log_file": status.get("energy_log_file"),
+            "parameter_overrides": {},
         }
 
     hpc_block = await _resolve_loaded_block(HPCProfileBlock.load(hpc_profile_block_name))
@@ -239,7 +245,7 @@ async def bulk_target_run_task(
                 user_args=user_args,
                 watch_poll_interval=10.0,
                 timeout_seconds=float(job_parameters["max_time"]) * 2,
-                metrics_artifact_key=f"gb-sqd-bulk-{mode}-metrics",
+                metrics_artifact_key=bulk_metrics_artifact_key(mode),
                 fugaku_job_name=job_name if hpc_target == "fugaku" else None,
             )
             if result.exit_status != 0:
@@ -259,6 +265,7 @@ async def bulk_target_run_task(
                     "exit_status": result.exit_status,
                     "state": getattr(result, "state", None),
                     "energy_log_file": str(energy_log_file),
+                    "parameter_overrides": applied_overrides,
                 }
             )
             status.update(
@@ -271,6 +278,7 @@ async def bulk_target_run_task(
                     "latest_job_id": getattr(result, "job_id", None),
                     "energy_log_file": str(energy_log_file),
                     "energy_final": energy_log.get("energy_final"),
+                    "latest_parameter_overrides": applied_overrides,
                 }
             )
             _write_status(target_output_root, status)
@@ -283,6 +291,7 @@ async def bulk_target_run_task(
                 "latest_job_id": getattr(result, "job_id", None),
                 "energy_log_file": str(energy_log_file),
                 "energy_final": energy_log.get("energy_final"),
+                "parameter_overrides": applied_overrides,
             }
         except NonRetryableBulkError as exc:
             status.setdefault("attempts", []).append(
@@ -292,6 +301,7 @@ async def bulk_target_run_task(
                     "work_dir": str(attempt_dir),
                     "error": str(exc),
                     "retryable": False,
+                    "parameter_overrides": applied_overrides,
                 }
             )
             status.update(
@@ -302,6 +312,7 @@ async def bulk_target_run_task(
                     "latest_attempt": attempt_number,
                     "latest_output_dir": str(attempt_dir),
                     "error": str(exc),
+                    "latest_parameter_overrides": applied_overrides,
                 }
             )
             _write_status(target_output_root, status)
@@ -313,6 +324,7 @@ async def bulk_target_run_task(
                 "latest_output_dir": str(attempt_dir),
                 "error": str(exc),
                 "retryable": False,
+                "parameter_overrides": applied_overrides,
             }
         except Exception as exc:
             logger.warning("Attempt %s failed for %s: %s", attempt_number, relative_path, exc)
@@ -323,6 +335,7 @@ async def bulk_target_run_task(
                     "work_dir": str(attempt_dir),
                     "error": str(exc),
                     "retryable": True,
+                    "parameter_overrides": applied_overrides,
                 }
             )
             status.update(
@@ -333,6 +346,7 @@ async def bulk_target_run_task(
                     "latest_attempt": attempt_number,
                     "latest_output_dir": str(attempt_dir),
                     "error": str(exc),
+                    "latest_parameter_overrides": applied_overrides,
                 }
             )
             _write_status(target_output_root, status)
@@ -346,4 +360,5 @@ async def bulk_target_run_task(
         "error": status.get("error", "Target failed after retries"),
         "retryable": True,
         "attempts_used": attempts_used,
+        "parameter_overrides": applied_overrides,
     }

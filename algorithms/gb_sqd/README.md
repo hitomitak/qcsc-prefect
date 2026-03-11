@@ -11,6 +11,12 @@ This package provides Prefect workflows for running ExtSQD and TrimSQD algorithm
 - **ExtSQD**: Extended Subspace Quantum Diagonalization
 - **TrimSQD**: Trimmed Subspace Quantum Diagonalization
 
+Additional design and operations documents:
+
+- Bulk flow design: `docs/bulk_submission_flow_design.md`
+- Bulk flow runbook: `docs/bulk_submission_flow_runbook.md`
+- Bulk flow manual test plan: `docs/bulk_submission_manual_test_plan.md`
+
 ## Installation
 
 ```bash
@@ -135,6 +141,31 @@ result = await ext_sqd_simple_flow(
     work_dir="./results",
 )
 ```
+
+#### Bulk Submission Workflow (Fugaku)
+
+The new bulk flow scans a parent directory and submits one monolithic `gb-demo`
+job per discovered target directory.
+
+```python
+from gb_sqd.bulk import bulk_gb_sqd_flow
+
+result = bulk_gb_sqd_flow(
+    mode="ext_sqd",
+    input_root_dir="./data/ligand",
+    output_root_dir="/shared/gb_sqd_runs/ligand_ext",
+    command_block_name="cmd-gb-sqd-ext",
+    execution_profile_block_name="exec-gb-sqd-ext-fugaku",
+    hpc_profile_block_name="hpc-fugaku-gb-sqd",
+    max_jobs_in_queue=8,
+    queue_limit_scope="user_queue",
+    num_recovery=2,
+    num_batches=2,
+    num_samples_per_batch=1000,
+)
+```
+
+For the full Fugaku run procedure, see `docs/bulk_submission_flow_runbook.md`.
 
 ## Workflow Architecture
 
