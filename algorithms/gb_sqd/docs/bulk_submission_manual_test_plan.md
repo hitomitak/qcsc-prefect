@@ -41,6 +41,8 @@ Recommended baseline parameters for the first runs:
 The repository now includes a helper CLI that prepares the manual-test
 workspace and runs individual scenarios:
 
+- One-shot command sequence script: `manual_bulk_test_commands.sh`
+
 ```bash
 cd /Users/hitomi/Project/hpc-prefect/algorithms/gb_sqd
 
