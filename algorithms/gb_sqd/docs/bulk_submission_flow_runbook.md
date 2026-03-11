@@ -177,6 +177,8 @@ The flow uses two limits:
 
 - `max_prefect_concurrency`
   - limits how many per-target Prefect tasks are active at once
+  - when one target finishes, the flow submits the next discovered target without
+    waiting for the rest of the current wave to finish
 - `max_jobs_in_queue`
   - uses `pjstat` to decide whether another Fugaku job may be submitted
 

@@ -2,20 +2,17 @@
 
 from __future__ import annotations
 
+from collections import deque
 import json
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from prefect import flow, get_run_logger
+from prefect.futures import as_completed
 from prefect.task_runners import ConcurrentTaskRunner
 
 from .discovery import discover_target_directories
 from .target_overrides import merge_target_job_parameters, prepare_target_overrides
-
-
-def _batched(items: list[Path], batch_size: int) -> Iterable[list[Path]]:
-    for index in range(0, len(items), batch_size):
-        yield items[index : index + batch_size]
 
 
 def _default_command_block_name(mode: str) -> str:
@@ -40,6 +37,18 @@ def _get_bulk_target_run_task():
     from .tasks import bulk_target_run_task
 
     return bulk_target_run_task
+
+
+def _resolve_target_future_result(*, relative_path: str, future: Any, logger: Any) -> dict[str, Any]:
+    try:
+        return future.result()
+    except Exception as exc:
+        logger.exception("Bulk target task crashed for %s", relative_path)
+        return {
+            "status": "failed",
+            "relative_path": relative_path,
+            "error": str(exc),
+        }
 
 
 @flow(name="GB-SQD-Bulk", task_runner=ConcurrentTaskRunner())
@@ -154,10 +163,13 @@ def bulk_gb_sqd_flow(
     bulk_target_run_task = _get_bulk_target_run_task()
 
     results: list[dict[str, Any]] = []
-    stop_early = False
-    for batch in _batched(discovered, concurrency):
-        future_entries: list[tuple[str, Any]] = []
-        for target in batch:
+    remaining_targets = deque(discovered)
+    active_futures: dict[Any, str] = {}
+    stop_submitting = False
+
+    while remaining_targets or active_futures:
+        while not stop_submitting and remaining_targets and len(active_futures) < concurrency:
+            target = remaining_targets.popleft()
             relative_path = target.relative_to(input_root_path).as_posix()
             target_name = relative_path.replace("/", "__") or "root"
             job_parameters, parameter_overrides = merge_target_job_parameters(
@@ -185,23 +197,21 @@ def bulk_gb_sqd_flow(
                 job_parameters=job_parameters,
                 parameter_overrides=parameter_overrides,
             )
-            future_entries.append((relative_path, future))
+            active_futures[future] = relative_path
 
-        for relative_path, future in future_entries:
-            try:
-                result = future.result()
-            except Exception as exc:
-                logger.exception("Bulk target task crashed for %s", relative_path)
-                result = {
-                    "status": "failed",
-                    "relative_path": relative_path,
-                    "error": str(exc),
-                }
-            results.append(result)
-            if fail_fast and result.get("status") == "failed":
-                stop_early = True
-        if stop_early:
+        if not active_futures:
             break
+
+        completed_future = next(as_completed(list(active_futures)))
+        relative_path = active_futures.pop(completed_future)
+        result = _resolve_target_future_result(
+            relative_path=relative_path,
+            future=completed_future,
+            logger=logger,
+        )
+        results.append(result)
+        if fail_fast and result.get("status") == "failed":
+            stop_submitting = True
 
     summary = {
         "mode": mode,

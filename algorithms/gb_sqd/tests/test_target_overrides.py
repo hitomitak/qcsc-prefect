@@ -22,9 +22,13 @@ def _write_case(path: Path) -> None:
 class _FakeFuture:
     def __init__(self, result):
         self._result = result
+        self._final_state = object()
 
     def result(self):
         return self._result
+
+    def add_done_callback(self, fn):
+        fn(self)
 
 
 class _FakeBulkTargetTask:
@@ -142,3 +146,70 @@ def test_bulk_flow_passes_target_specific_parameter_overrides(tmp_path: Path, mo
         "max_time": 600,
         "num_batches": 5,
     }
+
+
+def test_bulk_flow_refills_concurrency_when_one_future_completes(tmp_path: Path, monkeypatch):
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    _write_case(input_root / "case_a" / "atom_0001")
+    _write_case(input_root / "case_b" / "atom_0002")
+    _write_case(input_root / "case_c" / "atom_0003")
+
+    event_log: list[str] = []
+    submitted_futures: dict[str, _FakeFuture] = {}
+
+    class _RollingTask:
+        def submit(self, **kwargs):
+            relative_path = kwargs["relative_path"]
+            event_log.append(f"submit:{relative_path}")
+            future = _FakeFuture(
+                {
+                    "status": "success",
+                    "relative_path": relative_path,
+                    "parameter_overrides": kwargs["parameter_overrides"],
+                }
+            )
+            submitted_futures[relative_path] = future
+            return future
+
+    completion_order = [
+        "case_a/atom_0001",
+        "case_b/atom_0002",
+        "case_c/atom_0003",
+    ]
+
+    def fake_as_completed(futures):
+        for relative_path in completion_order:
+            future = submitted_futures.get(relative_path)
+            if future in futures:
+                event_log.append(f"complete:{relative_path}")
+                yield future
+                return
+        raise AssertionError("No matching future available for completion")
+
+    monkeypatch.setattr(bulk, "_get_bulk_target_run_task", lambda: _RollingTask())
+    monkeypatch.setattr(bulk, "as_completed", fake_as_completed)
+
+    with prefect_test_harness():
+        summary = bulk.bulk_gb_sqd_flow(
+            mode="ext_sqd",
+            input_root_dir=str(input_root),
+            output_root_dir=str(output_root),
+            max_jobs_in_queue=2,
+            max_prefect_concurrency=2,
+            max_target_task_retries=0,
+            num_batches=2,
+            num_recovery=1,
+            num_samples_per_batch=1000,
+            max_time=300,
+        )
+
+    assert summary["succeeded_targets"] == 3
+    assert event_log == [
+        "submit:case_a/atom_0001",
+        "submit:case_b/atom_0002",
+        "complete:case_a/atom_0001",
+        "submit:case_c/atom_0003",
+        "complete:case_b/atom_0002",
+        "complete:case_c/atom_0003",
+    ]
