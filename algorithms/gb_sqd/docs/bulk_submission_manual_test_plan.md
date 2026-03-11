@@ -36,6 +36,50 @@ Recommended baseline parameters for the first runs:
 - `queue_limit_scope="user_queue"`
 - `max_target_task_retries=1`
 
+## 2.1 Manual Runner
+
+The repository now includes a helper CLI that prepares the manual-test
+workspace and runs individual scenarios:
+
+```bash
+cd /Users/hitomi/Project/hpc-prefect/algorithms/gb_sqd
+
+# 1. Create the workspace from one known-good target directory
+python manual_bulk_test.py prepare \
+  --seed-dir ./data/ligand/13_18MO_Wat/atom_10012 \
+  --workspace-root /shared/gb_sqd_manual_bulk
+
+# 2. Inspect one scenario
+python manual_bulk_test.py describe \
+  --workspace-root /shared/gb_sqd_manual_bulk \
+  --scenario scenario1_ext_happy
+
+# 3. Run one scenario
+python manual_bulk_test.py run \
+  --workspace-root /shared/gb_sqd_manual_bulk \
+  --scenario scenario1_ext_happy
+```
+
+Useful follow-up commands:
+
+```bash
+# List scenarios
+python manual_bulk_test.py list
+
+# Repair the intentionally corrupted retry target before scenario 4
+python manual_bulk_test.py repair \
+  --seed-dir ./data/ligand/13_18MO_Wat/atom_10012 \
+  --workspace-root /shared/gb_sqd_manual_bulk \
+  --scenario scenario3_retry_runtime \
+  --relative-target-path retry_bad_fcidump/atom_0003
+
+# Print the exact bulk flow kwargs without running
+python manual_bulk_test.py run \
+  --workspace-root /shared/gb_sqd_manual_bulk \
+  --scenario scenario4_override_rerun \
+  --dry-run
+```
+
 ## 3. Test Data Layout
 
 Prepare a small dedicated test tree separate from production input:
