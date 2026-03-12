@@ -9,6 +9,7 @@ __all__ = [
     "trim_sqd_simple_flow",
     "bulk_gb_sqd_flow",
     "bulk_gb_sqd_flow_with_failed_target_rerun",
+    "bulk_gb_sqd_flow_with_failed_target_rerun_plan",
 ]
 
 
@@ -35,4 +36,8 @@ def __getattr__(name: str):
         from .bulk_rerun import bulk_gb_sqd_flow_with_failed_target_rerun
 
         return bulk_gb_sqd_flow_with_failed_target_rerun
+    if name == "bulk_gb_sqd_flow_with_failed_target_rerun_plan":
+        from .bulk_rerun import bulk_gb_sqd_flow_with_failed_target_rerun_plan
+
+        return bulk_gb_sqd_flow_with_failed_target_rerun_plan
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

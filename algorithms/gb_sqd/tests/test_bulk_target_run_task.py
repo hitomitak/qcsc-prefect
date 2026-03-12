@@ -213,3 +213,59 @@ async def test_bulk_target_run_task_raises_non_retryable_for_missing_input_file(
             max_attempts=2,
             job_parameters=_ext_job_parameters(),
         )
+
+
+@pytest.mark.asyncio
+async def test_bulk_target_run_task_runs_on_miyabi_without_fugaku_queue_gate(
+    tmp_path: Path, monkeypatch
+):
+    input_dir = tmp_path / "input" / "case_m" / "atom_4"
+    output_root_dir = tmp_path / "output"
+    _write_input_case(input_dir)
+
+    monkeypatch.setattr(bulk_target_run_module, "get_run_logger", lambda: _FakeLogger())
+    monkeypatch.setattr(
+        bulk_target_run_module.HPCProfileBlock,
+        "load",
+        staticmethod(lambda _: SimpleNamespace(queue_cpu="regular-c", hpc_target="miyabi")),
+    )
+
+    async def fake_wait_for_queue_slot(**kwargs):
+        raise AssertionError("Miyabi path should not call Fugaku queue throttling")
+
+    run_calls: list[dict[str, object]] = []
+
+    async def fake_run_job_from_blocks(**kwargs):
+        run_calls.append(kwargs)
+        energy_log_file = Path(kwargs["work_dir"]) / "energy_log.json"
+        energy_log_file.write_text(json.dumps({"energy_final": -7.5}))
+        return SimpleNamespace(exit_status=0, job_id="12345.miyabi", job_status={"Exit_status": "0"})
+
+    monkeypatch.setattr(bulk_target_run_module, "wait_for_queue_slot", fake_wait_for_queue_slot)
+    monkeypatch.setattr(bulk_target_run_module, "run_job_from_blocks", fake_run_job_from_blocks)
+
+    result = await bulk_target_run_task.fn(
+        target_name="case_m__atom_4",
+        mode="ext_sqd",
+        input_dir=str(input_dir),
+        relative_path="case_m/atom_4",
+        output_root_dir=str(output_root_dir),
+        count_dict_filename="count_dict.txt",
+        fcidump_filename="fci_dump.txt",
+        command_block_name="cmd-gb-sqd-ext",
+        execution_profile_block_name="exec-gb-sqd-ext-miyabi",
+        hpc_profile_block_name="hpc-miyabi-gb-sqd",
+        max_jobs_in_queue=2,
+        queue_limit_scope="user_queue",
+        queue_poll_interval_seconds=30.0,
+        job_name_prefix="gbsqd-bulk",
+        skip_completed=True,
+        max_attempts=1,
+        job_parameters=_ext_job_parameters(),
+    )
+
+    assert result["status"] == "success"
+    assert result["latest_job_id"] == "12345.miyabi"
+    assert len(run_calls) == 1
+    assert run_calls[0]["script_filename"] == "gb_sqd_ext.pbs"
+    assert run_calls[0]["fugaku_job_name"] is None

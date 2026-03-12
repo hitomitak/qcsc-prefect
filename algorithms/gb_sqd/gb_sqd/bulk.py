@@ -19,8 +19,14 @@ def _default_command_block_name(mode: str) -> str:
     return "cmd-gb-sqd-ext" if mode == "ext_sqd" else "cmd-gb-sqd-trim"
 
 
-def _default_execution_profile_block_name(mode: str) -> str:
-    return "exec-gb-sqd-ext-fugaku" if mode == "ext_sqd" else "exec-gb-sqd-trim-fugaku"
+def _default_execution_profile_block_name(mode: str, *, hpc_target: str) -> str:
+    suffix = "miyabi" if hpc_target == "miyabi" else "fugaku"
+    return f"exec-gb-sqd-{'ext' if mode == 'ext_sqd' else 'trim'}-{suffix}"
+
+
+def _default_hpc_profile_block_name(hpc_target: str) -> str:
+    suffix = "miyabi" if hpc_target == "miyabi" else "fugaku"
+    return f"hpc-{suffix}-gb-sqd"
 
 
 def _summary_path(output_root_dir: str | Path) -> Path:
@@ -55,6 +61,7 @@ def _resolve_target_future_result(*, relative_path: str, future: Any, logger: An
 def bulk_gb_sqd_flow(
     *,
     mode: str,
+    hpc_target: str = "fugaku",
     input_root_dir: str,
     output_root_dir: str,
     count_dict_filename: str = "count_dict.txt",
@@ -70,7 +77,7 @@ def bulk_gb_sqd_flow(
     job_name_prefix: str = "gbsqd-bulk",
     command_block_name: str | None = None,
     execution_profile_block_name: str | None = None,
-    hpc_profile_block_name: str = "hpc-fugaku-gb-sqd",
+    hpc_profile_block_name: str | None = None,
     target_overrides: dict[str, dict[str, Any]] | None = None,
     num_recovery: int = 1,
     num_batches: int = 1,
@@ -103,6 +110,8 @@ def bulk_gb_sqd_flow(
 
     if mode not in {"ext_sqd", "trim_sqd"}:
         raise ValueError(f"Unsupported GB-SQD mode: {mode}")
+    if hpc_target not in {"miyabi", "fugaku"}:
+        raise ValueError(f"Unsupported hpc_target: {hpc_target}")
     if max_jobs_in_queue < 1:
         raise ValueError("max_jobs_in_queue must be >= 1")
     if queue_poll_interval_seconds <= 0:
@@ -125,7 +134,11 @@ def bulk_gb_sqd_flow(
     resolved_output_root.mkdir(parents=True, exist_ok=True)
 
     command_name = command_block_name or _default_command_block_name(mode)
-    execution_name = execution_profile_block_name or _default_execution_profile_block_name(mode)
+    execution_name = execution_profile_block_name or _default_execution_profile_block_name(
+        mode,
+        hpc_target=hpc_target,
+    )
+    resolved_hpc_profile_block_name = hpc_profile_block_name or _default_hpc_profile_block_name(hpc_target)
     input_root_path = Path(input_root_dir).expanduser().resolve()
 
     shared_job_parameters = {
@@ -187,7 +200,7 @@ def bulk_gb_sqd_flow(
                 fcidump_filename=fcidump_filename,
                 command_block_name=command_name,
                 execution_profile_block_name=execution_name,
-                hpc_profile_block_name=hpc_profile_block_name,
+                hpc_profile_block_name=resolved_hpc_profile_block_name,
                 max_jobs_in_queue=max_jobs_in_queue,
                 queue_limit_scope=queue_limit_scope,
                 queue_poll_interval_seconds=queue_poll_interval_seconds,
@@ -215,8 +228,11 @@ def bulk_gb_sqd_flow(
 
     summary = {
         "mode": mode,
+        "hpc_target": hpc_target,
         "input_root_dir": str(input_root_path),
         "output_root_dir": str(resolved_output_root),
+        "hpc_profile_block_name": resolved_hpc_profile_block_name,
+        "execution_profile_block_name": execution_name,
         "total_discovered_targets": len(discovered),
         "configured_target_overrides": prepared_target_overrides,
         "processed_targets": len(results),

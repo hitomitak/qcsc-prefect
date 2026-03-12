@@ -167,6 +167,27 @@ result = bulk_gb_sqd_flow(
 
 For the full Fugaku run procedure, see `docs/bulk_submission_flow_runbook.md`.
 
+For a Miyabi bulk run using the standard Miyabi block names created by
+`create_blocks.py`, set `hpc_target="miyabi"`:
+
+```python
+from gb_sqd.bulk import bulk_gb_sqd_flow
+
+result = bulk_gb_sqd_flow(
+    mode="ext_sqd",
+    hpc_target="miyabi",
+    input_root_dir="./data/ligand",
+    output_root_dir="/shared/gb_sqd_runs/ligand_ext_miyabi",
+    command_block_name="cmd-gb-sqd-ext",
+    hpc_profile_block_name="hpc-miyabi-gb-sqd",
+    max_jobs_in_queue=8,
+    max_prefect_concurrency=8,
+    num_recovery=2,
+    num_batches=2,
+    num_samples_per_batch=1000,
+)
+```
+
 If you want to run the bulk flow once and then rerun only the failed targets
 with different parameters, use the rerun helper:
 
@@ -188,6 +209,32 @@ result = bulk_gb_sqd_flow_with_failed_target_rerun(
     failed_target_override_parameters={
         "carryover_threshold": 1e-3,
     },
+)
+```
+
+If you want to retry failed targets multiple times while changing the
+parameters at each rerun stage, use the staged rerun helper:
+
+```python
+from gb_sqd import bulk_gb_sqd_flow_with_failed_target_rerun_plan
+
+result = bulk_gb_sqd_flow_with_failed_target_rerun_plan(
+    mode="ext_sqd",
+    input_root_dir="./data/ligand",
+    output_root_dir="/shared/gb_sqd_runs/ligand_ext",
+    command_block_name="cmd-gb-sqd-ext",
+    execution_profile_block_name="exec-gb-sqd-ext-fugaku",
+    hpc_profile_block_name="hpc-fugaku-gb-sqd",
+    max_jobs_in_queue=8,
+    max_prefect_concurrency=8,
+    num_recovery=2,
+    num_batches=2,
+    num_samples_per_batch=1000,
+    failed_target_override_sequence=[
+        {"carryover_threshold": 1e-3},
+        {"carryover_threshold": 1e-2, "max_time": 1800},
+        {"carryover_threshold": 1e-1, "max_time": 2400},
+    ],
 )
 ```
 
