@@ -15,6 +15,7 @@ def test_render_miyabi_script(tmp_path: Path):
         walltime="00:10:00",
         launcher="mpirun",
         modules=["intelmpi"],
+        pre_commands=["unset OMPI_MCA_mca_base_env_list"],
         environments={"OMP_NUM_THREADS": "1"},
         arguments=["--foo", "bar"],
     )
@@ -30,5 +31,8 @@ def test_render_miyabi_script(tmp_path: Path):
     assert f"#PBS -W group_list={req.project}" in text
     assert str(tmp_path) in text
     assert "module load intelmpi" in text
+    assert "unset OMPI_MCA_mca_base_env_list" in text
     assert 'export OMP_NUM_THREADS="1"' in text
     assert req.executable in text
+    assert text.index("unset OMPI_MCA_mca_base_env_list") < text.index('export OMP_NUM_THREADS="1"')
+    assert text.index('export OMP_NUM_THREADS="1"') < text.index("mpirun")

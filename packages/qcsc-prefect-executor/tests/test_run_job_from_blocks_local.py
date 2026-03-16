@@ -27,6 +27,7 @@ class _ExecutionProfileBlockStub:
         launcher: str = "mpiexec.hydra",
         mpi_options: list[str] | None = None,
         modules: list[str] | None = None,
+        pre_commands: list[str] | None = None,
         environments: dict[str, str] | None = None,
     ) -> None:
         self.profile_name = profile_name
@@ -39,6 +40,7 @@ class _ExecutionProfileBlockStub:
         self.launcher = launcher
         self.mpi_options = mpi_options or []
         self.modules = modules or []
+        self.pre_commands = pre_commands or []
         self.environments = environments or {}
 
 
@@ -95,7 +97,11 @@ def _patch_block_loading(monkeypatch, command, profile, hpc):
 
 def test_run_job_from_blocks_dispatches_to_miyabi(monkeypatch, tmp_path: Path):
     command = _CommandBlockStub("bitcount-hist", "bitcount_hist", [])
-    profile = _ExecutionProfileBlockStub(profile_name="bitcount-mpi", command_name="bitcount-hist")
+    profile = _ExecutionProfileBlockStub(
+        profile_name="bitcount-mpi",
+        command_name="bitcount-hist",
+        pre_commands=["unset OMPI_MCA_mca_base_env_list"],
+    )
     hpc = _HPCProfileBlockStub(
         hpc_target="miyabi",
         executable_map={"bitcount_hist": "/work/gz00/z99999/get_counts_hist"},
@@ -135,6 +141,7 @@ def test_run_job_from_blocks_dispatches_to_miyabi(monkeypatch, tmp_path: Path):
     assert captured["req"].project == "gz00"
     assert captured["req"].executable == "/work/gz00/z99999/get_counts_hist"
     assert captured["metrics_artifact_key"] == "miyabi-metrics"
+    assert captured["exec_profile"].pre_commands == ["unset OMPI_MCA_mca_base_env_list"]
 
 
 def test_run_job_from_blocks_dispatches_to_fugaku(monkeypatch, tmp_path: Path):

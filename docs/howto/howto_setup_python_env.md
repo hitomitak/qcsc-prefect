@@ -52,7 +52,7 @@ Activate the virtual environment:
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 source ~/venv/prefect/bin/activate
- uv pip install prefect
+uv pip install prefect
 ```
 
 Your Python environment is now ready for workflow development.

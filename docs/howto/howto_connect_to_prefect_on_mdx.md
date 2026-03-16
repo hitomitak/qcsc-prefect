@@ -106,7 +106,6 @@ Create and use an on-prem profile:
 <img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 prefect profile create mdx
-prefect profile use mdx
 /work/gz00/z12345/qcsc-prefect/scripts/prefect_sync_env_to_config.sh -p mdx
 ```
 

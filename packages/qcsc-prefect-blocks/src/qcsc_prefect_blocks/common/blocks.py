@@ -35,6 +35,7 @@ class ExecutionProfileBlock(Block):
     launcher: Literal["single", "mpirun", "mpiexec", "mpiexec.hydra"] = Field(default="single", title="Launcher")
     mpi_options: list[str] = Field(default_factory=list, title="MPI Options")
     modules: list[str] = Field(default_factory=list, title="Modules")
+    pre_commands: list[str] = Field(default_factory=list, title="Pre Commands")
     environments: dict[str, str] = Field(default_factory=dict, title="Environment Variables")
 
 

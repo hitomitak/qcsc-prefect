@@ -29,6 +29,7 @@ class ExecutionProfile:
 
     # environment (command-specific is OK per your design)
     modules: list[str] = field(default_factory=list)
+    pre_commands: list[str] = field(default_factory=list)
     environments: dict[str, str] = field(default_factory=dict)
 
     # args (optional)

@@ -44,6 +44,8 @@ def to_miyabi_template_kwargs(*, exec_profile: ExecutionProfile, req: MiyabiJobR
         kw["walltime"] = exec_profile.walltime
     if exec_profile.modules:
         kw["modules"] = list(exec_profile.modules)
+    if exec_profile.pre_commands:
+        kw["pre_commands"] = list(exec_profile.pre_commands)
     if exec_profile.environments:
         kw["environments"] = dict(exec_profile.environments)
     if exec_profile.mpi_options:

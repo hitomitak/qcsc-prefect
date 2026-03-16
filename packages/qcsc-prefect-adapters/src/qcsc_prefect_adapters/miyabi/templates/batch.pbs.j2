@@ -21,6 +21,12 @@ module load {{ module }}
 {%- endfor %}
 {%- endif %}
 
+{%- if pre_commands is defined %}
+{% for line in pre_commands %}
+{{ line }}
+{%- endfor %}
+{%- endif %}
+
 {%- if environments is defined %}
 {% for k, v in environments.items() %}
 export {{ k }}="{{ v }}"

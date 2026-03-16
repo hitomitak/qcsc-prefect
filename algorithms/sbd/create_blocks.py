@@ -61,6 +61,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--ompthreads", type=int)
     parser.add_argument("--modules", nargs="+")
     parser.add_argument("--mpi-options", nargs="*")
+    parser.add_argument("--pre-commands", nargs="*")
 
     parser.add_argument("--fugaku-gfscache")
     parser.add_argument("--fugaku-spack-modules", nargs="+")
@@ -119,6 +120,19 @@ def _normalize_str_list(value: Any) -> list[str] | None:
     raise ValueError(f"Expected list[str] or CSV string, got: {type(value)}")
 
 
+def _normalize_str_dict(value: Any) -> dict[str, str] | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        normalized = {
+            str(key).strip(): str(val).strip()
+            for key, val in value.items()
+            if str(key).strip()
+        }
+        return normalized or None
+    raise ValueError(f"Expected dict[str, str], got: {type(value)}")
+
+
 def _env_values() -> dict[str, Any]:
     def env_int(name: str) -> int | None:
         raw = os.getenv(name, "").strip()
@@ -172,6 +186,7 @@ def _env_values() -> dict[str, Any]:
         "ompthreads": env_first_int("SBD_OMPTHREADS", "MIYABI_OMPTHREADS", "FUGAKU_OMPTHREADS"),
         "modules": env_first_csv("SBD_MODULES", "MIYABI_MODULES"),
         "mpi_options": env_first_csv("SBD_MPI_OPTIONS", "MIYABI_MPI_OPTIONS", "FUGAKU_MPI_OPTIONS"),
+        "pre_commands": env_first_csv("SBD_PRE_COMMANDS"),
         "fugaku_gfscache": env_first_str("FUGAKU_GFSCACHE"),
         "fugaku_spack_modules": env_first_csv("FUGAKU_SPACK_MODULES"),
         "fugaku_mpi_options_for_pjm": env_first_csv("FUGAKU_MPI_OPTIONS_FOR_PJM"),
@@ -241,6 +256,10 @@ def main() -> None:
     mpi_options = _normalize_str_list(
         _pick_value(args.mpi_options, config.get("mpi_options"), env.get("mpi_options"), [])
     )
+    pre_commands = _normalize_str_list(
+        _pick_value(args.pre_commands, config.get("pre_commands"), env.get("pre_commands"), [])
+    ) or []
+    environments = _normalize_str_dict(config.get("environments")) or {}
 
     fugaku_gfscache = str(
         _pick_value(args.fugaku_gfscache, config.get("fugaku_gfscache"), env.get("fugaku_gfscache"), "/vol0002")
@@ -313,6 +332,12 @@ def main() -> None:
     tolerance = float(_pick_value(args.tolerance, config.get("tolerance"), env.get("tolerance"), 1e-2))
     carryover_ratio = float(_pick_value(args.carryover_ratio, config.get("carryover_ratio"), env.get("carryover_ratio"), 0.1))
     solver_mode = str(_pick_value(args.solver_mode, config.get("solver_mode"), env.get("solver_mode"), "cpu")).strip()
+    resource_class = "gpu" if solver_mode == "gpu" else "cpu"
+    user_args = _normalize_str_list(config.get("user_args")) or []
+    if is_miyabi and solver_mode == "gpu":
+        if "unset OMPI_MCA_mca_base_env_list" not in pre_commands:
+            pre_commands.insert(0, "unset OMPI_MCA_mca_base_env_list")
+        environments.setdefault("MIYABI", "G")
 
     shots_default = 500000 if is_miyabi else 50000
     shots = int(_pick_value(args.shots, config.get("shots"), env.get("shots"), shots_default))
@@ -328,7 +353,7 @@ def main() -> None:
     ExecutionProfileBlock(
         profile_name="sbd-mpi",
         command_name="sbd-diag",
-        resource_class="cpu",
+        resource_class=resource_class,
         num_nodes=num_nodes,
         mpiprocs=mpiprocs,
         ompthreads=ompthreads,
@@ -336,7 +361,8 @@ def main() -> None:
         launcher=launcher,
         mpi_options=mpi_options or [],
         modules=modules or [],
-        environments={},
+        pre_commands=pre_commands,
+        environments=environments,
     ).save(execution_profile_block_name, overwrite=True)
 
     executable_path = str(Path(str(sbd_executable)).expanduser().resolve())
@@ -378,7 +404,7 @@ def main() -> None:
         tolerance=tolerance,
         carryover_ratio=carryover_ratio,
         solver_mode=solver_mode,
-        user_args=[],
+        user_args=user_args,
     ).save(solver_block_name, overwrite=True)
 
     if sqd_options_json:

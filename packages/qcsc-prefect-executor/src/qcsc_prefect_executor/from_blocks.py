@@ -44,6 +44,7 @@ def _build_execution_profile(
         launcher=execution_profile_block.launcher,
         mpi_options=list(execution_profile_block.mpi_options),
         modules=list(execution_profile_block.modules),
+        pre_commands=list(getattr(execution_profile_block, "pre_commands", [])),
         environments=dict(execution_profile_block.environments),
         arguments=arguments,
     )
