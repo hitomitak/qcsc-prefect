@@ -11,7 +11,6 @@ def test_render_miyabi_script(tmp_path: Path):
         command_key="hello",
         num_nodes=2,
         mpiprocs=16,
-        ompthreads=1,
         walltime="00:10:00",
         launcher="mpirun",
         modules=["intelmpi"],
@@ -26,7 +25,7 @@ def test_render_miyabi_script(tmp_path: Path):
     assert f"#PBS -q {req.queue_name}" in text
     assert f"#PBS -l select={profile.num_nodes}" in text
     assert f":mpiprocs={profile.mpiprocs}" in text
-    assert f":ompthreads={profile.ompthreads}" in text
+    assert ":ompthreads=" not in text
     assert f"#PBS -l walltime={profile.walltime}" in text
     assert f"#PBS -W group_list={req.project}" in text
     assert str(tmp_path) in text

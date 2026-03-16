@@ -22,7 +22,7 @@ class _ExecutionProfileBlockStub:
         resource_class: str = "cpu",
         num_nodes: int = 2,
         mpiprocs: int = 5,
-        ompthreads: int = 1,
+        ompthreads: int | None = None,
         walltime: str = "00:10:00",
         launcher: str = "mpiexec.hydra",
         mpi_options: list[str] | None = None,

@@ -11,7 +11,6 @@ launcher = "mpiexec.hydra"
 walltime = "02:00:00"
 num_nodes = 1
 mpiprocs = 8
-ompthreads = 1
 modules = ["intel/2023.2.0", "impi/2021.10.0"]
 mpi_options = ["-np", "8"]
 

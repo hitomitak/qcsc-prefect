@@ -121,7 +121,6 @@ exec_profile = ExecutionProfileBlock(
     resource_class="cpu",
     num_nodes=2,
     mpiprocs=8,
-    ompthreads=1,
     walltime="01:00:00",
     launcher="mpiexec.hydra",
     modules=["intel/2023.2.0", "impi/2021.10.0"],
@@ -264,7 +263,7 @@ class ExecutionProfile:
     command_key: str
     num_nodes: int
     mpiprocs: int
-    ompthreads: int
+    ompthreads: int | None
     walltime: str
     launcher: Literal["single", "mpirun", "mpiexec", "mpiexec.hydra"]
     mpi_options: list[str]

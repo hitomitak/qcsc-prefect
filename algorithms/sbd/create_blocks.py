@@ -264,7 +264,8 @@ def main() -> None:
 
     num_nodes = int(_pick_value(args.num_nodes, config.get("num_nodes"), env.get("num_nodes"), 1))
     mpiprocs = int(_pick_value(args.mpiprocs, config.get("mpiprocs"), env.get("mpiprocs"), 4))
-    ompthreads = int(_pick_value(args.ompthreads, config.get("ompthreads"), env.get("ompthreads"), 1))
+    ompthreads_raw = _pick_value(args.ompthreads, config.get("ompthreads"), env.get("ompthreads"))
+    ompthreads = int(ompthreads_raw) if ompthreads_raw is not None else None
 
     modules_default = ["intel/2023.2.0", "impi/2021.10.0"] if is_miyabi else []
     modules = _normalize_str_list(

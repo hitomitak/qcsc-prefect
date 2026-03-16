@@ -30,7 +30,7 @@ class ExecutionProfileBlock(Block):
 
     num_nodes: int = Field(default=1, gt=0, title="Nodes")
     mpiprocs: int = Field(default=1, gt=0, title="MPI Procs per Node")
-    ompthreads: int = Field(default=1, gt=0, title="OMP Threads")
+    ompthreads: int | None = Field(default=None, gt=0, title="OMP Threads")
     walltime: str = Field(default="00:05:00", title="Walltime (HH:MM:SS)")
     launcher: Literal["single", "mpirun", "mpiexec", "mpiexec.hydra"] = Field(default="single", title="Launcher")
     mpi_options: list[str] = Field(default_factory=list, title="MPI Options")
