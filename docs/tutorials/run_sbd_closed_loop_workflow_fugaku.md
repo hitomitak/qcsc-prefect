@@ -195,20 +195,28 @@ We will use this path in the next step.
 
 <img src="./images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```
-cp algorithms/sbd/sbd_blocks.example.toml algorithms/sbd/sbd_blocks.toml
+cp algorithms/sbd/sbd_blocks.fugaku.example.toml algorithms/sbd/sbd_blocks.toml
 vim algorithms/sbd/sbd_blocks.toml
 ```
 
 #### 4.2 Edit the configuration file
 
-Edit `algorithms/sbd/sbd_blocks.toml` and set at least:
+The copied example already contains the Fugaku tutorial baseline:
 
 - `hpc_target = "fugaku"`
+- `launcher = "mpiexec"`
+- `num_nodes = 2`
+- `mpiprocs = 2`
+- `mpi_options = ["-n", "2"]`
+- `script_filename = "sbd_solver.pjm"`
+- `metrics_artifact_key = "fugaku-sbd-metrics"`
+
+Edit `algorithms/sbd/sbd_blocks.toml` and update at least:
+
 - `project`
 - `queue`
 - `work_dir`
 - `sbd_executable`
-- `num_nodes = 2`
 - `fugaku_gfscache`
 
 | Parameter | Value / Example | Description |
@@ -216,8 +224,8 @@ Edit `algorithms/sbd/sbd_blocks.toml` and set at least:
 | `hpc_target` | `fugaku` | Target scheduler backend |
 | `project` | `raXXXXXX` | Fugaku project |
 | `queue` | `small` | Fugaku resource group (`rscgrp`) |
-| `work_dir` | `/work/<group>/<user>/sbd_jobs` | Job working directory |
-| `sbd_executable` | `/work/<group>/<user>/qcsc-prefect/algorithms/sbd/native/diag` | Absolute path to executable |
+| `work_dir` | `/volxxxxx/mdt6/data/raxxxxx/uxxxxx/sbd_jobs` | Job working directory |
+| `sbd_executable` | `/volxxxxx/mdt6/data/raxxxxx/uxxxxx/qcsc-prefect/algorithms/sbd/native/diag` | Absolute path to executable |
 | `num_nodes` | `2` | Number of allocated nodes for this tutorial |
 | `launcher` | `mpiexec` | MPI launcher |
 | `mpiprocs` | `2` | Number of MPI processes |
