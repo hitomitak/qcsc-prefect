@@ -403,7 +403,24 @@ davidson-solver
 ```
 Now, we will create a GPU-enabled version.
 
-#### A.1 Edit configuration for GPU
+#### A.1 Place the GPU binary on MDX
+
+For the GPU version, place the binary under:
+
+```text
+/work/gz00/z12345/qcsc-prefect/algorithms/sbd/native/diag-gpu
+```
+
+On the MDX workflow client, copy the prebuilt GPU binary with:
+
+```bash
+cd /work/gz00/z12345/qcsc-prefect
+cp /large/tutorial/diag-gpu algorithms/sbd/native/
+```
+
+This tutorial assumes the GPU solver runs with the binary name `diag-gpu`.
+
+#### A.2 Edit configuration for GPU
 
 Copy and edit the configuration file:
 
@@ -417,13 +434,16 @@ Edit `algorithms/sbd/sbd_blocks_gpu.toml` and change:
 |---|---|
 | `block_name` | `davidson-solver-gpu` |
 | `queue` | `regular-g` |
-| `sbd_executable` | `/work/gz00/z12345/qcsc-prefect/algorithms/sbd/native/diag` (GPU version) |
+| `sbd_executable` | `/work/gz00/z12345/qcsc-prefect/algorithms/sbd/native/diag-gpu` |
 | `launcher` | `mpirun` |
 | `mpiprocs` | `1` |
 | `mpi_options` | `["-n", "1"]` |
 | `solver_mode` | `gpu` |
 
-#### A.2 Create the GPU Block
+> [!NOTE]
+> For GPU runs, use `diag-gpu` as the executable name. Do not point the GPU block to `diag`.
+
+#### A.3 Create the GPU Block
 
 Run:
 
