@@ -413,6 +413,8 @@ For the GPU version, place the binary under:
 
 On the MDX workflow client, copy the prebuilt GPU binary with:
 
+<img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
+
 ```bash
 cd /work/gz00/z12345/qcsc-prefect
 cp /large/tutorial/diag-gpu algorithms/sbd/native/
@@ -424,15 +426,19 @@ This tutorial assumes the GPU solver runs with the binary name `diag-gpu`.
 
 Copy and edit the configuration file:
 
+<img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 cp algorithms/sbd/sbd_blocks.toml algorithms/sbd/sbd_blocks_gpu.toml
+vim algorithms/sbd/sbd_blocks_gpu.toml
 ```
 
 Edit `algorithms/sbd/sbd_blocks_gpu.toml` and change:
 
 | Parameter | Value / Example |
 |---|---|
-| `block_name` | `davidson-solver-gpu` |
+| `execution_profile_block_name` | `exec-sbd-gpu` |
+| `hpc_profile_block_name` | `hpc-miyabi-sbd-gpu` |
+| `solver_block_name` | `davidson-solver-gpu` |
 | `queue` | `regular-g` |
 | `sbd_executable` | `/work/gz00/z12345/qcsc-prefect/algorithms/sbd/native/diag-gpu` |
 | `launcher` | `mpirun` |
@@ -442,6 +448,8 @@ Edit `algorithms/sbd/sbd_blocks_gpu.toml` and change:
 
 > [!NOTE]
 > For GPU runs, use `diag-gpu` as the executable name. Do not point the GPU block to `diag`.
+> Use dedicated GPU block names so that the existing CPU blocks remain available.
+> If `solver_mode = "gpu"` and you omit these names, `create_blocks.py` now defaults to `exec-sbd-gpu`, `hpc-miyabi-sbd-gpu`, and `davidson-solver-gpu`.
 
 #### A.3 Create the GPU Block
 
@@ -450,6 +458,8 @@ Run:
 ```bash
 python algorithms/sbd/create_blocks.py --config algorithms/sbd/sbd_blocks_gpu.toml
 ```
+
+This creates a GPU block set that can coexist with the CPU block set.
 
 ### B. How the Workflow Selects a Solver
 

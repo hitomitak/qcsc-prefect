@@ -133,6 +133,23 @@ def _normalize_str_dict(value: Any) -> dict[str, str] | None:
     raise ValueError(f"Expected dict[str, str], got: {type(value)}")
 
 
+def _default_block_names(*, hpc_target: str, solver_mode: str) -> dict[str, str]:
+    is_gpu = solver_mode == "gpu"
+    if hpc_target == "miyabi":
+        return {
+            "profile_name": "sbd-gpu" if is_gpu else "sbd-mpi",
+            "execution_profile_block_name": "exec-sbd-gpu" if is_gpu else "exec-sbd-mpi",
+            "hpc_profile_block_name": "hpc-miyabi-sbd-gpu" if is_gpu else "hpc-miyabi-sbd",
+            "solver_block_name": "davidson-solver-gpu" if is_gpu else "davidson-solver",
+        }
+    return {
+        "profile_name": "sbd-gpu" if is_gpu else "sbd-mpi",
+        "execution_profile_block_name": "exec-sbd-fugaku-gpu" if is_gpu else "exec-sbd-fugaku",
+        "hpc_profile_block_name": "hpc-fugaku-sbd-gpu" if is_gpu else "hpc-fugaku-sbd",
+        "solver_block_name": "davidson-solver-gpu" if is_gpu else "davidson-solver",
+    }
+
+
 def _env_values() -> dict[str, Any]:
     def env_int(name: str) -> int | None:
         raw = os.getenv(name, "").strip()
@@ -276,6 +293,23 @@ def main() -> None:
         )
     )
 
+    task_comm_size = int(_pick_value(args.task_comm_size, config.get("task_comm_size"), env.get("task_comm_size"), 1))
+    adet_comm_size = int(_pick_value(args.adet_comm_size, config.get("adet_comm_size"), env.get("adet_comm_size"), 1))
+    bdet_comm_size = int(_pick_value(args.bdet_comm_size, config.get("bdet_comm_size"), env.get("bdet_comm_size"), 1))
+    block = int(_pick_value(args.block, config.get("block"), env.get("block"), 4))
+    iteration = int(_pick_value(args.iteration, config.get("iteration"), env.get("iteration"), 1))
+    tolerance = float(_pick_value(args.tolerance, config.get("tolerance"), env.get("tolerance"), 1e-2))
+    carryover_ratio = float(_pick_value(args.carryover_ratio, config.get("carryover_ratio"), env.get("carryover_ratio"), 0.1))
+    solver_mode = str(_pick_value(args.solver_mode, config.get("solver_mode"), env.get("solver_mode"), "cpu")).strip()
+    resource_class = "gpu" if solver_mode == "gpu" else "cpu"
+    user_args = _normalize_str_list(config.get("user_args")) or []
+    if is_miyabi and solver_mode == "gpu":
+        if "unset OMPI_MCA_mca_base_env_list" not in pre_commands:
+            pre_commands.insert(0, "unset OMPI_MCA_mca_base_env_list")
+        environments.setdefault("MIYABI", "G")
+
+    default_names = _default_block_names(hpc_target=hpc_target, solver_mode=solver_mode)
+
     command_block_name = str(
         _pick_value(args.command_block_name, config.get("command_block_name"), env.get("command_block_name"), "cmd-sbd-diag")
     ).strip()
@@ -285,7 +319,7 @@ def main() -> None:
             args.execution_profile_block_name,
             config.get("execution_profile_block_name"),
             env.get("execution_profile_block_name"),
-            "exec-sbd-mpi" if is_miyabi else "exec-sbd-fugaku",
+            default_names["execution_profile_block_name"],
         )
     ).strip()
 
@@ -294,12 +328,17 @@ def main() -> None:
             args.hpc_profile_block_name,
             config.get("hpc_profile_block_name"),
             env.get("hpc_profile_block_name"),
-            "hpc-miyabi-sbd" if is_miyabi else "hpc-fugaku-sbd",
+            default_names["hpc_profile_block_name"],
         )
     ).strip()
 
     solver_block_name = str(
-        _pick_value(args.solver_block_name, config.get("solver_block_name"), env.get("solver_block_name"), "davidson-solver")
+        _pick_value(
+            args.solver_block_name,
+            config.get("solver_block_name"),
+            env.get("solver_block_name"),
+            default_names["solver_block_name"],
+        )
     ).strip()
 
     options_variable_name = str(
@@ -324,21 +363,6 @@ def main() -> None:
         )
     ).strip()
 
-    task_comm_size = int(_pick_value(args.task_comm_size, config.get("task_comm_size"), env.get("task_comm_size"), 1))
-    adet_comm_size = int(_pick_value(args.adet_comm_size, config.get("adet_comm_size"), env.get("adet_comm_size"), 1))
-    bdet_comm_size = int(_pick_value(args.bdet_comm_size, config.get("bdet_comm_size"), env.get("bdet_comm_size"), 1))
-    block = int(_pick_value(args.block, config.get("block"), env.get("block"), 4))
-    iteration = int(_pick_value(args.iteration, config.get("iteration"), env.get("iteration"), 1))
-    tolerance = float(_pick_value(args.tolerance, config.get("tolerance"), env.get("tolerance"), 1e-2))
-    carryover_ratio = float(_pick_value(args.carryover_ratio, config.get("carryover_ratio"), env.get("carryover_ratio"), 0.1))
-    solver_mode = str(_pick_value(args.solver_mode, config.get("solver_mode"), env.get("solver_mode"), "cpu")).strip()
-    resource_class = "gpu" if solver_mode == "gpu" else "cpu"
-    user_args = _normalize_str_list(config.get("user_args")) or []
-    if is_miyabi and solver_mode == "gpu":
-        if "unset OMPI_MCA_mca_base_env_list" not in pre_commands:
-            pre_commands.insert(0, "unset OMPI_MCA_mca_base_env_list")
-        environments.setdefault("MIYABI", "G")
-
     shots_default = 500000 if is_miyabi else 50000
     shots = int(_pick_value(args.shots, config.get("shots"), env.get("shots"), shots_default))
     sqd_options_json = _pick_value(args.sqd_options_json, config.get("sqd_options_json"), env.get("sqd_options_json"))
@@ -351,7 +375,7 @@ def main() -> None:
     ).save(command_block_name, overwrite=True)
 
     ExecutionProfileBlock(
-        profile_name="sbd-mpi",
+        profile_name=default_names["profile_name"],
         command_name="sbd-diag",
         resource_class=resource_class,
         num_nodes=num_nodes,
