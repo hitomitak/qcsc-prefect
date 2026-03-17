@@ -252,7 +252,7 @@ def main() -> None:
 
     launcher_default = "mpiexec.hydra" if is_miyabi else "mpiexec"
     launcher = str(_pick_value(args.launcher, config.get("launcher"), env.get("launcher"), launcher_default)).strip()
-    walltime = str(_pick_value(args.walltime, config.get("walltime"), env.get("walltime"), "00:10:00")).strip()
+    walltime = str(_pick_value(args.walltime, config.get("walltime"), env.get("walltime"), "00:15:00")).strip()
 
     num_nodes = int(_pick_value(args.num_nodes, config.get("num_nodes"), env.get("num_nodes"), 2))
     mpiprocs = int(_pick_value(args.mpiprocs, config.get("mpiprocs"), env.get("mpiprocs"), 5))

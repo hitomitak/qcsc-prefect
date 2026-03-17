@@ -9,7 +9,7 @@ work_dir = "/work/${GROUP:gz00}/${USER}/miyabi_tutorial"
 # Everything below is optional.
 # If omitted, create_blocks.py uses built-in defaults.
 # launcher = "mpiexec.hydra"  # Miyabi default; Fugaku default is "mpiexec"
-# walltime = "00:10:00"
+# walltime = "00:15:00"
 # num_nodes = 2
 # mpiprocs = 5
 # ompthreads = 1

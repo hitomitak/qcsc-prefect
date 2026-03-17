@@ -18,7 +18,7 @@ work_dir = "~/work/gb_sqd"
 num_nodes = 2
 mpiprocs = 5
 ompthreads = 1
-walltime = "00:30:00"
+walltime = "00:15:00"
 
 # Path to gb-demo executable (optional, defaults to ../../build/gb-demo)
 # executable = "/path/to/custom/gb-demo"

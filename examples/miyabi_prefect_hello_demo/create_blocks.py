@@ -35,7 +35,7 @@ def main() -> None:
         num_nodes=1,
         mpiprocs=1,
         ompthreads=1,
-        walltime="00:05:00",
+        walltime="00:15:00",
         launcher="single",
         modules=[],
         environments={},

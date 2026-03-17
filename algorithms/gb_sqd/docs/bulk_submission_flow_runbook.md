@@ -62,7 +62,7 @@ work_dir = "/shared/gb_sqd_runs"
 
 num_nodes = 4
 ompthreads = 48
-walltime = "00:10:00"
+walltime = "00:15:00"
 launcher = "mpirun"
 modules = ["LLVM/llvmorg-21.1.0"]
 mpi_options = ["-n", "4"]

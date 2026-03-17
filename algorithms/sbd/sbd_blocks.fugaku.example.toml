@@ -10,7 +10,7 @@ sbd_executable = "/vol0000/mdt6/data/ra000000/u12345/qcsc-prefect/algorithms/sbd
 
 # Tutorial baseline execution profile
 launcher = "mpiexec"
-walltime = "02:00:00"
+walltime = "00:15:00"
 num_nodes = 2
 mpiprocs = 2
 mpi_options = ["-n", "2"]

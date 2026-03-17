@@ -94,7 +94,7 @@ Open a new terminal and connect to the login node and execute the interactive se
 
 <img src="./images/icon-login-fugaku.png" alt="login" width="70"/><br>
 ```bash
-pjsub --interact -g ra00000 -L "node=1" -L "rscgrp=int" -L "elapse=3:00:00" --sparam "wait-time=600" -x PJM_LLIO_GFSCACHE=/vol0004:/vol000x --no-check-directory --llio cn-read-cache=off --mpi "max-proc-per-node=1"
+pjsub --interact -g ra00000 -L "node=1" -L "rscgrp=int" -L "elapse=0:15:00" --sparam "wait-time=600" -x PJM_LLIO_GFSCACHE=/vol0004:/vol000x --no-check-directory --llio cn-read-cache=off --mpi "max-proc-per-node=1"
 ```
 
 ## Step 4. Create MPI Program (Compute Node)

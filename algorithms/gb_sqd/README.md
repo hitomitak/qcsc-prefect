@@ -72,7 +72,7 @@ You can also override config file values with CLI arguments:
 python create_blocks.py \
     --config gb_sqd_blocks.toml \
     --num-nodes 4 \
-    --walltime 02:00:00
+    --walltime 00:15:00
 ```
 
 ### 3. Run Workflow

@@ -10,7 +10,7 @@ sbd_executable = "/work/gz00/<user>/qcsc-prefect/algorithms/sbd/native/diag"
 # Optional execution profile
 # launcher default: "mpiexec.hydra" (miyabi), "mpiexec" (fugaku)
 launcher = "mpiexec.hydra"
-walltime = "02:00:00"
+walltime = "00:15:00"
 num_nodes = 1
 mpiprocs = 8
 modules = ["intel/2023.2.0", "impi/2021.10.0"]
