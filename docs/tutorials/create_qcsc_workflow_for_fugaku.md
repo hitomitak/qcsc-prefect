@@ -188,7 +188,7 @@ vim examples/prefect_bitcount_demo/bitcount_blocks.toml
 Set at least these keys for Fugaku:
 
 - `hpc_target = "fugaku"`
-- `project` (Fugaku project e.g. ra00000)
+- `group` (Fugaku group e.g. ra00000)
 - `queue` (Fugaku rscgrp, e.g. `small`)
 - `work_dir`
 - `optimized_executable` (absolute path to `get_counts_hist`)

@@ -222,7 +222,7 @@ Edit `algorithms/sbd/sbd_blocks.toml` and update at least:
 | Parameter | Value / Example | Description |
 |---|---|---|
 | `hpc_target` | `fugaku` | Target scheduler backend |
-| `project` | `raXXXXXX` | Fugaku project |
+| `project` | `raXXXXXX` | Fugaku goup name |
 | `queue` | `small` | Fugaku resource group (`rscgrp`) |
 | `work_dir` | `/volxxxxx/mdt6/data/raxxxxx/uxxxxx/sbd_jobs` | Job working directory |
 | `sbd_executable` | `/volxxxxx/mdt6/data/raxxxxx/uxxxxx/qcsc-prefect/algorithms/sbd/native/diag` | Absolute path to executable |
