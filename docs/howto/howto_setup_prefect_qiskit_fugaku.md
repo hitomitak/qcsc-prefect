@@ -100,6 +100,15 @@ You can also configure preferences for Qiskit primitive execution.
 
 ![Setup Quantum Runtime](./images/img-quantum-runtime-block.png)
 
+> [!NOTE]
+> If a real IBM Quantum backend such as `ibm_kobe` is not available, you can configure Qiskit Aer as an alternative backend.
+> Follow the official prefect-qiskit tutorial here:
+> [Use Qiskit Aer](https://github.com/qiskit-community/prefect-qiskit/blob/main/docs/tutorials/01_getting_started.md#use-qiskit-aer)
+>
+> In the Aer setup, create a `Qiskit Aer Credentials` block and configure the `QuantumRuntime` block with `Resource Name = aer_simulator`.
+> If you already created the tutorial Variable for the Fugaku workflow, delete it from Prefect before switching to Aer because it cannot be used in this setup:
+> `fugaku-bitcount-options`
+
 Confirm you have access to the blocks you created:
 
 <img src="./images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
