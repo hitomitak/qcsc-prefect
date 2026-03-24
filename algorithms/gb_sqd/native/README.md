@@ -19,7 +19,7 @@ The C++ source code is maintained in a separate repository:
 
 ### Build Instructions
 
-#### Local/Miyabi
+#### Miyabi CPU
 
 ```bash
 ./build_gb_sqd.sh
@@ -32,6 +32,21 @@ This will:
 4. Run CMake configuration
 5. Build the `gb-demo` executable
 6. Place the binary in `../gb_demo_2026/build/gb-demo`
+
+#### Miyabi GPU
+
+Run this on a Miyabi-G compute node after entering an interactive GPU session.
+
+```bash
+./build_gb_sqd_miyabi_gpu.sh
+```
+
+This will:
+1. Clone or update the source code from GitHub (with submodules)
+2. Initialize and update all Git submodules
+3. Configure `gb_demo_2026` with `-DMIYABI_GPU=ON`
+4. Build the `gb-demo` executable with `mpicc` / `mpic++`
+5. Place the binary in `../gb_demo_2026/build-miyabi-gpu/gb-demo`
 
 #### Fugaku
 
@@ -74,16 +89,31 @@ The executable will be at `gb_demo_2026/build/gb-demo`.
 
 The Prefect workflows expect the executable to be available. You can:
 
-1. **Build and use default path**: The build scripts place the executable in `../gb_demo_2026/build/gb-demo`
+1. **Build and use default path**:
+   - Miyabi CPU: `../gb_demo_2026/build/gb-demo`
+   - Miyabi GPU: `../gb_demo_2026/build-miyabi-gpu/gb-demo`
 2. **Specify custom path**: Use `--executable` when creating blocks:
    ```bash
    python create_blocks.py \
        --hpc-target miyabi \
-       --project gz00 \
-       --queue regular-c \
-       --work-dir ~/work \
-       --executable /path/to/your/gb-demo
+        --resource-class cpu \
+        --project gz00 \
+        --queue regular-c \
+        --work-dir ~/work \
+        --executable /path/to/your/gb-demo
    ```
+
+For Miyabi GPU blocks:
+
+```bash
+python create_blocks.py \
+    --hpc-target miyabi \
+    --resource-class gpu \
+    --project gz00 \
+    --queue regular-g \
+    --work-dir ~/work \
+    --executable /path/to/your/gpu/gb-demo
+```
 
 ## Prerequisites for Building
 
@@ -92,7 +122,8 @@ Before running the build scripts, ensure you have:
 1. **SSH access configured**: Follow the [SSH setup tutorial](../../../docs/tutorials/setup_ssh_keys_for_mdx_and_miyabi.md) to configure SSH keys for GitHub access
 2. **Git configured**: Make sure you can clone from the private repository
 3. **Required modules loaded** (for HPC systems):
-   - Miyabi: `module load intel impi`
+   - Miyabi CPU: `module load intel impi`
+   - Miyabi GPU: use a Miyabi-G compute node and ensure `mpicc` / `mpic++` are available
    - Fugaku: `module load LLVM/llvmorg-21.1.0`
 
 ## Troubleshooting

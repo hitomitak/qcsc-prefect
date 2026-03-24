@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from prefect import flow, get_run_logger
 from prefect.futures import as_completed
@@ -19,13 +19,28 @@ def _default_command_block_name(mode: str) -> str:
     return "cmd-gb-sqd-ext" if mode == "ext_sqd" else "cmd-gb-sqd-trim"
 
 
-def _default_execution_profile_block_name(mode: str, *, hpc_target: str) -> str:
-    suffix = "miyabi" if hpc_target == "miyabi" else "fugaku"
+def _default_target_suffix(*, hpc_target: str, resource_class: Literal["cpu", "gpu"]) -> str:
+    if resource_class == "gpu":
+        return f"{hpc_target}-gpu"
+    return hpc_target
+
+
+def _default_execution_profile_block_name(
+    mode: str,
+    *,
+    hpc_target: str,
+    resource_class: Literal["cpu", "gpu"],
+) -> str:
+    suffix = _default_target_suffix(hpc_target=hpc_target, resource_class=resource_class)
     return f"exec-gb-sqd-{'ext' if mode == 'ext_sqd' else 'trim'}-{suffix}"
 
 
-def _default_hpc_profile_block_name(hpc_target: str) -> str:
-    suffix = "miyabi" if hpc_target == "miyabi" else "fugaku"
+def _default_hpc_profile_block_name(
+    hpc_target: str,
+    *,
+    resource_class: Literal["cpu", "gpu"],
+) -> str:
+    suffix = _default_target_suffix(hpc_target=hpc_target, resource_class=resource_class)
     return f"hpc-{suffix}-gb-sqd"
 
 
@@ -62,6 +77,7 @@ def bulk_gb_sqd_flow(
     *,
     mode: str,
     hpc_target: str = "fugaku",
+    resource_class: Literal["cpu", "gpu"] = "cpu",
     input_root_dir: str,
     output_root_dir: str,
     count_dict_filename: str = "count_dict.txt",
@@ -112,6 +128,8 @@ def bulk_gb_sqd_flow(
         raise ValueError(f"Unsupported GB-SQD mode: {mode}")
     if hpc_target not in {"miyabi", "fugaku"}:
         raise ValueError(f"Unsupported hpc_target: {hpc_target}")
+    if resource_class not in {"cpu", "gpu"}:
+        raise ValueError(f"Unsupported resource_class: {resource_class}")
     if max_jobs_in_queue < 1:
         raise ValueError("max_jobs_in_queue must be >= 1")
     if queue_poll_interval_seconds <= 0:
@@ -137,8 +155,12 @@ def bulk_gb_sqd_flow(
     execution_name = execution_profile_block_name or _default_execution_profile_block_name(
         mode,
         hpc_target=hpc_target,
+        resource_class=resource_class,
     )
-    resolved_hpc_profile_block_name = hpc_profile_block_name or _default_hpc_profile_block_name(hpc_target)
+    resolved_hpc_profile_block_name = hpc_profile_block_name or _default_hpc_profile_block_name(
+        hpc_target,
+        resource_class=resource_class,
+    )
     input_root_path = Path(input_root_dir).expanduser().resolve()
 
     shared_job_parameters = {
@@ -229,6 +251,7 @@ def bulk_gb_sqd_flow(
     summary = {
         "mode": mode,
         "hpc_target": hpc_target,
+        "resource_class": resource_class,
         "input_root_dir": str(input_root_path),
         "output_root_dir": str(resolved_output_root),
         "hpc_profile_block_name": resolved_hpc_profile_block_name,

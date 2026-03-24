@@ -15,6 +15,7 @@ Additional design and operations documents:
 
 - Bulk flow design: `docs/bulk_submission_flow_design.md`
 - Bulk flow runbook: `docs/bulk_submission_flow_runbook.md`
+- Miyabi bulk rerun runbook: `docs/miyabi_bulk_rerun_runbook.md`
 - Bulk flow manual test plan: `docs/bulk_submission_manual_test_plan.md`
 
 ## Installation
@@ -168,7 +169,7 @@ result = bulk_gb_sqd_flow(
 
 For the full Fugaku run procedure, see `docs/bulk_submission_flow_runbook.md`.
 
-For a Miyabi bulk run using the standard Miyabi block names created by
+For a Miyabi CPU bulk run using the standard block names created by
 `create_blocks.py`, set `hpc_target="miyabi"`:
 
 ```python
@@ -186,6 +187,30 @@ result = bulk_gb_sqd_flow(
     num_recovery=2,
     num_batches=2,
     num_samples_per_batch=1000,
+)
+```
+
+For a Miyabi GPU bulk run, create GPU-specific blocks and either pass them
+explicitly or set `resource_class="gpu"` to use the default `*-miyabi-gpu`
+block names:
+
+```python
+from gb_sqd.bulk import bulk_gb_sqd_flow
+
+result = bulk_gb_sqd_flow(
+    mode="trim_sqd",
+    hpc_target="miyabi",
+    resource_class="gpu",
+    input_root_dir="./data/ligand",
+    output_root_dir="/shared/gb_sqd_runs/ligand_trim_miyabi_gpu",
+    command_block_name="cmd-gb-sqd-trim",
+    execution_profile_block_name="exec-gb-sqd-trim-miyabi-gpu",
+    hpc_profile_block_name="hpc-miyabi-gpu-gb-sqd",
+    max_jobs_in_queue=8,
+    max_prefect_concurrency=8,
+    num_recovery=1,
+    num_batches=1,
+    num_samples_per_recovery=100,
 )
 ```
 
@@ -235,6 +260,60 @@ result = bulk_gb_sqd_flow_with_failed_target_rerun_plan(
         {"carryover_threshold": 1e-3},
         {"carryover_threshold": 1e-2, "max_time": 1800},
         {"carryover_threshold": 1e-1, "max_time": 2400},
+    ],
+)
+```
+
+The same staged rerun pattern works on Miyabi CPU with the standard Miyabi
+block names:
+
+```python
+from gb_sqd import bulk_gb_sqd_flow_with_failed_target_rerun_plan
+
+result = bulk_gb_sqd_flow_with_failed_target_rerun_plan(
+    mode="ext_sqd",
+    hpc_target="miyabi",
+    input_root_dir="./data/ligand",
+    output_root_dir="/shared/gb_sqd_runs/ligand_ext_miyabi",
+    command_block_name="cmd-gb-sqd-ext",
+    execution_profile_block_name="exec-gb-sqd-ext-miyabi",
+    hpc_profile_block_name="hpc-miyabi-gb-sqd",
+    max_jobs_in_queue=8,
+    max_prefect_concurrency=8,
+    num_recovery=2,
+    num_batches=2,
+    num_samples_per_batch=1000,
+    failed_target_override_sequence=[
+        {"carryover_threshold": 1e-3},
+        {"carryover_threshold": 1e-2, "max_time": 1800},
+        {"carryover_threshold": 1e-1, "max_time": 2400},
+    ],
+)
+```
+
+For Miyabi GPU, switch to the GPU block names created with
+`create_blocks.py --resource-class gpu`:
+
+```python
+from gb_sqd import bulk_gb_sqd_flow_with_failed_target_rerun_plan
+
+result = bulk_gb_sqd_flow_with_failed_target_rerun_plan(
+    mode="trim_sqd",
+    hpc_target="miyabi",
+    resource_class="gpu",
+    input_root_dir="./data/ligand",
+    output_root_dir="/shared/gb_sqd_runs/ligand_trim_miyabi_gpu",
+    command_block_name="cmd-gb-sqd-trim",
+    execution_profile_block_name="exec-gb-sqd-trim-miyabi-gpu",
+    hpc_profile_block_name="hpc-miyabi-gpu-gb-sqd",
+    max_jobs_in_queue=8,
+    max_prefect_concurrency=8,
+    num_recovery=1,
+    num_batches=1,
+    num_samples_per_recovery=100,
+    failed_target_override_sequence=[
+        {"carryover_threshold": 1e-3},
+        {"carryover_threshold": 1e-2, "max_time": 1800},
     ],
 )
 ```

@@ -39,6 +39,51 @@ def _load_config(config_path: Path) -> dict:
         return tomllib.load(f)
 
 
+def _default_target_name(*, hpc_target: str, resource_class: str) -> str:
+    if resource_class == "gpu":
+        return f"{hpc_target}-gpu"
+    return hpc_target
+
+
+def _default_executable_path(
+    *,
+    script_dir: Path,
+    hpc_target: str,
+    resource_class: str,
+) -> str:
+    candidates: list[Path] = []
+    source_dir = script_dir / "gb_demo_2026"
+
+    if hpc_target == "miyabi":
+        if resource_class == "gpu":
+            candidates.extend(
+                [
+                    source_dir / "build-miyabi-gpu" / "gb-demo",
+                    source_dir / "build_gpu" / "gb-demo",
+                    source_dir / "build" / "gb-demo",
+                ]
+            )
+        else:
+            candidates.extend(
+                [
+                    source_dir / "build-miyabi-cpu" / "gb-demo",
+                    source_dir / "build" / "gb-demo",
+                ]
+            )
+    else:
+        candidates.extend(
+            [
+                source_dir / "build-fugaku" / "gb-demo",
+                source_dir / "build" / "gb-demo",
+            ]
+        )
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate.resolve())
+    return str(candidates[0].resolve())
+
+
 def _parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -54,6 +99,11 @@ def _parse_args() -> argparse.Namespace:
         "--hpc-target",
         choices=["miyabi", "fugaku"],
         help="Target HPC system (overrides config)",
+    )
+    parser.add_argument(
+        "--resource-class",
+        choices=["cpu", "gpu"],
+        help="Execution resource class (overrides config, default: cpu)",
     )
     parser.add_argument("--project", help="Project/group name (overrides config)")
     parser.add_argument("--queue", help="Queue/resource group name (overrides config)")
@@ -169,14 +219,18 @@ def main() -> None:
     
     # Required parameters
     hpc_target = get_value("hpc_target")
+    resource_class = str(get_value("resource_class", default="cpu")).strip().lower()
     project = get_value("project")
     queue = get_value("queue")
     work_dir = get_value("work_dir")
-    
+
     if not all([hpc_target, project, queue, work_dir]):
         print("Error: Missing required parameters.")
         print("Either provide --config with a TOML file, or specify:")
         print("  --hpc-target, --project, --queue, --work-dir")
+        sys.exit(1)
+    if resource_class not in {"cpu", "gpu"}:
+        print(f"Error: Unsupported resource_class={resource_class!r}. Use 'cpu' or 'gpu'.")
         sys.exit(1)
     
     CommandBlock, ExecutionProfileBlock, HPCProfileBlock = _import_block_classes()
@@ -193,28 +247,40 @@ def main() -> None:
     # Determine launcher
     launcher = get_value("launcher")
     if launcher is None:
-        launcher = "mpiexec.hydra" if is_miyabi else "mpirun"
+        if is_miyabi:
+            launcher = "mpiexec.hydra" if resource_class == "cpu" else "mpirun"
+        else:
+            launcher = "mpirun"
     
     # Get modules
     modules = get_value("modules")
     if modules is None:
-        modules = ["intel/2023.2.0", "impi/2021.10.0"] if is_miyabi else ["LLVM/llvmorg-21.1.0"]
+        if is_miyabi:
+            modules = ["intel/2023.2.0", "impi/2021.10.0"] if resource_class == "cpu" else []
+        else:
+            modules = ["LLVM/llvmorg-21.1.0"]
     
     # Get MPI options
     mpi_options = get_value("mpi_options")
     if mpi_options is None:
-        mpi_options = [] if is_miyabi else ["-n", str(num_nodes)]
+        if is_miyabi:
+            mpi_options = [] if resource_class == "cpu" else ["-n", str(num_nodes * mpiprocs)]
+        else:
+            mpi_options = ["-n", str(num_nodes)]
     
     # Determine executable path
     executable = get_value("executable")
     if executable:
         executable_path = executable
     else:
-        # Default: gb_demo_2026/build/gb-demo relative to this script
         script_dir = Path(__file__).parent
-        executable_path = str((script_dir / "gb_demo_2026/build/gb-demo").resolve())
-    
-    target_name = "miyabi" if is_miyabi else "fugaku"
+        executable_path = _default_executable_path(
+            script_dir=script_dir,
+            hpc_target=hpc_target,
+            resource_class=resource_class,
+        )
+
+    target_name = _default_target_name(hpc_target=hpc_target, resource_class=resource_class)
 
     # Block names
     cmd_block_ext = get_value("command_block_name_ext", default="cmd-gb-sqd-ext")
@@ -309,7 +375,7 @@ def main() -> None:
         ExecutionProfileBlock(
             profile_name=profile_name,
             command_name=command_name,
-            resource_class="cpu",
+            resource_class=resource_class,
             num_nodes=num_nodes,
             mpiprocs=mpiprocs,
             ompthreads=ompthreads,
@@ -351,10 +417,12 @@ def main() -> None:
     print("\nCreating HPCProfileBlock...")
     
     if is_miyabi:
+        queue_cpu = queue if resource_class == "cpu" else "regular-c"
+        queue_gpu = queue if resource_class == "gpu" else "regular-g"
         HPCProfileBlock(
             hpc_target="miyabi",
-            queue_cpu=queue,
-            queue_gpu="regular-g",
+            queue_cpu=queue_cpu,
+            queue_gpu=queue_gpu,
             project_cpu=project,
             project_gpu=project,
             executable_map={"gb_sqd": executable_path},
@@ -387,6 +455,7 @@ def main() -> None:
     if args.config:
         print(f"Configuration: {args.config}")
     print(f"HPC Target: {hpc_target}")
+    print(f"Resource Class: {resource_class}")
     print(f"Project: {project}")
     print(f"Queue: {queue}")
     print(f"Work Directory: {work_dir}")

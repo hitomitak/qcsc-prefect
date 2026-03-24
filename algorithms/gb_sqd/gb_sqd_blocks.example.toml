@@ -4,6 +4,12 @@
 # HPC target: "miyabi" or "fugaku"
 hpc_target = "miyabi"
 
+# Resource class: "cpu" or "gpu"
+# Miyabi GPU builds typically use:
+#   resource_class = "gpu"
+#   queue = "regular-g"
+resource_class = "cpu"
+
 # Miyabi uses project. Fugaku also accepts legacy project, but tutorials prefer `group = "ra000000"`.
 project = "gz00"
 # group = "ra000000"
@@ -22,6 +28,8 @@ walltime = "00:15:00"
 
 # Path to gb-demo executable (optional, defaults to ../../build/gb-demo)
 # executable = "/path/to/custom/gb-demo"
+# Miyabi GPU example:
+# executable = "/path/to/gb_demo_2026/build-miyabi-gpu/gb-demo"
 
 # Modules to load (optional)
 # Miyabi example:
@@ -47,9 +55,18 @@ walltime = "00:15:00"
 # command_block_name_init = "cmd-gb-sqd-init"
 # command_block_name_recovery = "cmd-gb-sqd-recovery"
 # command_block_name_finalize = "cmd-gb-sqd-finalize"
+# CPU defaults:
 # execution_profile_block_name_ext = "exec-gb-sqd-ext-miyabi"
 # execution_profile_block_name_trim = "exec-gb-sqd-trim-miyabi"
 # execution_profile_block_name_init = "exec-gb-sqd-init-miyabi"
 # execution_profile_block_name_recovery = "exec-gb-sqd-recovery-miyabi"
 # execution_profile_block_name_finalize = "exec-gb-sqd-finalize-miyabi"
 # hpc_profile_block_name = "hpc-miyabi-gb-sqd"
+#
+# Miyabi GPU defaults when resource_class = "gpu":
+# execution_profile_block_name_ext = "exec-gb-sqd-ext-miyabi-gpu"
+# execution_profile_block_name_trim = "exec-gb-sqd-trim-miyabi-gpu"
+# execution_profile_block_name_init = "exec-gb-sqd-init-miyabi-gpu"
+# execution_profile_block_name_recovery = "exec-gb-sqd-recovery-miyabi-gpu"
+# execution_profile_block_name_finalize = "exec-gb-sqd-finalize-miyabi-gpu"
+# hpc_profile_block_name = "hpc-miyabi-gpu-gb-sqd"
