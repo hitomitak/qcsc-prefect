@@ -23,7 +23,9 @@ work_dir = "~/work/gb_sqd"
 # Execution parameters
 num_nodes = 2
 mpiprocs = 5
-ompthreads = 1
+# Optional. If omitted on Miyabi, the generated PBS script will not include
+# `:ompthreads=...`.
+# ompthreads = 1
 walltime = "00:15:00"
 
 # Path to gb-demo executable (optional, defaults to ../../build/gb-demo)

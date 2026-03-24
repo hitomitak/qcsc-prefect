@@ -122,7 +122,6 @@ work_dir = "/work/gz00/z12345/gb_sqd_runs"
 
 num_nodes = 1
 mpiprocs = 1
-ompthreads = 48
 walltime = "01:00:00"
 launcher = "mpiexec.hydra"
 modules = ["intel", "impi"]
@@ -156,7 +155,6 @@ work_dir = "/work/gz00/z12345/gb_sqd_runs"
 
 num_nodes = 1
 mpiprocs = 1
-ompthreads = 48
 walltime = "01:00:00"
 launcher = "mpirun"
 modules = []
@@ -175,6 +173,9 @@ Expected default block names:
 - `exec-gb-sqd-ext-miyabi-gpu`
 - `exec-gb-sqd-trim-miyabi-gpu`
 - `hpc-miyabi-gpu-gb-sqd`
+
+If you want `:ompthreads=...` in the generated PBS script, add `ompthreads = N`
+explicitly. If omitted, Miyabi blocks now leave `ompthreads` unset.
 
 ## 5. Sanity-check the blocks
 

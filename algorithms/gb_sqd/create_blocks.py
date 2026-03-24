@@ -241,7 +241,7 @@ def main() -> None:
     # Get execution parameters
     num_nodes = get_value("num_nodes", default=1)
     mpiprocs = get_value("mpiprocs", default=1)
-    ompthreads = get_value("ompthreads", default=48)
+    ompthreads = get_value("ompthreads", default=None if is_miyabi else 48)
     walltime = get_value("walltime", default="01:00:00")
     
     # Determine launcher
@@ -367,11 +367,12 @@ def main() -> None:
             }
             if is_miyabi
             else {
-                "OMP_NUM_THREADS": str(ompthreads),
                 "UTOFU_SWAP_PROTECT": "1",
                 "LD_LIBRARY_PATH": "/lib64:$LD_LIBRARY_PATH",
             }
         )
+        if not is_miyabi and ompthreads is not None:
+            environments["OMP_NUM_THREADS"] = str(ompthreads)
         ExecutionProfileBlock(
             profile_name=profile_name,
             command_name=command_name,
