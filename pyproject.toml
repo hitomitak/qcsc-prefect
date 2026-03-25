@@ -14,6 +14,9 @@ dependencies = []
 # （pip install . されても意味はない）
 dynamic = []
 
+[tool.setuptools]
+packages = []
+
 # -----------------------------
 # Workspace / Monorepo 設定
 # -----------------------------
@@ -25,6 +28,7 @@ members = [
     "packages/qcsc-prefect-adapters",
     "packages/qcsc-prefect-blocks",
     "packages/qcsc-prefect-executor",
+    "packages/qcsc-prefect-dice",
 ]
 
 
@@ -33,6 +37,7 @@ qcsc-prefect-core     = { workspace = true }
 qcsc-prefect-adapters = { workspace = true }
 qcsc-prefect-blocks   = { workspace = true }
 qcsc-prefect-executor = { workspace = true }
+qcsc-prefect-dice     = { workspace = true }
 
 # --- Poetry ---
 [tool.poetry]
@@ -51,6 +56,7 @@ members = [
     "packages/qcsc-prefect-adapters",
     "packages/qcsc-prefect-blocks",
     "packages/qcsc-prefect-executor",
+    "packages/qcsc-prefect-dice",
 ]
 
 # --- Hatch ---
@@ -60,6 +66,7 @@ members = [
     "packages/qcsc-prefect-adapters",
     "packages/qcsc-prefect-blocks",
     "packages/qcsc-prefect-executor",
+    "packages/qcsc-prefect-dice",
 ]
 
 # -----------------------------

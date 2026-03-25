@@ -1,0 +1,19 @@
+nroots 1
+{% if spin_sq is not none %}spin {{spin_sq}}{% endif %}
+orbitals fcidump.txt
+schedule
+0 {{select_cutoff}}
+end
+davidsonTol {{davidson_tol}}
+dE {{energy_tol}}
+maxiter {{max_iter}}
+noio
+writeBestDeterminants {{dim}}
+nPTiter 0
+DoSpinRDM
+DoRDM
+DoSpinOneRDM
+DoOneRDM
+nocc {{num_elec}}
+{{ range(num_elec) | join(" ") }}
+end

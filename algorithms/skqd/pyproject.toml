@@ -18,12 +18,12 @@ dependencies = [
     "qiskit-addon-sqd==0.11.0",
     "prefect-qiskit==0.2.0",
     "prefect==3.4.10",
-    "prefect-dice",
+    "qcsc-prefect-dice",
     "qcsc_workflow_utility",
 ]
 
 [tool.uv.sources]
-prefect-dice = { workspace = true }
+qcsc-prefect-dice = { workspace = true }
 qcsc_workflow_utility = { workspace = true }
 
 [tool.setuptools]

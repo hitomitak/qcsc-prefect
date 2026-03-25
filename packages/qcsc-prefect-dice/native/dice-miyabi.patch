@@ -1,0 +1,15 @@
+diff --git a/Makefile b/Makefile
+index c85d0a1..f986f15 100644
+--- a/Makefile
++++ b/Makefile
+@@ -25,8 +25,8 @@ DEPS = $(OBJDIR)/Hmult.o $(OBJDIR)/SHCInocuda.o $(OBJDIR)/SHCIbasics.o $(OBJDIR
+ # Intel
+ #CXX = mpiicpc
+ #CXXFLAGS = -I. -I$(HDF5)/include -I$(EIGEN) -I$(BOOST) -I$(ZLIB) -g -Wall -march=native -Wno-sign-compare -Werror -O3 -funroll-loops -std=c++0x -fopenmp -DUSE_HDF5_SERIAL -Dserialize_hash
+-CXX = mpiicpc
+-CXXFLAGS = -I. -I$(HDF5)/include -I$(EIGEN) #-I$(BOOST) -I$(ZLIB) -g -Wall -march=native -Wno-sign-compare -Werror -O3 -funroll-loops -std=c++0x -fopenmp -DUSE_HDF5_SERIAL -Dserialize_hash
++CXX = mpiicpc -cxx=icpx
++CXXFLAGS = -I. -I$(HDF5)/include -I$(EIGEN) -I$(BOOST) -I$(ZLIB) -axSAPPHIRERAPIDS,CORE-AVX512 -diag-disable=10430 -g -Wall -march=native -Wno-sign-compare -Werror -O3 -funroll-loops -std=c++0x -fopenmp -DUSE_HDF5_SERIAL -Dserialize_hash
+ LIBS = -L. -L$(BOOST)/stage/lib -L$(MKLROOT)/lib/intel64 -L$(HDF5)/lib -Wl,-rpath,$(MKLROOT)/lib/intel64 -Wl,-rpath,$(HDF5)/lib -mkl=sequential -fopenmp -lhdf5_cpp -lhdf5 -lboost_mpi -lboost_serialization
+ 
+ ifeq ($(HOSTNAME),flophouse)

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qcsc-prefect-dice"
+version = "1.0.0"
+description = "DICE SHCI solver integration for qcsc-prefect"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "Jinja2",
+    "numpy",
+    "prefect>=2.19",
+    "pyscf",
+    "qiskit-addon-sqd==0.11.0",
+    "qcsc-prefect-core",
+    "qcsc-prefect-blocks",
+    "qcsc-prefect-executor",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+qcsc_prefect_dice = ["templates/*.j2"]

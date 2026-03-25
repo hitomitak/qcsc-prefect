@@ -31,7 +31,7 @@ from qiskit_addon_sqd.counts import bit_array_to_arrays, generate_bit_array_unif
 from qiskit_addon_sqd.fermion import SCIResult
 from qiskit_ibm_runtime.transpiler.passes import FoldRzzAngle
 
-from prefect_dice import DiceSHCISolverJob
+from qcsc_prefect_dice import DiceSHCISolverJob
 
 from sqd_dice.subsample import postselect, subsample
 

@@ -1,5 +1,6 @@
 """Automation script for DICE solver MPI performance tuning."""
 
+import inspect
 import json
 import os
 import subprocess
@@ -9,8 +10,16 @@ from prefect import flow, get_client, get_run_logger
 from prefect.artifacts import ArtifactFilter, create_table_artifact
 from pydantic import BaseModel, Field
 
+from qcsc_prefect_blocks.common.blocks import ExecutionProfileBlock
+from qcsc_prefect_dice import DiceSHCISolverJob
+
 from sqd_dice.main import Parameters, sqd_2405_05068
-from prefect_dice import DiceSHCISolverJob
+
+
+async def _maybe_await(value):
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 class DICESetup(BaseModel):
@@ -70,14 +79,20 @@ async def main(
         )
         
         tmp_name = f"tmp-solver-{uuid.uuid4().hex}"        
+        tmp_exec_name = f"tmp-exec-{uuid.uuid4().hex}"
 
         # Create temporary solver configuration
-        current_solver = await DiceSHCISolverJob.load(solver_name)
-        current_solver.num_nodes = experiment.num_nodes
-        current_solver.mpiprocs = experiment.mpiprocs
-        await current_solver.save(tmp_name, overwrite=True)
+        current_solver = await _maybe_await(DiceSHCISolverJob.load(solver_name))
+        current_exec = await _maybe_await(
+            ExecutionProfileBlock.load(current_solver.execution_profile_block_name)
+        )
+        current_exec.num_nodes = experiment.num_nodes
+        current_exec.mpiprocs = experiment.mpiprocs
+        await _maybe_await(current_exec.save(tmp_exec_name, overwrite=True))
+        current_solver.execution_profile_block_name = tmp_exec_name
+        await _maybe_await(current_solver.save(tmp_name, overwrite=True))
         logger.debug(
-            f"Created a temporary solver configuration {tmp_name}"
+            f"Created temporary solver/execution-profile blocks {tmp_name}, {tmp_exec_name}"
         )
         
         # Update parameters
@@ -118,14 +133,14 @@ async def main(
             async with get_client() as client:
                 read_job_reports = ArtifactFilter(
                     flow_run_id={"any_": [state.state_details.flow_run_id]},
-                    key={"any_": ["miyabi-job-metrics"]},
+                    key={"any_": [current_solver.metrics_artifact_key]},
                 )
                 reports = await client.read_artifacts(
                     artifact_filter=read_job_reports,
                 )
             if len(reports) != 0:
                 logger.info(
-                    f"Found {len(reports)} 'miyabi-job-metrics' artifacts."
+                    f"Found {len(reports)} '{current_solver.metrics_artifact_key}' artifacts."
                 )
                 report_data = json.loads(reports[0].data)
                 report_data = dict(zip(*report_data))
@@ -143,7 +158,8 @@ async def main(
                     record["avg_node_mem"] = f"{sum(node_mems) / len(node_mems):.5f}gb"
             records.append(record)
         finally:
-            await DiceSHCISolverJob.delete(tmp_name)
+            await _maybe_await(DiceSHCISolverJob.delete(tmp_name))
+            await _maybe_await(ExecutionProfileBlock.delete(tmp_exec_name))
     
     await create_table_artifact(
         table=records,
