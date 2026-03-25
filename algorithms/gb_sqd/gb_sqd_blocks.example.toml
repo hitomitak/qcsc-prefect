@@ -1,0 +1,55 @@
+# Example configuration for GB SQD Prefect blocks
+# Copy this file and customize for your environment
+
+# HPC target: "miyabi" or "fugaku"
+hpc_target = "miyabi"
+
+# Miyabi uses project. Fugaku also accepts legacy project, but tutorials prefer `group = "ra000000"`.
+project = "gz00"
+# group = "ra000000"
+
+# Queue/resource group name
+queue = "regular-c"
+
+# Working directory for job outputs
+work_dir = "~/work/gb_sqd"
+
+# Execution parameters
+num_nodes = 2
+mpiprocs = 5
+ompthreads = 1
+walltime = "00:15:00"
+
+# Path to gb-demo executable (optional, defaults to ../../build/gb-demo)
+# executable = "/path/to/custom/gb-demo"
+
+# Modules to load (optional)
+# Miyabi example:
+# modules = ["intel/2023.2.0", "impi/2021.10.0"]
+# Fugaku example:
+# modules = ["LLVM/llvmorg-21.1.0"]
+
+# MPI options (optional)
+# Miyabi example:
+# mpi_options = []
+# Fugaku example:
+# mpi_options = ["-n", "4"]
+
+# Fugaku-specific settings (ignored for Miyabi)
+# fugaku_gfscache = "/vol0004:/vol0002"
+# fugaku_spack_modules = []
+# fugaku_mpi_options_for_pjm = ["max-proc-per-node=1"]
+# fugaku_pjm_resources = ["freq=2000,eco_state=2"]
+
+# Block names (optional, will use defaults if not specified)
+# command_block_name_ext = "cmd-gb-sqd-ext"
+# command_block_name_trim = "cmd-gb-sqd-trim"
+# command_block_name_init = "cmd-gb-sqd-init"
+# command_block_name_recovery = "cmd-gb-sqd-recovery"
+# command_block_name_finalize = "cmd-gb-sqd-finalize"
+# execution_profile_block_name_ext = "exec-gb-sqd-ext-miyabi"
+# execution_profile_block_name_trim = "exec-gb-sqd-trim-miyabi"
+# execution_profile_block_name_init = "exec-gb-sqd-init-miyabi"
+# execution_profile_block_name_recovery = "exec-gb-sqd-recovery-miyabi"
+# execution_profile_block_name_finalize = "exec-gb-sqd-finalize-miyabi"
+# hpc_profile_block_name = "hpc-miyabi-gb-sqd"

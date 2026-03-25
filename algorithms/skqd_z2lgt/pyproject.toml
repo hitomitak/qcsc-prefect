@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "skqd_z2lgt"
+version = "0.9.0"
+description = "QCHPC demonstration with 2D Z2 LGT."
+authors = [
+    { name = "Yutaro Iiyama", email = "iiyama@icepp.s.u-tokyo.ac.jp" }
+]
+readme = "README.md"
+requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "numpy",
+    "scipy",
+    "h5py",
+    "jax[cuda12]",
+    "optax",
+    "flax",
+    "qiskit>=2.1.0",
+    "qiskit-ibm-runtime>=0.41.0",
+    "rustworkx",
+    "pymatching",
+    "heavyhex_qft",
+]
+
+[tool.uv.sources]
+heavyhex_qft = { path = "../../libs/heavyhex-qft", editable = true }
+
+[project.scripts]
+skqd-z2lgt-deploy = "skqd_z2lgt.main:deploy"

@@ -43,9 +43,9 @@ qcsc-prefect/
   - [HPC-Prefect Concept](./docs/concept.md)
 - Example guides:
   - [BitCount Tutorial for Miyabi](./docs/tutorials/create_qcsc_workflow_for_miyabi.md)
-  - [Closed Loop SBD for Miyabi](./docs/tutorials/run_sbd_closed_loop_workflow.md)
   - [BitCount Tutorial for Fugaku](./docs/tutorials/create_qcsc_workflow_for_fugaku.md)
-  - [Closed Loop SBD for Fugaku](./docs/tutorials/run_sbd_closed_loop_workflow_fugaku.md)
+  - [Miyabi Hello Demo](./examples/miyabi_prefect_hello_demo/README.md)
+  - [Fugaku Hello Demo](./examples/fugaku_prefect_hello_demo/README.md)
 
 ## Code Management
 

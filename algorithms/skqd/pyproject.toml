@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skqd_dice"
+version = "1.0.0"
+description = "Prefect workflow of SKQD experiment from arXiv:2501.09702."
+authors = [
+    { name = "Yuto Morohoshi", email = "mrhsyut@ibm.com" }
+]
+maintainers = [
+    { name = "Yuto Morohoshi", email = "mrhsyut@ibm.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "ffsim==0.0.57",
+    "qiskit-addon-sqd==0.11.0",
+    "prefect-qiskit==0.2.0",
+    "prefect==3.4.10",
+    "prefect-dice",
+    "qcsc_workflow_utility",
+]
+
+[tool.uv.sources]
+prefect-dice = { workspace = true }
+qcsc_workflow_utility = { workspace = true }
+
+[tool.setuptools]
+packages = ["skqd_dice"]
+include-package-data = true
+zip-safe = false
+
+[project.scripts]
+skqd-deploy = "skqd_dice.main:deploy"

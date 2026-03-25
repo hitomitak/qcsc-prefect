@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sqd_dice"
+version = "1.4.0"
+description = "Prefect workflow of SQD experiment from arXiv:2405.05068."
+authors = [
+    { name = "Naoki Kanazawa", email = "knzwnao@jp.ibm.com" }
+]
+maintainers = [
+    { name = "Naoki Kanazawa", email = "knzwnao@jp.ibm.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "ffsim==0.0.57",
+    "Jinja2",
+    "qiskit-addon-sqd==0.11.0",
+    "prefect-qiskit==0.2.0",
+    "prefect==3.4.10",
+    "pydantic_numpy",
+    "prefect-dice",
+    "qcsc_workflow_utility",
+]
+
+[tool.uv.sources]
+prefect-dice = { workspace = true }
+qcsc_workflow_utility = { workspace = true }
+
+[tool.setuptools]
+packages = ["sqd_dice"]
+include-package-data = true
+zip-safe = false
+
+[project.scripts]
+sqd-deploy = "sqd_dice.main:deploy"

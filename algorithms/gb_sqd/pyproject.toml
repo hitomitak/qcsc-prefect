@@ -1,0 +1,29 @@
+[project]
+name = "gb-sqd"
+version = "0.1.0"
+description = "GB SQD (ExtSQD/TrimSQD) workflow integration for Prefect"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "prefect>=2.0.0",
+    "numpy>=1.24.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gb_sqd*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
