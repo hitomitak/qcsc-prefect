@@ -33,21 +33,36 @@ Because DICE downloads dependencies and produces native binaries, it is usually
 better to build in shared storage under `/work` rather than inside the git
 checkout.
 
-Sync just this `native/` directory to your shared work area, enter a PrePost
-session, then run:
+The recommended workflow is to copy just this `native/` directory into a fresh
+release directory under shared storage, then build there in a PrePost session:
 
 ```bash
-SRC=/path/to/qcsc-prefect/packages/qcsc-prefect-dice/native/
-DST=/work/<group>/share/qcsc-prefect-dice/native/
+SRC=/work/<user>/<repo>/packages/qcsc-prefect-dice/native
+REL=/work/<group>/share/qcsc-prefect-dice/releases/$(date +%Y%m%d_%H%M%S)
 
-mkdir -p "$DST"
-rsync -a --delete "$SRC" "$DST"
+mkdir -p "$REL"
+cp -rf "$SRC" "$REL"
 ```
 
 Then build in place on Miyabi:
 
 ```bash
-cd /work/<group>/share/qcsc-prefect-dice/native
+cd "$REL/native"
+bash ./build_dice_miyabi.sh
+```
+
+This release-directory approach avoids overwriting a `Dice` binary that may
+still be used by running jobs.
+
+```bash
+SRC=/work/<user>/<repo>/packages/qcsc-prefect-dice/native
+DST_BASE=/work/<group>/share/qcsc-prefect-dice
+
+mkdir -p "$DST_BASE"
+rm -rf "$DST_BASE/native"
+cp -rf "$SRC" "$DST_BASE"
+
+cd "$DST_BASE/native"
 bash ./build_dice_miyabi.sh
 ```
 
@@ -62,8 +77,8 @@ The Miyabi-oriented build script:
 You can confirm the runtime path after build with:
 
 ```bash
-readelf -d /work/<group>/share/qcsc-prefect-dice/native/bin/Dice | grep -E 'RPATH|RUNPATH'
-ldd /work/<group>/share/qcsc-prefect-dice/native/bin/Dice | grep 'not found'
+readelf -d "$REL/native/bin/Dice" | grep -E 'RPATH|RUNPATH'
+ldd "$REL/native/bin/Dice" | grep 'not found'
 ```
 
 ## Configure The Block
@@ -77,5 +92,5 @@ dice_executable = "/abs/path/to/packages/qcsc-prefect-dice/native/bin/Dice"
 Or, if you built in shared storage:
 
 ```toml
-dice_executable = "/work/<group>/share/qcsc-prefect-dice/native/bin/Dice"
+dice_executable = "/work/<group>/share/qcsc-prefect-dice/releases/<release>/native/bin/Dice"
 ```
