@@ -37,6 +37,7 @@ cd "$DICE_ROOT"
 dice_make_args=(
     'CXX=mpiicpc -cxx=icpx'
     'CXXFLAGS=-I. -I$(HDF5)/include -I$(EIGEN) -I$(BOOST) -I$(ZLIB) -axSAPPHIRERAPIDS,CORE-AVX512 -diag-disable=10430 -g -Wall -march=native -Wno-sign-compare -Werror -O3 -funroll-loops -std=c++0x -fopenmp -DUSE_HDF5_SERIAL -Dserialize_hash'
+    'LIBS=-L. -L$(BOOST)/stage/lib -L$(MKLROOT)/lib/intel64 -L$(HDF5)/lib -Wl,--enable-new-dtags -Wl,-rpath,\$$ORIGIN -Wl,-rpath,$(MKLROOT)/lib/intel64 -Wl,-rpath,$(HDF5)/lib -mkl=sequential -fopenmp -lhdf5_cpp -lhdf5 -lboost_mpi -lboost_serialization'
 )
 make -j"$(nproc)" "${dice_make_args[@]}" Dice
 
@@ -44,3 +45,10 @@ make -j"$(nproc)" "${dice_make_args[@]}" Dice
 mkdir -p "$DICE_BIN_PATH"
 cp "$DICE_ROOT"/bin/Dice "$DICE_BIN_PATH"
 cp "$BOOST_ROOT"/stage/lib/*.so* "$DICE_BIN_PATH"
+
+if command -v readelf >/dev/null 2>&1; then
+    if ! readelf -d "$DICE_BIN_PATH"/Dice | grep -Eq '\((RPATH|RUNPATH)\).*\$ORIGIN'; then
+        echo "Dice binary is missing \$ORIGIN RUNPATH; bundled libraries may not be found at runtime." >&2
+        exit 1
+    fi
+fi
