@@ -21,6 +21,17 @@ After installation, you can deploy the workflow in a Prefect server:
 sqd-deploy
 ```
 
+Before running on Miyabi or Fugaku, create the DICE-related blocks and
+`sampler_options` variable:
+
+```bash
+cp algorithms/sqd/sqd_blocks.example.toml algorithms/sqd/sqd_blocks.toml
+python algorithms/sqd/create_blocks.py --config algorithms/sqd/sqd_blocks.toml --hpc-target miyabi
+```
+
+For Fugaku, start from `algorithms/sqd/sqd_blocks.fugaku.example.toml` and pass
+`--hpc-target fugaku` instead.
+
 See the [Run Hybrid Workflow](../../docs/tutorials/run_sqd_workflow.md) tutorial for the end-to-end steps.
 
 ## 🧭 MPI Parameter Tuning
