@@ -16,10 +16,12 @@ For a practical example of how to optimize MPI parameters for the DICE solver, r
 
 ## 🚀 Getting Started
 
-To deploy the `dice_perf_tuning` workflow, activate the virtual environment where the `sqd_dice` package is installed, and run:
+To deploy the `dice_perf_tuning` workflow from the repository root, activate the
+virtual environment where the `sqd_dice` package is installed, and run:
 
 ```bash
-python ./qii-miyabi-kawasaki/algorithms/sqd/perf/tune_dice.py
+cd /path/to/qcsc-prefect
+uv run --project algorithms/sqd python algorithms/sqd/perf/tune_dice.py
 ```
 
 This command deploys the `dice_perf_tuning` workflow on your Prefect server.
