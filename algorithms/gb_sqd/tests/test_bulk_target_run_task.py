@@ -62,6 +62,11 @@ async def test_bulk_target_run_task_retries_then_succeeds(tmp_path: Path, monkey
         "load",
         staticmethod(lambda _: SimpleNamespace(queue_cpu="small", hpc_target="fugaku")),
     )
+    monkeypatch.setattr(
+        bulk_target_run_module.ExecutionProfileBlock,
+        "load",
+        staticmethod(lambda _: SimpleNamespace(resource_class="cpu")),
+    )
 
     queue_calls: list[dict[str, object]] = []
 
@@ -80,7 +85,7 @@ async def test_bulk_target_run_task_retries_then_succeeds(tmp_path: Path, monkey
         energy_log_file.write_text(json.dumps({"energy_final": -123.456}))
         return SimpleNamespace(exit_status=0, job_id="job-0002", state="EXT")
 
-    monkeypatch.setattr(bulk_target_run_module, "wait_for_queue_slot", fake_wait_for_queue_slot)
+    monkeypatch.setattr(bulk_target_run_module, "wait_for_fugaku_queue_slot", fake_wait_for_queue_slot)
     monkeypatch.setattr(bulk_target_run_module, "run_job_from_blocks", fake_run_job_from_blocks)
 
     result = await bulk_target_run_task.fn(
@@ -216,7 +221,7 @@ async def test_bulk_target_run_task_raises_non_retryable_for_missing_input_file(
 
 
 @pytest.mark.asyncio
-async def test_bulk_target_run_task_runs_on_miyabi_without_fugaku_queue_gate(
+async def test_bulk_target_run_task_runs_on_miyabi_with_miyabi_queue_gate(
     tmp_path: Path, monkeypatch
 ):
     input_dir = tmp_path / "input" / "case_m" / "atom_4"
@@ -229,9 +234,17 @@ async def test_bulk_target_run_task_runs_on_miyabi_without_fugaku_queue_gate(
         "load",
         staticmethod(lambda _: SimpleNamespace(queue_cpu="regular-c", hpc_target="miyabi")),
     )
+    monkeypatch.setattr(
+        bulk_target_run_module.ExecutionProfileBlock,
+        "load",
+        staticmethod(lambda _: SimpleNamespace(resource_class="cpu")),
+    )
 
-    async def fake_wait_for_queue_slot(**kwargs):
-        raise AssertionError("Miyabi path should not call Fugaku queue throttling")
+    queue_calls: list[dict[str, object]] = []
+
+    async def fake_wait_for_miyabi_queue_slot(**kwargs):
+        queue_calls.append(kwargs)
+        return 0
 
     run_calls: list[dict[str, object]] = []
 
@@ -241,7 +254,12 @@ async def test_bulk_target_run_task_runs_on_miyabi_without_fugaku_queue_gate(
         energy_log_file.write_text(json.dumps({"energy_final": -7.5}))
         return SimpleNamespace(exit_status=0, job_id="12345.miyabi", job_status={"Exit_status": "0"})
 
-    monkeypatch.setattr(bulk_target_run_module, "wait_for_queue_slot", fake_wait_for_queue_slot)
+    monkeypatch.setattr(
+        bulk_target_run_module,
+        "wait_for_fugaku_queue_slot",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("Fugaku queue throttling should not be used")),
+    )
+    monkeypatch.setattr(bulk_target_run_module, "wait_for_miyabi_queue_slot", fake_wait_for_miyabi_queue_slot)
     monkeypatch.setattr(bulk_target_run_module, "run_job_from_blocks", fake_run_job_from_blocks)
 
     result = await bulk_target_run_task.fn(
@@ -266,6 +284,8 @@ async def test_bulk_target_run_task_runs_on_miyabi_without_fugaku_queue_gate(
 
     assert result["status"] == "success"
     assert result["latest_job_id"] == "12345.miyabi"
+    assert len(queue_calls) == 1
+    assert queue_calls[0]["queue_name"] == "regular-c"
     assert len(run_calls) == 1
     assert run_calls[0]["script_filename"] == "gb_sqd_ext.pbs"
     assert run_calls[0]["fugaku_job_name"] is None

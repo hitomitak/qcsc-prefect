@@ -15,6 +15,11 @@ from .discovery import discover_target_directories
 from .target_overrides import merge_target_job_parameters, prepare_target_overrides
 
 
+DEFAULT_FUGAKU_MAX_JOBS_IN_QUEUE = 10
+DEFAULT_MIYABI_MAX_JOBS_IN_QUEUE = 256
+DEFAULT_MIYABI_MAX_PREFECT_CONCURRENCY = 128
+
+
 def _default_command_block_name(mode: str) -> str:
     return "cmd-gb-sqd-ext" if mode == "ext_sqd" else "cmd-gb-sqd-trim"
 
@@ -60,6 +65,27 @@ def _get_bulk_target_run_task():
     return bulk_target_run_task
 
 
+def _resolve_max_jobs_in_queue(hpc_target: str, max_jobs_in_queue: int | None) -> int:
+    if max_jobs_in_queue is not None:
+        return max_jobs_in_queue
+    if hpc_target == "miyabi":
+        return DEFAULT_MIYABI_MAX_JOBS_IN_QUEUE
+    return DEFAULT_FUGAKU_MAX_JOBS_IN_QUEUE
+
+
+def _resolve_max_prefect_concurrency(
+    *,
+    hpc_target: str,
+    max_jobs_in_queue: int,
+    max_prefect_concurrency: int | None,
+) -> int:
+    if max_prefect_concurrency is not None:
+        return max_prefect_concurrency
+    if hpc_target == "miyabi":
+        return DEFAULT_MIYABI_MAX_PREFECT_CONCURRENCY
+    return max_jobs_in_queue
+
+
 def _resolve_target_future_result(*, relative_path: str, future: Any, logger: Any) -> dict[str, Any]:
     try:
         return future.result()
@@ -85,7 +111,7 @@ def bulk_gb_sqd_flow(
     leaf_only: bool = True,
     skip_completed: bool = True,
     fail_fast: bool = False,
-    max_jobs_in_queue: int = 10,
+    max_jobs_in_queue: int | None = None,
     queue_limit_scope: str = "user_queue",
     queue_poll_interval_seconds: float = 120.0,
     max_target_task_retries: int = 1,
@@ -130,7 +156,8 @@ def bulk_gb_sqd_flow(
         raise ValueError(f"Unsupported hpc_target: {hpc_target}")
     if resource_class not in {"cpu", "gpu"}:
         raise ValueError(f"Unsupported resource_class: {resource_class}")
-    if max_jobs_in_queue < 1:
+    resolved_max_jobs_in_queue = _resolve_max_jobs_in_queue(hpc_target, max_jobs_in_queue)
+    if resolved_max_jobs_in_queue < 1:
         raise ValueError("max_jobs_in_queue must be >= 1")
     if queue_poll_interval_seconds <= 0:
         raise ValueError("queue_poll_interval_seconds must be > 0")
@@ -144,7 +171,11 @@ def bulk_gb_sqd_flow(
     if not discovered:
         raise ValueError(f"No target directories found under {Path(input_root_dir).expanduser().resolve()}")
 
-    concurrency = max_prefect_concurrency or max_jobs_in_queue
+    concurrency = _resolve_max_prefect_concurrency(
+        hpc_target=hpc_target,
+        max_jobs_in_queue=resolved_max_jobs_in_queue,
+        max_prefect_concurrency=max_prefect_concurrency,
+    )
     if concurrency < 1:
         raise ValueError("max_prefect_concurrency must be >= 1")
 
@@ -223,7 +254,7 @@ def bulk_gb_sqd_flow(
                 command_block_name=command_name,
                 execution_profile_block_name=execution_name,
                 hpc_profile_block_name=resolved_hpc_profile_block_name,
-                max_jobs_in_queue=max_jobs_in_queue,
+                max_jobs_in_queue=resolved_max_jobs_in_queue,
                 queue_limit_scope=queue_limit_scope,
                 queue_poll_interval_seconds=queue_poll_interval_seconds,
                 job_name_prefix=job_name_prefix,
@@ -256,6 +287,8 @@ def bulk_gb_sqd_flow(
         "output_root_dir": str(resolved_output_root),
         "hpc_profile_block_name": resolved_hpc_profile_block_name,
         "execution_profile_block_name": execution_name,
+        "max_jobs_in_queue": resolved_max_jobs_in_queue,
+        "max_prefect_concurrency": concurrency,
         "total_discovered_targets": len(discovered),
         "configured_target_overrides": prepared_target_overrides,
         "processed_targets": len(results),

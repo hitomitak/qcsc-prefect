@@ -182,13 +182,14 @@ result = bulk_gb_sqd_flow(
     output_root_dir="/shared/gb_sqd_runs/ligand_ext_miyabi",
     command_block_name="cmd-gb-sqd-ext",
     hpc_profile_block_name="hpc-miyabi-gb-sqd",
-    max_jobs_in_queue=8,
-    max_prefect_concurrency=8,
     num_recovery=2,
     num_batches=2,
     num_samples_per_batch=1000,
 )
 ```
+
+When these limits are omitted for Miyabi bulk runs, the flow now defaults to
+`max_prefect_concurrency=128` and `max_jobs_in_queue=256`.
 
 For a Miyabi GPU bulk run, create GPU-specific blocks and either pass them
 explicitly or set `resource_class="gpu"` to use the default `*-miyabi-gpu`
@@ -206,8 +207,6 @@ result = bulk_gb_sqd_flow(
     command_block_name="cmd-gb-sqd-trim",
     execution_profile_block_name="exec-gb-sqd-trim-miyabi-gpu",
     hpc_profile_block_name="hpc-miyabi-gpu-gb-sqd",
-    max_jobs_in_queue=8,
-    max_prefect_concurrency=8,
     num_recovery=1,
     num_batches=1,
     num_samples_per_recovery=100,

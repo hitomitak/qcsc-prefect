@@ -18,12 +18,13 @@ if (_project_root / "packages").exists():
     sys.path.insert(0, str(_project_root / "packages" / "qcsc-prefect-blocks" / "src"))
     sys.path.insert(0, str(_project_root / "packages" / "qcsc-prefect-executor" / "src"))
 
-from qcsc_prefect_blocks.common.blocks import HPCProfileBlock
+from qcsc_prefect_blocks.common.blocks import ExecutionProfileBlock, HPCProfileBlock
 from qcsc_prefect_executor.from_blocks import run_job_from_blocks
 
 from ..artifact_keys import bulk_metrics_artifact_key
 from ..cli_args import build_ext_sqd_user_args, build_trim_sqd_user_args
-from ..fugaku_queue import wait_for_queue_slot
+from ..fugaku_queue import wait_for_queue_slot as wait_for_fugaku_queue_slot
+from ..miyabi_queue import wait_for_queue_slot as wait_for_miyabi_queue_slot
 
 
 class NonRetryableBulkError(RuntimeError):
@@ -82,6 +83,43 @@ async def _resolve_loaded_block(value: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
     return value
+
+
+async def _resolve_queue_name(*, hpc_profile_block_name: str, execution_profile_block_name: str) -> tuple[str, str]:
+    hpc_block = await _resolve_loaded_block(HPCProfileBlock.load(hpc_profile_block_name))
+    execution_profile_block = await _resolve_loaded_block(ExecutionProfileBlock.load(execution_profile_block_name))
+
+    if execution_profile_block.resource_class == "gpu":
+        return hpc_block.hpc_target, hpc_block.queue_gpu
+    return hpc_block.hpc_target, hpc_block.queue_cpu
+
+
+async def _wait_for_submit_slot(
+    *,
+    hpc_target: str,
+    queue_name: str,
+    max_jobs_in_queue: int,
+    queue_limit_scope: str,
+    job_name_prefix: str,
+    queue_poll_interval_seconds: float,
+) -> int:
+    if hpc_target == "fugaku":
+        return await wait_for_fugaku_queue_slot(
+            resource_group=queue_name,
+            max_jobs_in_queue=max_jobs_in_queue,
+            scope=queue_limit_scope,
+            job_name_prefix=job_name_prefix,
+            poll_interval_seconds=queue_poll_interval_seconds,
+        )
+    if hpc_target == "miyabi":
+        return await wait_for_miyabi_queue_slot(
+            queue_name=queue_name,
+            max_jobs_in_queue=max_jobs_in_queue,
+            scope=queue_limit_scope,
+            job_name_prefix=job_name_prefix,
+            poll_interval_seconds=queue_poll_interval_seconds,
+        )
+    raise NonRetryableBulkError(f"Unsupported hpc_target for queue throttling: {hpc_target}")
 
 
 def _build_user_args(
@@ -202,9 +240,10 @@ async def bulk_target_run_task(
             "parameter_overrides": {},
         }
 
-    hpc_block = await _resolve_loaded_block(HPCProfileBlock.load(hpc_profile_block_name))
-    queue_name = hpc_block.queue_cpu
-    hpc_target = hpc_block.hpc_target
+    hpc_target, queue_name = await _resolve_queue_name(
+        hpc_profile_block_name=hpc_profile_block_name,
+        execution_profile_block_name=execution_profile_block_name,
+    )
     script_filename = _script_filename(mode, hpc_target)
 
     attempts_used = 0
@@ -214,19 +253,21 @@ async def bulk_target_run_task(
         attempt_dir = target_output_root / f"attempt_{attempt_number:03d}"
         attempt_dir.mkdir(parents=True, exist_ok=True)
         try:
-            if hpc_target == "fugaku":
-                active_count = await wait_for_queue_slot(
-                    resource_group=queue_name,
-                    max_jobs_in_queue=max_jobs_in_queue,
-                    scope=queue_limit_scope,
-                    job_name_prefix=job_name_prefix,
-                    poll_interval_seconds=queue_poll_interval_seconds,
-                )
-                logger.info(
-                    "Queue slot acquired for %s (active jobs before submit: %s)",
-                    relative_path,
-                    active_count,
-                )
+            active_count = await _wait_for_submit_slot(
+                hpc_target=hpc_target,
+                queue_name=queue_name,
+                max_jobs_in_queue=max_jobs_in_queue,
+                queue_limit_scope=queue_limit_scope,
+                job_name_prefix=job_name_prefix,
+                queue_poll_interval_seconds=queue_poll_interval_seconds,
+            )
+            logger.info(
+                "Queue slot acquired for %s on %s/%s (active jobs before submit: %s)",
+                relative_path,
+                hpc_target,
+                queue_name,
+                active_count,
+            )
 
             user_args = _build_user_args(
                 mode=mode,

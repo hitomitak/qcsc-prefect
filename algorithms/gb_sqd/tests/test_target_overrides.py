@@ -179,6 +179,32 @@ def test_bulk_flow_uses_miyabi_default_block_names_when_requested(tmp_path: Path
     assert submitted[0]["hpc_profile_block_name"] == "hpc-miyabi-gb-sqd"
 
 
+def test_bulk_flow_uses_miyabi_default_queue_limits_when_omitted(tmp_path: Path, monkeypatch):
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    _write_case(input_root / "case_a" / "atom_0001")
+
+    submitted: list[dict] = []
+    monkeypatch.setattr(bulk, "_get_bulk_target_run_task", lambda: _FakeBulkTargetTask(submitted))
+
+    with prefect_test_harness():
+        summary = bulk.bulk_gb_sqd_flow(
+            mode="ext_sqd",
+            hpc_target="miyabi",
+            input_root_dir=str(input_root),
+            output_root_dir=str(output_root),
+            max_target_task_retries=0,
+            num_batches=2,
+            num_recovery=1,
+            num_samples_per_batch=1000,
+            max_time=300,
+        )
+
+    assert summary["max_jobs_in_queue"] == 256
+    assert summary["max_prefect_concurrency"] == 128
+    assert submitted[0]["max_jobs_in_queue"] == 256
+
+
 def test_bulk_flow_uses_miyabi_gpu_default_block_names_when_requested(tmp_path: Path, monkeypatch):
     input_root = tmp_path / "input"
     output_root = tmp_path / "output"
