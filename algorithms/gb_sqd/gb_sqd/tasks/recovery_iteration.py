@@ -8,12 +8,11 @@ from typing import Any
 
 from prefect import get_run_logger, task
 
-import sys
-_project_root = Path(__file__).resolve().parents[4]
-if (_project_root / "packages").exists():
-    sys.path.insert(0, str(_project_root / "packages" / "qcsc-prefect-executor" / "src"))
-
-from qcsc_prefect_executor.from_blocks import run_job_from_blocks
+from ..prefect_support import (
+    build_scheduler_script_filename,
+    resolve_hpc_target,
+    run_job_from_blocks,
+)
 
 
 @task(
@@ -56,10 +55,10 @@ async def recovery_iteration_task(
 ) -> dict[str, Any]:
     """
     Execute one recovery iteration with all batches.
-    
+
     This task runs the gb-demo binary for a single recovery iteration,
     which internally processes all batches.
-    
+
     Args:
         iteration_id: Recovery iteration index (0-based)
         command_block_name: Name of the CommandBlock
@@ -91,22 +90,22 @@ async def recovery_iteration_task(
         verbose: Enable verbose logging
         work_dir: Working directory
         **kwargs: Additional parameters
-    
+
     Returns:
         Dictionary containing iteration results and paths
-    
+
     Raises:
         RuntimeError: If the iteration fails or output files are not found
     """
     logger = get_run_logger()
     logger.info(f"Starting recovery iteration {iteration_id}")
-    
+
     work_path = Path(work_dir).expanduser().resolve()
-    
+
     # Create iteration-specific directory
     iter_dir = work_path / f"recovery_{iteration_id}"
     iter_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Resolve input/output state for subcommand execution.
     if previous_result:
         state_in = Path(previous_result["state_file"]).expanduser().resolve()
@@ -119,18 +118,30 @@ async def recovery_iteration_task(
 
     # Build command arguments for `gb-demo recovery`.
     user_args = [
-        "--state-in", str(state_in),
-        "--state-out", str(state_out),
-        "--num-iters", str(num_iters_per_recovery),
-        "--iteration", str(iteration),
-        "--block", str(block),
-        "--tolerance", str(tolerance),
-        "--max_time", str(max_time),
-        "--adet_comm_size", str(adet_comm_size),
-        "--bdet_comm_size", str(bdet_comm_size),
-        "--task_comm_size", str(task_comm_size),
-        "--carryover_threshold", str(carryover_threshold),
-        "--output_dir", str(iter_dir),
+        "--state-in",
+        str(state_in),
+        "--state-out",
+        str(state_out),
+        "--num-iters",
+        str(num_iters_per_recovery),
+        "--iteration",
+        str(iteration),
+        "--block",
+        str(block),
+        "--tolerance",
+        str(tolerance),
+        "--max_time",
+        str(max_time),
+        "--adet_comm_size",
+        str(adet_comm_size),
+        "--bdet_comm_size",
+        str(bdet_comm_size),
+        "--task_comm_size",
+        str(task_comm_size),
+        "--carryover_threshold",
+        str(carryover_threshold),
+        "--output_dir",
+        str(iter_dir),
     ]
 
     # Mode-specific parameters
@@ -155,7 +166,7 @@ async def recovery_iteration_task(
         # In trim mode, only the final recovery task should use carryover_type=3.
         if iteration_id + 1 < num_recovery:
             user_args.append("--trim_no_final_carryover_type3")
-    
+
     # Optional flags
     if with_hf:
         user_args.append("--with_hf")
@@ -167,10 +178,11 @@ async def recovery_iteration_task(
         f"Mode: {mode}, state_in={state_in.name}, num_batches={num_batches}, "
         f"num_iters_per_recovery={num_iters_per_recovery}"
     )
-    
+
     # Execute the job
-    script_filename = f"recovery_{iteration_id}.pbs"  # or .pjm for Fugaku
-    
+    hpc_target = await resolve_hpc_target(hpc_profile_block_name=hpc_profile_block_name)
+    script_filename = build_scheduler_script_filename(f"recovery_{iteration_id}", hpc_target)
+
     result = await run_job_from_blocks(
         command_block_name=command_block_name,
         execution_profile_block_name=execution_profile_block_name,
@@ -201,11 +213,13 @@ async def recovery_iteration_task(
     carryover_alpha_file = None
     if carryover_alpha_path:
         candidate = Path(carryover_alpha_path)
-        carryover_alpha_file = str(candidate if candidate.is_absolute() else state_out.parent / candidate)
+        carryover_alpha_file = str(
+            candidate if candidate.is_absolute() else state_out.parent / candidate
+        )
         logger.info(f"Carryover(alpha): {carryover_alpha_file}")
-    
+
     logger.info(f"✓ Recovery iteration {iteration_id} complete")
-    
+
     return {
         "iteration_id": iteration_id,
         "status": "success",

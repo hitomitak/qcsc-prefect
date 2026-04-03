@@ -4,10 +4,9 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
-from gb_sqd.tasks.bulk_target_run import NonRetryableBulkError, bulk_target_run_task
 import gb_sqd.tasks.bulk_target_run as bulk_target_run_module
+import pytest
+from gb_sqd.tasks.bulk_target_run import NonRetryableBulkError, bulk_target_run_task
 
 
 class _FakeLogger:
@@ -57,15 +56,12 @@ async def test_bulk_target_run_task_retries_then_succeeds(tmp_path: Path, monkey
     _write_input_case(input_dir)
 
     monkeypatch.setattr(bulk_target_run_module, "get_run_logger", lambda: _FakeLogger())
+
+    async def fake_resolve_submission_target(**kwargs):
+        return SimpleNamespace(queue_name="small", hpc_target="fugaku")
+
     monkeypatch.setattr(
-        bulk_target_run_module.HPCProfileBlock,
-        "load",
-        staticmethod(lambda _: SimpleNamespace(queue_cpu="small", hpc_target="fugaku")),
-    )
-    monkeypatch.setattr(
-        bulk_target_run_module.ExecutionProfileBlock,
-        "load",
-        staticmethod(lambda _: SimpleNamespace(resource_class="cpu")),
+        bulk_target_run_module, "resolve_submission_target", fake_resolve_submission_target
     )
 
     queue_calls: list[dict[str, object]] = []
@@ -85,7 +81,9 @@ async def test_bulk_target_run_task_retries_then_succeeds(tmp_path: Path, monkey
         energy_log_file.write_text(json.dumps({"energy_final": -123.456}))
         return SimpleNamespace(exit_status=0, job_id="job-0002", state="EXT")
 
-    monkeypatch.setattr(bulk_target_run_module, "wait_for_fugaku_queue_slot", fake_wait_for_queue_slot)
+    monkeypatch.setattr(
+        bulk_target_run_module, "wait_for_fugaku_queue_slot", fake_wait_for_queue_slot
+    )
     monkeypatch.setattr(bulk_target_run_module, "run_job_from_blocks", fake_run_job_from_blocks)
 
     result = await bulk_target_run_task.fn(
@@ -116,6 +114,7 @@ async def test_bulk_target_run_task_retries_then_succeeds(tmp_path: Path, monkey
     assert len(queue_calls) == 2
     assert all(call["resource_group"] == "small" for call in queue_calls)
     assert len(run_calls) == 2
+    assert all(call["script_filename"] == "gb_sqd_ext.pjm" for call in run_calls)
 
     status_file = output_root_dir / "case_a" / "atom_1" / "target_status.json"
     status = json.loads(status_file.read_text())
@@ -151,10 +150,12 @@ async def test_bulk_target_run_task_skips_completed_target(tmp_path: Path, monke
     )
 
     monkeypatch.setattr(bulk_target_run_module, "get_run_logger", lambda: _FakeLogger())
+
+    async def fail_resolve_submission_target(**kwargs):
+        raise AssertionError("Submission target should not be resolved")
+
     monkeypatch.setattr(
-        bulk_target_run_module.HPCProfileBlock,
-        "load",
-        staticmethod(lambda _: (_ for _ in ()).throw(AssertionError("HPC block should not be loaded"))),
+        bulk_target_run_module, "resolve_submission_target", fail_resolve_submission_target
     )
     monkeypatch.setattr(
         bulk_target_run_module,
@@ -229,15 +230,12 @@ async def test_bulk_target_run_task_runs_on_miyabi_with_miyabi_queue_gate(
     _write_input_case(input_dir)
 
     monkeypatch.setattr(bulk_target_run_module, "get_run_logger", lambda: _FakeLogger())
+
+    async def fake_resolve_submission_target(**kwargs):
+        return SimpleNamespace(queue_name="regular-c", hpc_target="miyabi")
+
     monkeypatch.setattr(
-        bulk_target_run_module.HPCProfileBlock,
-        "load",
-        staticmethod(lambda _: SimpleNamespace(queue_cpu="regular-c", hpc_target="miyabi")),
-    )
-    monkeypatch.setattr(
-        bulk_target_run_module.ExecutionProfileBlock,
-        "load",
-        staticmethod(lambda _: SimpleNamespace(resource_class="cpu")),
+        bulk_target_run_module, "resolve_submission_target", fake_resolve_submission_target
     )
 
     queue_calls: list[dict[str, object]] = []
@@ -252,14 +250,20 @@ async def test_bulk_target_run_task_runs_on_miyabi_with_miyabi_queue_gate(
         run_calls.append(kwargs)
         energy_log_file = Path(kwargs["work_dir"]) / "energy_log.json"
         energy_log_file.write_text(json.dumps({"energy_final": -7.5}))
-        return SimpleNamespace(exit_status=0, job_id="12345.miyabi", job_status={"Exit_status": "0"})
+        return SimpleNamespace(
+            exit_status=0, job_id="12345.miyabi", job_status={"Exit_status": "0"}
+        )
 
     monkeypatch.setattr(
         bulk_target_run_module,
         "wait_for_fugaku_queue_slot",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("Fugaku queue throttling should not be used")),
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("Fugaku queue throttling should not be used")
+        ),
     )
-    monkeypatch.setattr(bulk_target_run_module, "wait_for_miyabi_queue_slot", fake_wait_for_miyabi_queue_slot)
+    monkeypatch.setattr(
+        bulk_target_run_module, "wait_for_miyabi_queue_slot", fake_wait_for_miyabi_queue_slot
+    )
     monkeypatch.setattr(bulk_target_run_module, "run_job_from_blocks", fake_run_job_from_blocks)
 
     result = await bulk_target_run_task.fn(

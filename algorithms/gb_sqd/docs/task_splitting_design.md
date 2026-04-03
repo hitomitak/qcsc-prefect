@@ -39,17 +39,21 @@ Notes:
 The current function requires all of the following parameters:
 
 ```python
+from qcsc_prefect_executor.from_blocks import build_scheduler_script_filename
+
 await run_job_from_blocks(
     command_block_name=...,                # required
     execution_profile_block_name=...,      # required
     hpc_profile_block_name=...,            # required
     work_dir=Path(...),                    # required
-    script_filename="recovery_0.pbs",      # required
+    script_filename=build_scheduler_script_filename("recovery_0", hpc_target),
     user_args=[...],
 )
 ```
 
 Any call that omits required parameters fails with `TypeError`.
+In the current GB-SQD implementation, task code resolves `hpc_target` from the
+selected `HPCProfileBlock` and keeps only the logical script stem in workflow code.
 
 ## 4. Command / Block Mapping
 

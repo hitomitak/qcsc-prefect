@@ -3,25 +3,23 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
-import tomllib
 from pathlib import Path
+
+import tomllib
+from gb_sqd._workspace_support import ensure_workspace_packages
 
 
 def _import_block_classes():
     """Import block classes from qcsc-prefect packages."""
-    # Add qcsc-prefect packages to path if running in development mode
-    project_root = Path(__file__).resolve().parents[2]
-    if (project_root / "packages").exists():
-        sys.path.insert(0, str(project_root / "packages" / "qcsc-prefect-blocks" / "src"))
-    
+    ensure_workspace_packages("qcsc-prefect-blocks")
+
     from qcsc_prefect_blocks.common.blocks import (
         CommandBlock,
         ExecutionProfileBlock,
         HPCProfileBlock,
     )
-    
+
     return CommandBlock, ExecutionProfileBlock, HPCProfileBlock
 
 
@@ -89,7 +87,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Create Prefect blocks for GB SQD workflows (Miyabi or Fugaku)."
     )
-    
+
     parser.add_argument(
         "--config",
         type=Path,
@@ -111,7 +109,7 @@ def _parse_args() -> argparse.Namespace:
         "--work-dir",
         help="Working directory for job outputs (overrides config)",
     )
-    
+
     # Execution parameters (override config)
     parser.add_argument("--num-nodes", type=int, help="Number of nodes (overrides config)")
     parser.add_argument("--mpiprocs", type=int, help="MPI processes per node (overrides config)")
@@ -121,27 +119,35 @@ def _parse_args() -> argparse.Namespace:
         "--launcher",
         help="MPI launcher (overrides config)",
     )
-    
+
     # Executable path (override config)
     parser.add_argument(
         "--executable",
         help="Path to gb-demo executable (overrides config)",
     )
-    
+
     # Modules and environment (override config)
     parser.add_argument("--modules", nargs="*", help="Modules to load (overrides config)")
     parser.add_argument("--mpi-options", nargs="*", help="MPI options (overrides config)")
-    
+
     # Fugaku-specific (override config)
     parser.add_argument("--fugaku-gfscache", help="Fugaku GFS cache (overrides config)")
-    parser.add_argument("--fugaku-spack-modules", nargs="*", help="Fugaku spack modules (overrides config)")
-    parser.add_argument("--fugaku-mpi-options-for-pjm", nargs="*", help="Fugaku MPI options for PJM (overrides config)")
+    parser.add_argument(
+        "--fugaku-spack-modules", nargs="*", help="Fugaku spack modules (overrides config)"
+    )
+    parser.add_argument(
+        "--fugaku-mpi-options-for-pjm",
+        nargs="*",
+        help="Fugaku MPI options for PJM (overrides config)",
+    )
     parser.add_argument(
         "--fugaku-pjm-resources",
         nargs="*",
-        help='Additional Fugaku PJM -L directives such as "freq=2000,eco_state=2" (overrides config)',
+        help=(
+            'Additional Fugaku PJM -L directives such as "freq=2000,eco_state=2" (overrides config)'
+        ),
     )
-    
+
     # Block names (override config)
     parser.add_argument(
         "--command-block-name-ext",
@@ -191,14 +197,14 @@ def _parse_args() -> argparse.Namespace:
         "--hpc-profile-block-name",
         help="Name for HPC profile block (overrides config)",
     )
-    
+
     return parser.parse_args()
 
 
 def main() -> None:
     """Main function to create blocks."""
     args = _parse_args()
-    
+
     # Load config if provided
     config = {}
     if args.config:
@@ -207,7 +213,7 @@ def main() -> None:
             sys.exit(1)
         config = _load_config(args.config)
         print(f"Loaded configuration from: {args.config}")
-    
+
     # Merge config and CLI args (CLI args take precedence)
     def get_value(arg_name: str, config_key: str | None = None, default=None):
         """Get value from CLI args, config, or default."""
@@ -216,7 +222,7 @@ def main() -> None:
         if arg_value is not None:
             return arg_value
         return config.get(key, default)
-    
+
     # Required parameters
     hpc_target = get_value("hpc_target")
     resource_class = str(get_value("resource_class", default="cpu")).strip().lower()
@@ -232,18 +238,18 @@ def main() -> None:
     if resource_class not in {"cpu", "gpu"}:
         print(f"Error: Unsupported resource_class={resource_class!r}. Use 'cpu' or 'gpu'.")
         sys.exit(1)
-    
+
     CommandBlock, ExecutionProfileBlock, HPCProfileBlock = _import_block_classes()
     _register_block_types(CommandBlock, ExecutionProfileBlock, HPCProfileBlock)
-    
+
     is_miyabi = hpc_target == "miyabi"
-    
+
     # Get execution parameters
     num_nodes = get_value("num_nodes", default=1)
     mpiprocs = get_value("mpiprocs", default=1)
     ompthreads = get_value("ompthreads", default=None if is_miyabi else 48)
     walltime = get_value("walltime", default="01:00:00")
-    
+
     # Determine launcher
     launcher = get_value("launcher")
     if launcher is None:
@@ -251,7 +257,7 @@ def main() -> None:
             launcher = "mpiexec.hydra" if resource_class == "cpu" else "mpirun"
         else:
             launcher = "mpirun"
-    
+
     # Get modules
     modules = get_value("modules")
     if modules is None:
@@ -259,7 +265,7 @@ def main() -> None:
             modules = ["intel/2023.2.0", "impi/2021.10.0"] if resource_class == "cpu" else []
         else:
             modules = ["LLVM/llvmorg-21.1.0"]
-    
+
     # Get MPI options
     mpi_options = get_value("mpi_options")
     if mpi_options is None:
@@ -267,7 +273,7 @@ def main() -> None:
             mpi_options = [] if resource_class == "cpu" else ["-n", str(num_nodes * mpiprocs)]
         else:
             mpi_options = ["-n", str(num_nodes)]
-    
+
     # Determine executable path
     executable = get_value("executable")
     if executable:
@@ -310,13 +316,11 @@ def main() -> None:
         "execution_profile_block_name_finalize",
         default=f"exec-gb-sqd-finalize-{target_name}",
     )
-    hpc_block_name = get_value("hpc_profile_block_name") or (
-        f"hpc-{target_name}-gb-sqd"
-    )
-    
+    hpc_block_name = get_value("hpc_profile_block_name") or (f"hpc-{target_name}-gb-sqd")
+
     # Create CommandBlocks
     print("Creating CommandBlocks...")
-    
+
     CommandBlock(
         command_name="gb-sqd-ext",
         executable_key="gb_sqd",
@@ -324,7 +328,7 @@ def main() -> None:
         default_args=["--mode", "ext_sqd"],
     ).save(cmd_block_ext, overwrite=True)
     print(f"  ✓ {cmd_block_ext}")
-    
+
     CommandBlock(
         command_name="gb-sqd-trim",
         executable_key="gb_sqd",
@@ -356,10 +360,10 @@ def main() -> None:
         default_args=["finalize"],
     ).save(cmd_block_finalize, overwrite=True)
     print(f"  ✓ {cmd_block_finalize}")
-    
+
     # Create ExecutionProfileBlock
     print("\nCreating ExecutionProfileBlock...")
-    
+
     def _save_execution_profile(*, block_name: str, profile_name: str, command_name: str) -> None:
         environments = (
             {
@@ -413,10 +417,10 @@ def main() -> None:
         profile_name=f"gb-sqd-finalize-{target_name}",
         command_name="gb-sqd-finalize",
     )
-    
+
     # Create HPCProfileBlock
     print("\nCreating HPCProfileBlock...")
-    
+
     if is_miyabi:
         queue_cpu = queue if resource_class == "cpu" else "regular-c"
         queue_gpu = queue if resource_class == "gpu" else "regular-g"
@@ -431,9 +435,11 @@ def main() -> None:
     else:
         fugaku_gfscache = get_value("fugaku_gfscache", default="/vol0004:/vol0002")
         fugaku_spack_modules = get_value("fugaku_spack_modules", default=[])
-        fugaku_mpi_options = get_value("fugaku_mpi_options_for_pjm", default=["max-proc-per-node=1"])
+        fugaku_mpi_options = get_value(
+            "fugaku_mpi_options_for_pjm", default=["max-proc-per-node=1"]
+        )
         fugaku_pjm_resources = get_value("fugaku_pjm_resources", default=["freq=2000,eco_state=2"])
-        
+
         HPCProfileBlock(
             hpc_target="fugaku",
             queue_cpu=queue,
@@ -446,9 +452,9 @@ def main() -> None:
             mpi_options_for_pjm=fugaku_mpi_options,
             pjm_resources=fugaku_pjm_resources,
         ).save(hpc_block_name, overwrite=True)
-    
+
     print(f"  ✓ {hpc_block_name}")
-    
+
     # Summary
     print("\n" + "=" * 60)
     print("✓ Blocks created successfully!")
@@ -461,7 +467,7 @@ def main() -> None:
     print(f"Queue: {queue}")
     print(f"Work Directory: {work_dir}")
     print(f"Executable: {executable_path}")
-    print(f"\nCommand Blocks:")
+    print("\nCommand Blocks:")
     print(f"  - {cmd_block_ext}")
     print(f"  - {cmd_block_trim}")
     print(f"  - {cmd_block_init}")

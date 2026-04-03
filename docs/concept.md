@@ -68,6 +68,7 @@ For local Slurm testing with Docker, see
 #### [`qcsc-prefect-executor`](../packages/qcsc-prefect-executor/)
 High-level execution API that orchestrates the entire workflow:
 - [`run_job_from_blocks()`](../packages/qcsc-prefect-executor/src/qcsc_prefect_executor/from_blocks.py): Main entry point for block-based execution
+- Scheduler resolution helpers such as `resolve_submission_target()` and `build_scheduler_script_filename()`
 - System-specific runners: [`run_miyabi_job()`](../packages/qcsc-prefect-executor/src/qcsc_prefect_executor/miyabi/run.py), [`run_fugaku_job()`](../packages/qcsc-prefect-executor/src/qcsc_prefect_executor/fugaku/run.py)
 - Automatic block resolution and job lifecycle management
 
@@ -147,7 +148,10 @@ hpc_profile.save("hpc-miyabi", overwrite=True)
 
 ```python
 from prefect import flow
-from qcsc_prefect_executor.from_blocks import run_job_from_blocks
+from qcsc_prefect_executor.from_blocks import (
+    build_scheduler_script_filename,
+    run_job_from_blocks,
+)
 
 @flow
 async def my_workflow():
@@ -156,7 +160,7 @@ async def my_workflow():
         execution_profile_block_name="exec-simulation-mpi-16",
         hpc_profile_block_name="hpc-miyabi",
         work_dir="./work/my-simulation",
-        script_filename="my_simulation.pbs",
+        script_filename=build_scheduler_script_filename("my_simulation", "miyabi"),
         user_args=["--input", "data.txt"],
     )
     return result
@@ -178,16 +182,20 @@ asyncio.run(my_workflow())
 
 ### 2. Portability
 
-The same workflow code runs on different HPC systems by simply changing the `HPCProfileBlock`:
+The same workflow code runs on different HPC systems by simply changing the
+`HPCProfileBlock`. The workflow can keep a logical script stem and let
+`build_scheduler_script_filename()` choose the scheduler-specific suffix:
 
 ```python
+from qcsc_prefect_executor.from_blocks import build_scheduler_script_filename
+
 # Run on Miyabi
 result = await run_job_from_blocks(
     command_block_name="cmd-simulation",
     execution_profile_block_name="exec-simulation-mpi",
     hpc_profile_block_name="hpc-miyabi",  # ← Change this
     work_dir="./work/simulation",
-    script_filename="simulation.pbs",
+    script_filename=build_scheduler_script_filename("simulation", "miyabi"),
 )
 
 # Run on Fugaku (same workflow code!)
@@ -196,7 +204,7 @@ result = await run_job_from_blocks(
     execution_profile_block_name="exec-simulation-mpi",
     hpc_profile_block_name="hpc-fugaku",  # ← Only this changes
     work_dir="./work/simulation",
-    script_filename="simulation.pjm",
+    script_filename=build_scheduler_script_filename("simulation", "fugaku"),
 )
 ```
 
@@ -225,7 +233,7 @@ Users can keep workflow code stable while changing behavior by:
 |--------|-----------|--------|----------------|
 | **Miyabi** | PBS/Torque | ✅ Supported | [`qcsc_prefect_adapters.miyabi`](../packages/qcsc-prefect-adapters/src/qcsc_prefect_adapters/miyabi/) |
 | **Fugaku** | PJM | ✅ Supported | [`qcsc_prefect_adapters.fugaku`](../packages/qcsc-prefect-adapters/src/qcsc_prefect_adapters/fugaku/) |
-| **Slurm** | Slurm | 🚧 Planned | - |
+| **Slurm** | Slurm | ✅ Supported | [`qcsc_prefect_adapters.slurm`](../packages/qcsc-prefect-adapters/src/qcsc_prefect_adapters/slurm/) |
 
 ---
 

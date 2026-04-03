@@ -6,6 +6,11 @@ Prefect workflow integration for GB SQD (ExtSQD and TrimSQD) algorithms.
 
 This package provides Prefect workflows for running ExtSQD and TrimSQD algorithms on HPC systems (Fugaku, Miyabi).
 
+Workflow-side Prefect enablement is intentionally thin:
+- `qcsc_prefect_executor.from_blocks` resolves scheduler routing from blocks
+- GB-SQD tasks keep logical script stems (`init`, `recovery_0`, `gb_sqd_ext`, ...)
+- the executor helper chooses the actual scheduler script suffix (`.pbs`, `.pjm`, `.slurm`)
+
 ### Supported Workflows
 
 - **ExtSQD**: Extended Subspace Quantum Diagonalization
@@ -369,6 +374,7 @@ work_dir/
 ```
 
 Scheduler script files and scheduler logs (for example `*.pbs`, `*.pjm`, `*.out`, `*.err`) are also created under each task directory by `run_job_from_blocks`.
+The exact script extension is selected from the target `HPCProfileBlock`.
 
 ### Failure Handling and Re-run
 

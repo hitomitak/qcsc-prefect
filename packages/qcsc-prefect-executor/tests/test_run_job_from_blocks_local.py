@@ -335,7 +335,9 @@ def test_run_job_from_blocks_dispatches_to_slurm(monkeypatch, tmp_path: Path):
     assert captured["exec_profile"].arguments == ["--base", "--override"]
 
 
-def test_run_job_from_blocks_rejects_unknown_execution_profile_override(monkeypatch, tmp_path: Path):
+def test_run_job_from_blocks_rejects_unknown_execution_profile_override(
+    monkeypatch, tmp_path: Path
+):
     command = _CommandBlockStub("bitcount-hist", "bitcount_hist", [])
     profile = _ExecutionProfileBlockStub(profile_name="bitcount-mpi", command_name="bitcount-hist")
     hpc = _HPCProfileBlockStub(
@@ -368,3 +370,51 @@ def test_run_job_from_blocks_rejects_unknown_execution_profile_override(monkeypa
         assert "Unsupported execution_profile_overrides keys" in str(exc)
     else:
         raise AssertionError("Expected ValueError for unknown execution_profile_overrides key")
+
+
+def test_resolve_submission_target_uses_gpu_route(monkeypatch):
+    profile = _ExecutionProfileBlockStub(
+        profile_name="bitcount-gpu",
+        command_name="bitcount-hist",
+        resource_class="gpu",
+    )
+    hpc = _HPCProfileBlockStub(
+        hpc_target="fugaku",
+        executable_map={"bitcount_hist": "/vol0001/home/z99999/get_counts_hist"},
+        queue_cpu="small",
+        queue_gpu="gpu-small",
+        project_cpu="hp200999",
+        project_gpu="hp300999",
+    )
+
+    async def fake_profile_load(_name: str):
+        return profile
+
+    async def fake_hpc_load(_name: str):
+        return hpc
+
+    class _ProfileAPI:
+        load = staticmethod(fake_profile_load)
+
+    class _HpcAPI:
+        load = staticmethod(fake_hpc_load)
+
+    monkeypatch.setattr(mod, "ExecutionProfileBlock", _ProfileAPI)
+    monkeypatch.setattr(mod, "HPCProfileBlock", _HpcAPI)
+
+    target = asyncio.run(
+        mod.resolve_submission_target(
+            execution_profile_block_name="exec",
+            hpc_profile_block_name="hpc",
+        )
+    )
+
+    assert target.hpc_target == "fugaku"
+    assert target.queue_name == "gpu-small"
+    assert target.project == "hp300999"
+
+
+def test_build_scheduler_script_filename_rewrites_scheduler_suffix():
+    assert mod.build_scheduler_script_filename("job", "miyabi") == "job.pbs"
+    assert mod.build_scheduler_script_filename("job.pbs", "fugaku") == "job.pjm"
+    assert mod.build_scheduler_script_filename("job.pjm", "slurm") == "job.slurm"

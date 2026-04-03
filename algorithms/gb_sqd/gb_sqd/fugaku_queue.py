@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import getpass
+import importlib
 import re
-import sys
-from pathlib import Path
 from typing import Any
 
-_project_root = Path(__file__).resolve().parents[3]
-if (_project_root / "packages").exists():
-    sys.path.insert(0, str(_project_root / "packages" / "qcsc-prefect-adapters" / "src"))
+from ._workspace_support import ensure_workspace_packages
 
-from qcsc_prefect_adapters.fugaku.runtime import FugakuPJMRuntime, run_command
+ensure_workspace_packages("qcsc-prefect-adapters")
+_runtime = importlib.import_module("qcsc_prefect_adapters.fugaku.runtime")
+FugakuPJMRuntime = _runtime.FugakuPJMRuntime
+run_command = _runtime.run_command
 
 
 TERMINAL_STATES = {"EXT", "CCL"}

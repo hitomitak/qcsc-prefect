@@ -3,43 +3,32 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 from pathlib import Path
-import sys
 from typing import Any
 
 from prefect import get_run_logger, task
-
-_project_root = Path(__file__).resolve().parents[4]
-if (_project_root / "packages").exists():
-    sys.path.insert(0, str(_project_root / "packages" / "qcsc-prefect-core" / "src"))
-    sys.path.insert(0, str(_project_root / "packages" / "qcsc-prefect-adapters" / "src"))
-    sys.path.insert(0, str(_project_root / "packages" / "qcsc-prefect-blocks" / "src"))
-    sys.path.insert(0, str(_project_root / "packages" / "qcsc-prefect-executor" / "src"))
-
-from qcsc_prefect_blocks.common.blocks import ExecutionProfileBlock, HPCProfileBlock
-from qcsc_prefect_executor.from_blocks import run_job_from_blocks
 
 from ..artifact_keys import bulk_metrics_artifact_key
 from ..cli_args import build_ext_sqd_user_args, build_trim_sqd_user_args
 from ..fugaku_queue import wait_for_queue_slot as wait_for_fugaku_queue_slot
 from ..miyabi_queue import wait_for_queue_slot as wait_for_miyabi_queue_slot
+from ..prefect_support import (
+    build_scheduler_script_filename,
+    resolve_submission_target,
+    run_job_from_blocks,
+)
 
 
 class NonRetryableBulkError(RuntimeError):
     """Raised when retrying the target would not help."""
 
 
-def _script_filename(mode: str, hpc_target: str) -> str:
-    stem = "gb_sqd_ext" if mode == "ext_sqd" else "gb_sqd_trim"
-    suffix = ".pjm" if hpc_target == "fugaku" else ".pbs"
-    return stem + suffix
-
-
 def _make_fugaku_job_name(job_name_prefix: str, mode: str, relative_path: str, attempt: int) -> str:
     digest = hashlib.sha1(f"{mode}:{relative_path}:{attempt}".encode("utf-8")).hexdigest()[:10]
-    normalized_prefix = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in job_name_prefix).strip("-")
+    normalized_prefix = "".join(
+        ch if ch.isalnum() or ch in "-_" else "-" for ch in job_name_prefix
+    ).strip("-")
     normalized_prefix = normalized_prefix or "gbsqd"
     mode_tag = "ext" if mode == "ext_sqd" else "trim"
     return f"{normalized_prefix}-{mode_tag}-{digest}"[:63]
@@ -77,21 +66,6 @@ def _next_attempt_number(target_output_root: Path, status: dict[str, Any]) -> in
             except (IndexError, ValueError):
                 continue
     return max(seen_attempts, default=0) + 1
-
-
-async def _resolve_loaded_block(value: Any) -> Any:
-    if inspect.isawaitable(value):
-        return await value
-    return value
-
-
-async def _resolve_queue_name(*, hpc_profile_block_name: str, execution_profile_block_name: str) -> tuple[str, str]:
-    hpc_block = await _resolve_loaded_block(HPCProfileBlock.load(hpc_profile_block_name))
-    execution_profile_block = await _resolve_loaded_block(ExecutionProfileBlock.load(execution_profile_block_name))
-
-    if execution_profile_block.resource_class == "gpu":
-        return hpc_block.hpc_target, hpc_block.queue_gpu
-    return hpc_block.hpc_target, hpc_block.queue_cpu
 
 
 async def _wait_for_submit_slot(
@@ -240,11 +214,14 @@ async def bulk_target_run_task(
             "parameter_overrides": {},
         }
 
-    hpc_target, queue_name = await _resolve_queue_name(
+    submission_target = await resolve_submission_target(
         hpc_profile_block_name=hpc_profile_block_name,
         execution_profile_block_name=execution_profile_block_name,
     )
-    script_filename = _script_filename(mode, hpc_target)
+    hpc_target = submission_target.hpc_target
+    queue_name = submission_target.queue_name
+    script_stem = "gb_sqd_ext" if mode == "ext_sqd" else "gb_sqd_trim"
+    script_filename = build_scheduler_script_filename(script_stem, hpc_target)
 
     attempts_used = 0
     next_attempt = _next_attempt_number(target_output_root, status)

@@ -31,7 +31,8 @@ qcsc-prefect/
 - `packages/qcsc-prefect-adapters/`
   Target-specific script builders and runtime adapters (currently Miyabi/PBS and Fugaku/PJM).
 - `packages/qcsc-prefect-executor/`
-  High-level execution entrypoints that resolve blocks and dispatch to target runtimes.
+  High-level execution entrypoints that resolve blocks, derive scheduler routing,
+  and dispatch to target runtimes.
 - `examples/`
   End-to-end runnable examples for Miyabi and Fugaku.
 - `docs/`

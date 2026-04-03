@@ -3,23 +3,23 @@
 import json
 import os
 import pathlib
-import sys
 from pathlib import Path
 from typing import Any
 
 from prefect import flow, get_run_logger
 
-# qcsc-prefectパッケージのインポート
-# 開発時はローカルのqcsc-prefectを参照
-_project_root = Path(__file__).resolve().parents[3]
-if (_project_root / "packages").exists():
-    sys.path.insert(0, str(_project_root / "packages" / "qcsc-prefect-executor" / "src"))
-    sys.path.insert(0, str(_project_root / "packages" / "qcsc-prefect-blocks" / "src"))
-
-from qcsc_prefect_executor.from_blocks import run_job_from_blocks
-
-from .bulk import bulk_gb_sqd_flow
 from .cli_args import build_ext_sqd_user_args, build_trim_sqd_user_args
+from .prefect_support import (
+    build_scheduler_script_filename,
+    resolve_hpc_target,
+    run_job_from_blocks,
+)
+from .tasks import (
+    final_diagonalization_task,
+    initialize_task,
+    output_results_task,
+    recovery_iteration_task,
+)
 
 
 @flow(name="GB-SQD-ExtSQD-Simple")
@@ -51,9 +51,9 @@ async def ext_sqd_simple_flow(
 ) -> dict[str, Any]:
     """
     Run a simple ExtSQD workflow (single execution).
-    
+
     This is a minimal implementation that wraps the existing gb-demo binary.
-    
+
     Args:
         init_command_block_name: Name of init CommandBlock
         recovery_command_block_name: Name of recovery CommandBlock
@@ -79,16 +79,16 @@ async def ext_sqd_simple_flow(
         carryover_ratio: Fraction of bitstrings to retain
         with_hf: Whether to include HF state
         verbose: Enable verbose logging
-    
+
     Returns:
         Dictionary containing execution results
     """
     logger = get_run_logger()
     logger.info("Starting GB-SQD ExtSQD workflow")
-    
+
     work_path = Path(work_dir).expanduser().resolve()
     work_path.mkdir(parents=True, exist_ok=True)
-    
+
     user_args = build_ext_sqd_user_args(
         fcidump_file=fcidump_file,
         count_dict_file=count_dict_file,
@@ -112,24 +112,25 @@ async def ext_sqd_simple_flow(
         with_hf=with_hf,
         verbose=verbose,
     )
-    
+
     logger.info(f"Work directory: {work_path}")
     logger.info(f"FCIDUMP: {fcidump_file}")
     logger.info(f"Count dict: {count_dict_file}")
-    
+
     # Execute the job
+    hpc_target = await resolve_hpc_target(hpc_profile_block_name=hpc_profile_block_name)
     result = await run_job_from_blocks(
         command_block_name=command_block_name,
         execution_profile_block_name=execution_profile_block_name,
         hpc_profile_block_name=hpc_profile_block_name,
         work_dir=work_path,
-        script_filename="gb_sqd_ext.pbs",  # or .pjm for Fugaku
+        script_filename=build_scheduler_script_filename("gb_sqd_ext", hpc_target),
         user_args=user_args,
         watch_poll_interval=10.0,
         timeout_seconds=max_time * 2,  # Allow some buffer
         metrics_artifact_key="gb-sqd-ext-metrics",
     )
-    
+
     # Load and return results
     energy_log_file = work_path / "energy_log.json"
     if energy_log_file.exists():
@@ -182,7 +183,7 @@ async def trim_sqd_simple_flow(
 ) -> dict[str, Any]:
     """
     Run a simple TrimSQD workflow (single execution).
-    
+
     Args:
         init_command_block_name: Name of init CommandBlock
         recovery_command_block_name: Name of recovery CommandBlock
@@ -212,16 +213,16 @@ async def trim_sqd_simple_flow(
         carryover_threshold: Threshold for carryover selection
         with_hf: Whether to include HF state
         verbose: Enable verbose logging
-    
+
     Returns:
         Dictionary containing execution results
     """
     logger = get_run_logger()
     logger.info("Starting GB-SQD TrimSQD workflow")
-    
+
     work_path = Path(work_dir).expanduser().resolve()
     work_path.mkdir(parents=True, exist_ok=True)
-    
+
     user_args = build_trim_sqd_user_args(
         fcidump_file=fcidump_file,
         count_dict_file=count_dict_file,
@@ -248,24 +249,25 @@ async def trim_sqd_simple_flow(
         with_hf=with_hf,
         verbose=verbose,
     )
-    
+
     logger.info(f"Work directory: {work_path}")
     logger.info(f"FCIDUMP: {fcidump_file}")
     logger.info(f"Count dict: {count_dict_file}")
-    
+
     # Execute the job
+    hpc_target = await resolve_hpc_target(hpc_profile_block_name=hpc_profile_block_name)
     result = await run_job_from_blocks(
         command_block_name=command_block_name,
         execution_profile_block_name=execution_profile_block_name,
         hpc_profile_block_name=hpc_profile_block_name,
         work_dir=work_path,
-        script_filename="gb_sqd_trim.pbs",  # or .pjm for Fugaku
+        script_filename=build_scheduler_script_filename("gb_sqd_trim", hpc_target),
         user_args=user_args,
         watch_poll_interval=10.0,
         timeout_seconds=max_time * 2,
         metrics_artifact_key="gb-sqd-trim-metrics",
     )
-    
+
     # Load and return results
     energy_log_file = work_path / "energy_log.json"
     if energy_log_file.exists():
@@ -285,16 +287,10 @@ async def trim_sqd_simple_flow(
             "job_result": result,
         }
 
+
 # ============================================================================
 # Task-based workflows with improved visibility and restart capability
 # ============================================================================
-
-from .tasks import (
-    initialize_task,
-    recovery_iteration_task,
-    final_diagonalization_task,
-    output_results_task,
-)
 
 
 @flow(name="GB-SQD-ExtSQD")
@@ -327,9 +323,9 @@ async def ext_sqd_flow(
 ) -> dict[str, Any]:
     """
     Run ExtSQD workflow with task-based execution for improved visibility.
-    
+
     This workflow splits execution into multiple tasks for better observability.
-    
+
     Args:
         init_command_block_name: Name of init CommandBlock
         recovery_command_block_name: Name of recovery CommandBlock
@@ -356,7 +352,7 @@ async def ext_sqd_flow(
         carryover_ratio: Fraction of bitstrings to retain
         with_hf: Whether to include HF state
         verbose: Enable verbose logging
-    
+
     Returns:
         Dictionary containing execution results
     """
@@ -367,7 +363,7 @@ async def ext_sqd_flow(
         raise ValueError("num_recovery must be >= 1")
     if num_iters_per_recovery < 1:
         raise ValueError("num_iters_per_recovery must be >= 1")
-    
+
     # Step 1: Initialize
     init_data = await initialize_task(
         mode="ext_sqd",
@@ -380,12 +376,12 @@ async def ext_sqd_flow(
         verbose=verbose,
         max_time=max_time,
     )
-    
+
     # Step 2: Recovery iterations (sequential)
     recovery_results = []
     for iter_id in range(num_recovery):
-        logger.info(f"Recovery iteration {iter_id+1}/{num_recovery}")
-        
+        logger.info(f"Recovery iteration {iter_id + 1}/{num_recovery}")
+
         result = await recovery_iteration_task(
             iteration_id=iter_id,
             command_block_name=recovery_command_block_name,
@@ -418,7 +414,7 @@ async def ext_sqd_flow(
             work_dir=work_dir,
         )
         recovery_results.append(result)
-    
+
     # Step 3: Final diagonalization
     final_result = await final_diagonalization_task(
         command_block_name=finalize_command_block_name,
@@ -429,13 +425,13 @@ async def ext_sqd_flow(
         verbose=verbose,
         max_time=max_time,
     )
-    
+
     # Step 4: Output results
     output = output_results_task(
         final_result=final_result,
         work_dir=work_dir,
     )
-    
+
     logger.info("✓ GB-SQD ExtSQD workflow complete")
     return output
 
@@ -474,9 +470,9 @@ async def trim_sqd_flow(
 ) -> dict[str, Any]:
     """
     Run TrimSQD workflow with task-based execution for improved visibility.
-    
+
     This workflow splits execution into multiple tasks for better observability.
-    
+
     Args:
         init_command_block_name: Name of init CommandBlock
         recovery_command_block_name: Name of recovery CommandBlock
@@ -507,7 +503,7 @@ async def trim_sqd_flow(
         carryover_threshold: Threshold for carryover selection
         with_hf: Whether to include HF state
         verbose: Enable verbose logging
-    
+
     Returns:
         Dictionary containing execution results
     """
@@ -518,7 +514,7 @@ async def trim_sqd_flow(
         raise ValueError("num_recovery must be >= 1")
     if num_iters_per_recovery < 1:
         raise ValueError("num_iters_per_recovery must be >= 1")
-    
+
     # Step 1: Initialize
     init_data = await initialize_task(
         mode="trim_sqd",
@@ -531,12 +527,12 @@ async def trim_sqd_flow(
         verbose=verbose,
         max_time=max_time,
     )
-    
+
     # Step 2: Recovery iterations (sequential)
     recovery_results = []
     for iter_id in range(num_recovery):
-        logger.info(f"Recovery iteration {iter_id+1}/{num_recovery}")
-        
+        logger.info(f"Recovery iteration {iter_id + 1}/{num_recovery}")
+
         result = await recovery_iteration_task(
             iteration_id=iter_id,
             command_block_name=recovery_command_block_name,
@@ -569,7 +565,7 @@ async def trim_sqd_flow(
             work_dir=work_dir,
         )
         recovery_results.append(result)
-    
+
     # Step 3: Final diagonalization
     final_result = await final_diagonalization_task(
         command_block_name=finalize_command_block_name,
@@ -585,13 +581,13 @@ async def trim_sqd_flow(
         verbose=verbose,
         max_time=max_time,
     )
-    
+
     # Step 4: Output results
     output = output_results_task(
         final_result=final_result,
         work_dir=work_dir,
     )
-    
+
     logger.info("✓ GB-SQD TrimSQD workflow complete")
     return output
 
@@ -599,6 +595,7 @@ async def trim_sqd_flow(
 # ============================================================================
 # Deployment
 # ============================================================================
+
 
 def deploy_ext_sqd():
     """Deploy ExtSQD workflow with a local worker."""
