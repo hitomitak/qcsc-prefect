@@ -7,6 +7,7 @@ def test_native_qiskit_integration_module_imports():
     module = import_module("qcsc_prefect.integrations.qiskit")
 
     assert module.__name__ == "qcsc_prefect.integrations.qiskit"
+    assert module.QiskitRuntimeConfig.__name__ == "QiskitRuntimeConfig"
 
 
 def test_native_qiskit_placeholder_submodules_import():

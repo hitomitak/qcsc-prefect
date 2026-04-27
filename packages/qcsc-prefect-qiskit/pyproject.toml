@@ -7,7 +7,10 @@ name = "qcsc-prefect-qiskit"
 version = "0.1.0"
 description = "Native Qiskit integration utilities for QCSC Prefect workflows"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "prefect>=2.19",
+    "qiskit-ibm-runtime>=0.46",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
