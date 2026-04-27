@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from prefect.blocks.core import Block
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 
 if TYPE_CHECKING:
     from qiskit_ibm_runtime import QiskitRuntimeService
@@ -15,6 +15,10 @@ def _runtime_service_class():
     from qiskit_ibm_runtime import QiskitRuntimeService
 
     return QiskitRuntimeService
+
+
+class QiskitRuntimeConfigError(RuntimeError):
+    """Raised when native Qiskit Runtime configuration cannot be resolved."""
 
 
 class QiskitRuntimeConfig(Block):
@@ -56,6 +60,25 @@ class QiskitRuntimeConfig(Block):
         description="Optional Qiskit saved account filename.",
     )
 
+    @field_validator("backend_name")
+    @classmethod
+    def _validate_backend_name(cls, value: str) -> str:
+        backend_name = value.strip()
+        if not backend_name:
+            raise ValueError("backend_name must not be empty.")
+        return backend_name
+
+    def _safe_context(self) -> str:
+        credential_source = "block token" if self.token is not None else "Qiskit discovery"
+        return (
+            f"backend_name={self.backend_name!r}, "
+            f"channel={self.channel!r}, "
+            f"instance={self.instance!r}, "
+            f"account_name={self.account_name!r}, "
+            f"filename={self.filename!r}, "
+            f"credential_source={credential_source!r}"
+        )
+
     def get_service(self) -> QiskitRuntimeService:
         """Create a native ``QiskitRuntimeService`` from configured fields."""
 
@@ -72,10 +95,23 @@ class QiskitRuntimeConfig(Block):
             kwargs["filename"] = self.filename
 
         service_cls = _runtime_service_class()
-        return service_cls(**kwargs)
+        try:
+            return service_cls(**kwargs)
+        except Exception as exc:
+            raise QiskitRuntimeConfigError(
+                "Failed to create QiskitRuntimeService "
+                f"({type(exc).__name__}). Context: {self._safe_context()}."
+            ) from None
 
     def get_backend(self) -> Any:
         """Return the configured backend from the native Qiskit service."""
 
         service = self.get_service()
-        return service.backend(self.backend_name)
+        try:
+            return service.backend(self.backend_name)
+        except Exception as exc:
+            raise QiskitRuntimeConfigError(
+                "Failed to load Qiskit backend "
+                f"{self.backend_name!r} ({type(exc).__name__}). "
+                f"Context: {self._safe_context()}."
+            ) from None
