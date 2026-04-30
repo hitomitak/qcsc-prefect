@@ -375,7 +375,13 @@ def _pub_circuit(pub: Any) -> Any | None:
         return pub.get("circuit")
     if isinstance(pub, (tuple, list)) and pub:
         return pub[0]
+    if _looks_like_circuit(pub):
+        return pub
     return getattr(pub, "circuit", None)
+
+
+def _looks_like_circuit(value: Any) -> bool:
+    return callable(getattr(value, "depth", None)) and callable(getattr(value, "size", None))
 
 
 def _pub_shape(*, pub: Any, result_pub: Any | None, errors: list[str]) -> Any | None:

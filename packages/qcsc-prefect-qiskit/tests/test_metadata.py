@@ -107,6 +107,17 @@ def test_collects_circuit_depth_size_and_pub_timing():
     assert pub.duration == 3.0
 
 
+def test_collects_circuit_metadata_when_pub_is_bare_circuit():
+    metadata = collect_qiskit_execution_metadata(
+        job=_Job(),
+        pubs=[_Circuit(depth=9, size=13)],
+    )
+
+    pub = metadata.pubs[0]
+    assert pub.circuit.depth == 9
+    assert pub.circuit.size == 13
+
+
 def test_calculates_timing_spans_from_job_metrics():
     metadata = collect_qiskit_execution_metadata(job=_Job())
 

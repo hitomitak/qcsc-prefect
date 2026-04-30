@@ -11,6 +11,7 @@ from anyio.to_thread import run_sync
 from prefect import get_run_logger, task
 from qcsc_prefect.integrations.qiskit.artifacts import (
     create_qiskit_execution_markdown_artifact,
+    create_qiskit_sampler_result_artifact,
 )
 from qcsc_prefect.integrations.qiskit.blocks import QiskitRuntimeConfig
 from qcsc_prefect.integrations.qiskit.metadata import collect_qiskit_execution_metadata
@@ -168,6 +169,10 @@ async def run_sampler_task(
     await create_qiskit_execution_markdown_artifact(
         metadata,
         key=artifact_key or "qiskit-sampler-summary",
+    )
+    await create_qiskit_sampler_result_artifact(
+        result,
+        key=f"{artifact_key or 'qiskit-sampler-summary'}-result",
     )
 
     return {
