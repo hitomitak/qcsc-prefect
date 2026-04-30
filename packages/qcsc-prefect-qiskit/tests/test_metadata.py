@@ -57,6 +57,35 @@ class _MinimalJob:
         raise RuntimeError("metrics unavailable")
 
 
+class _BitArray:
+    shape = ()
+
+
+class _DataBin:
+    meas = _BitArray()
+
+
+class _SamplerPubResult:
+    data = _DataBin()
+    metadata = {"circuit_metadata": {}}
+
+
+class _DoubleSliceSpan:
+    start = "2026-04-28 04:20:15"
+    stop = "2026-04-28 04:20:16"
+    size = 100
+
+
+class _ExecutionSpans(list):
+    pass
+
+
+class _PrimitiveResult(list):
+    def __init__(self, pub_results, metadata) -> None:
+        super().__init__(pub_results)
+        self.metadata = metadata
+
+
 def test_collects_job_level_metadata_from_native_job_shape():
     metadata = collect_qiskit_execution_metadata(
         job=_Job(),
@@ -116,6 +145,34 @@ def test_collects_circuit_metadata_when_pub_is_bare_circuit():
     pub = metadata.pubs[0]
     assert pub.circuit.depth == 9
     assert pub.circuit.size == 13
+
+
+def test_collects_pub_shape_and_timing_from_primitive_result_execution_spans():
+    result = _PrimitiveResult(
+        [_SamplerPubResult()],
+        metadata={
+            "execution": {
+                "execution_spans": _ExecutionSpans([_DoubleSliceSpan()]),
+            },
+            "version": 2,
+        },
+    )
+
+    metadata = collect_qiskit_execution_metadata(
+        job=_Job(),
+        pubs=[_Circuit(depth=9, size=13)],
+        result=result,
+    )
+    flattened = flatten_qiskit_execution_metadata(metadata)
+
+    assert metadata.pubs[0].shape == ()
+    assert metadata.pubs[0].timestamp.started == "2026-04-28 04:20:15"
+    assert metadata.pubs[0].timestamp.completed == "2026-04-28 04:20:16"
+    assert metadata.pubs[0].duration == 1.0
+    assert flattened["pub[0].shape"] == []
+    assert flattened["pub[0].timestamp.started"] == "2026-04-28 04:20:15"
+    assert flattened["pub[0].timestamp.completed"] == "2026-04-28 04:20:16"
+    assert flattened["pub[0].duration"] == 1.0
 
 
 def test_calculates_timing_spans_from_job_metrics():

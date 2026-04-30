@@ -342,8 +342,19 @@ def _pubs_metadata(
     result: Any | None,
     errors: list[str],
 ) -> list[QiskitPubMetadata]:
+    execution_spans = _result_execution_spans(result)
     return [
-        _pub_metadata(index=index, pub=pub, result_pub=_sequence_get(result, index), errors=errors)
+        _pub_metadata(
+            index=index,
+            pub=pub,
+            result_pub=_sequence_get(result, index),
+            execution_span=_execution_span_for_pub(
+                execution_spans,
+                pub_index=index,
+                num_pubs=len(pubs),
+            ),
+            errors=errors,
+        )
         for index, pub in enumerate(pubs)
     ]
 
@@ -353,11 +364,12 @@ def _pub_metadata(
     index: int,
     pub: Any,
     result_pub: Any | None,
+    execution_span: Any | None,
     errors: list[str],
 ) -> QiskitPubMetadata:
     circuit = _pub_circuit(pub)
     timestamp_source = result_pub if result_pub is not None else pub
-    timestamps = _pub_timestamps(timestamp_source)
+    timestamps = _pub_timestamps(timestamp_source, execution_span=execution_span)
     return QiskitPubMetadata(
         index=index,
         circuit=QiskitCircuitMetadata(
@@ -393,17 +405,71 @@ def _pub_shape(*, pub: Any, result_pub: Any | None, errors: list[str]) -> Any | 
         shape = _mapping_get(metadata, "shape")
         if shape is not None:
             return shape
+        shape = _data_shape(_safe_get(source, "data", errors=errors), errors=errors)
+        if shape is not None:
+            return shape
     return None
 
 
-def _pub_timestamps(source: Any | None) -> QiskitPubTimestamps:
+def _data_shape(data: Any | None, *, errors: list[str]) -> Any | None:
+    shape = _safe_get(data, "shape", errors=errors)
+    if shape is not None:
+        return shape
+
+    for register in _register_names(data):
+        register_data = _register_data(data, register)
+        shape = _safe_get(register_data, "shape", errors=errors)
+        if shape is not None:
+            return shape
+    return None
+
+
+def _register_names(data: Any | None) -> list[str]:
+    if data is None:
+        return []
+    if isinstance(data, Mapping):
+        return [str(name) for name in data]
+
+    keys = _safe_get(data, "keys")
+    if callable(keys):
+        try:
+            return [str(name) for name in keys()]
+        except Exception:
+            pass
+
+    if _safe_get(data, "meas") is not None:
+        return ["meas"]
+
+    names = getattr(data, "__dict__", {})
+    if isinstance(names, dict):
+        return [name for name in names if not name.startswith("_")]
+    return []
+
+
+def _register_data(data: Any | None, register: str) -> Any | None:
+    if data is None:
+        return None
+    if isinstance(data, Mapping):
+        return data.get(register)
+    try:
+        return data[register]
+    except Exception:
+        return _safe_get(data, register)
+
+
+def _pub_timestamps(
+    source: Any | None,
+    *,
+    execution_span: Any | None = None,
+) -> QiskitPubTimestamps:
     metadata = _metadata_mapping(source)
     timestamps = _mapping_get(metadata, "timestamps") or _mapping_get(metadata, "timestamp")
     if not isinstance(timestamps, Mapping):
         timestamps = metadata
+    span_started, span_completed = _span_timestamps(execution_span)
     return QiskitPubTimestamps(
-        started=_first_present(timestamps, "started", "start", "running"),
-        completed=_first_present(timestamps, "completed", "finished", "end"),
+        started=_first_present(timestamps, "started", "start", "running") or span_started,
+        completed=_first_present(timestamps, "completed", "finished", "end") or span_completed,
     )
 
 
@@ -424,6 +490,74 @@ def _metadata_mapping(source: Any | None) -> Mapping[str, Any]:
         if isinstance(value, Mapping):
             return value
     return {}
+
+
+def _result_execution_spans(result: Any | None) -> list[Any]:
+    metadata = _metadata_mapping(result)
+    execution = _mapping_get(metadata, "execution")
+    if execution is None:
+        execution = _safe_get(result, "execution")
+
+    spans = _mapping_get(execution, "execution_spans")
+    if spans is None:
+        spans = _safe_get(execution, "execution_spans")
+    if spans is None:
+        return []
+
+    try:
+        return list(spans)
+    except TypeError:
+        inner_spans = _safe_get(spans, "spans")
+        try:
+            return list(inner_spans)
+        except TypeError:
+            return []
+
+
+def _execution_span_for_pub(
+    execution_spans: Sequence[Any],
+    *,
+    pub_index: int,
+    num_pubs: int,
+) -> Any | None:
+    for span in execution_spans:
+        pub_indices = _span_pub_indices(span)
+        if pub_indices is not None and pub_index in pub_indices:
+            return span
+
+    if len(execution_spans) == num_pubs:
+        return execution_spans[pub_index]
+    if num_pubs == 1 and execution_spans:
+        return execution_spans[0]
+    return None
+
+
+def _span_pub_indices(span: Any | None) -> set[int] | None:
+    for name in ("pub_idxs", "pub_indices", "pub_index"):
+        value = _safe_get(span, name)
+        if value is None:
+            continue
+        if isinstance(value, int):
+            return {value}
+        try:
+            return {int(item) for item in value}
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _span_timestamps(span: Any | None) -> tuple[Any | None, Any | None]:
+    if span is None:
+        return None, None
+    return (
+        _safe_get(span, "start")
+        or _safe_get(span, "started")
+        or _safe_get(span, "running"),
+        _safe_get(span, "stop")
+        or _safe_get(span, "completed")
+        or _safe_get(span, "finished")
+        or _safe_get(span, "end"),
+    )
 
 
 def _sequence_get(value: Any | None, index: int) -> Any | None:
