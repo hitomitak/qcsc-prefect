@@ -24,7 +24,12 @@ from qcsc_prefect.integrations.qiskit.metadata import (
     collect_qiskit_execution_metadata,
     flatten_qiskit_execution_metadata,
 )
-from qcsc_prefect.integrations.qiskit.tasks import QiskitSamplerTaskError, run_sampler_task
+from qcsc_prefect.integrations.qiskit.tasks import (
+    QiskitEstimatorTaskError,
+    QiskitSamplerTaskError,
+    run_estimator_task,
+    run_sampler_task,
+)
 
 __all__ = [
     "QiskitCircuitMetadata",
@@ -36,6 +41,7 @@ __all__ = [
     "QiskitPubTimestamps",
     "QiskitRuntimeConfig",
     "QiskitRuntimeConfigError",
+    "QiskitEstimatorTaskError",
     "QiskitSamplerTaskError",
     "build_qiskit_execution_markdown",
     "build_qiskit_execution_table",
@@ -46,5 +52,6 @@ __all__ = [
     "create_qiskit_execution_table_artifact",
     "create_qiskit_sampler_result_artifact",
     "flatten_qiskit_execution_metadata",
+    "run_estimator_task",
     "run_sampler_task",
 ]

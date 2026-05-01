@@ -9,7 +9,9 @@ def test_native_qiskit_integration_module_imports():
     assert module.__name__ == "qcsc_prefect.integrations.qiskit"
     assert module.QiskitRuntimeConfig.__name__ == "QiskitRuntimeConfig"
     assert module.QiskitRuntimeConfigError.__name__ == "QiskitRuntimeConfigError"
+    assert module.QiskitEstimatorTaskError.__name__ == "QiskitEstimatorTaskError"
     assert module.QiskitSamplerTaskError.__name__ == "QiskitSamplerTaskError"
+    assert module.run_estimator_task.name == "run-qiskit-estimator"
     assert module.run_sampler_task.name == "run-qiskit-sampler"
 
 
