@@ -175,6 +175,27 @@ def test_collects_pub_shape_and_timing_from_primitive_result_execution_spans():
     assert flattened["pub[0].duration"] == 1.0
 
 
+def test_uses_job_timing_for_single_pub_when_result_has_no_pub_timing():
+    result = _PrimitiveResult(
+        [SimpleNamespace(metadata={"shots": 128, "target_precision": 0.1})],
+        metadata={"version": 2},
+    )
+
+    metadata = collect_qiskit_execution_metadata(
+        job=_Job(),
+        pubs=[_Circuit(depth=9, size=13)],
+        result=result,
+    )
+    flattened = flatten_qiskit_execution_metadata(metadata)
+
+    assert metadata.pubs[0].timestamp.started == "2026-04-27T00:00:10+00:00"
+    assert metadata.pubs[0].timestamp.completed == "2026-04-27T00:00:40+00:00"
+    assert metadata.pubs[0].duration == 30.0
+    assert flattened["pub[0].timestamp.started"] == "2026-04-27T00:00:10+00:00"
+    assert flattened["pub[0].timestamp.completed"] == "2026-04-27T00:00:40+00:00"
+    assert flattened["pub[0].duration"] == 30.0
+
+
 def test_calculates_timing_spans_from_job_metrics():
     metadata = collect_qiskit_execution_metadata(job=_Job())
 

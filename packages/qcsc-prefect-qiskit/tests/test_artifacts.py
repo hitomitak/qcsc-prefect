@@ -4,10 +4,13 @@ import asyncio
 
 from qcsc_prefect.integrations.qiskit import artifacts as artifacts_mod
 from qcsc_prefect.integrations.qiskit.artifacts import (
+    build_qiskit_estimator_result_markdown,
     build_qiskit_execution_markdown,
     build_qiskit_execution_table,
     build_qiskit_sampler_result_markdown,
+    collect_estimator_result_values,
     collect_sampler_result_counts,
+    create_qiskit_estimator_result_artifact,
     create_qiskit_execution_markdown_artifact,
     create_qiskit_execution_table_artifact,
     create_qiskit_sampler_result_artifact,
@@ -26,6 +29,25 @@ class _Data:
 
 class _PubResult:
     data = _Data()
+
+
+class _Array:
+    def __init__(self, value):
+        self.value = value
+
+    def tolist(self):
+        return self.value
+
+
+class _EstimatorData:
+    evs = _Array(0.75)
+    stds = _Array(0.125)
+    ensemble_standard_error = _Array(0.0625)
+
+
+class _EstimatorPubResult:
+    data = _EstimatorData()
+    metadata = {"shots": 128, "target_precision": 0.1}
 
 
 def test_builds_readable_markdown_summary():
@@ -75,6 +97,28 @@ def test_builds_sampler_result_markdown():
     assert '"00": 7' in markdown
 
 
+def test_collects_estimator_result_values():
+    summaries = collect_estimator_result_values([_EstimatorPubResult()])
+
+    assert summaries == [
+        {
+            "pub_index": 0,
+            "evs": 0.75,
+            "stds": 0.125,
+            "ensemble_standard_error": 0.0625,
+            "metadata": {"shots": 128, "target_precision": 0.1},
+        }
+    ]
+
+
+def test_builds_estimator_result_markdown():
+    markdown = build_qiskit_estimator_result_markdown([_EstimatorPubResult()])
+
+    assert "# Qiskit Estimator Result Summary" in markdown
+    assert "`0.75`" in markdown
+    assert "target_precision" in markdown
+
+
 def test_create_artifact_helpers_call_prefect_artifacts(monkeypatch):
     calls = {"markdown": [], "table": []}
 
@@ -98,11 +142,19 @@ def test_create_artifact_helpers_call_prefect_artifacts(monkeypatch):
     metadata = QiskitExecutionMetadata(resource="ibm_kawasaki")
     asyncio.run(create_qiskit_execution_markdown_artifact(metadata, key="summary"))
     asyncio.run(create_qiskit_sampler_result_artifact([_PubResult()], key="result"))
+    asyncio.run(
+        create_qiskit_estimator_result_artifact(
+            [_EstimatorPubResult()],
+            key="estimator-result",
+        )
+    )
     asyncio.run(create_qiskit_execution_table_artifact(metadata, key="table"))
 
     assert calls["markdown"][0]["key"] == "summary"
     assert "ibm_kawasaki" in calls["markdown"][0]["markdown"]
     assert calls["markdown"][1]["key"] == "result"
     assert "Qiskit Sampler Result Summary" in calls["markdown"][1]["markdown"]
+    assert calls["markdown"][2]["key"] == "estimator-result"
+    assert "Qiskit Estimator Result Summary" in calls["markdown"][2]["markdown"]
     assert calls["table"][0]["key"] == "table"
     assert ["resource", "ibm_kawasaki"] in calls["table"][0]["table"]

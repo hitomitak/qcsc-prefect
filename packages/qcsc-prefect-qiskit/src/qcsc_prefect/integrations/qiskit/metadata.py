@@ -135,7 +135,12 @@ def _collect_qiskit_execution_metadata(
         timestamp=timestamps,
         span=spans,
         work_efficiency=work_efficiency,
-        pubs=_pubs_metadata(pub_items, result=result, errors=errors),
+        pubs=_pubs_metadata(
+            pub_items,
+            result=result,
+            job_timestamps=timestamps,
+            errors=errors,
+        ),
         options=_options_metadata(options),
         collection_errors=errors,
     )
@@ -340,6 +345,7 @@ def _pubs_metadata(
     pubs: Sequence[Any],
     *,
     result: Any | None,
+    job_timestamps: QiskitJobTimestamps,
     errors: list[str],
 ) -> list[QiskitPubMetadata]:
     execution_spans = _result_execution_spans(result)
@@ -348,6 +354,7 @@ def _pubs_metadata(
             index=index,
             pub=pub,
             result_pub=_sequence_get(result, index),
+            fallback_timestamps=job_timestamps if len(pubs) == 1 else None,
             execution_span=_execution_span_for_pub(
                 execution_spans,
                 pub_index=index,
@@ -364,12 +371,17 @@ def _pub_metadata(
     index: int,
     pub: Any,
     result_pub: Any | None,
+    fallback_timestamps: QiskitJobTimestamps | None,
     execution_span: Any | None,
     errors: list[str],
 ) -> QiskitPubMetadata:
     circuit = _pub_circuit(pub)
     timestamp_source = result_pub if result_pub is not None else pub
-    timestamps = _pub_timestamps(timestamp_source, execution_span=execution_span)
+    timestamps = _pub_timestamps(
+        timestamp_source,
+        execution_span=execution_span,
+        fallback_timestamps=fallback_timestamps,
+    )
     return QiskitPubMetadata(
         index=index,
         circuit=QiskitCircuitMetadata(
@@ -461,15 +473,28 @@ def _pub_timestamps(
     source: Any | None,
     *,
     execution_span: Any | None = None,
+    fallback_timestamps: QiskitJobTimestamps | None = None,
 ) -> QiskitPubTimestamps:
     metadata = _metadata_mapping(source)
     timestamps = _mapping_get(metadata, "timestamps") or _mapping_get(metadata, "timestamp")
     if not isinstance(timestamps, Mapping):
         timestamps = metadata
     span_started, span_completed = _span_timestamps(execution_span)
+    fallback_started = fallback_timestamps.started if fallback_timestamps is not None else None
+    fallback_completed = (
+        fallback_timestamps.completed if fallback_timestamps is not None else None
+    )
     return QiskitPubTimestamps(
-        started=_first_present(timestamps, "started", "start", "running") or span_started,
-        completed=_first_present(timestamps, "completed", "finished", "end") or span_completed,
+        started=(
+            _first_present(timestamps, "started", "start", "running")
+            or span_started
+            or fallback_started
+        ),
+        completed=(
+            _first_present(timestamps, "completed", "finished", "end")
+            or span_completed
+            or fallback_completed
+        ),
     )
 
 

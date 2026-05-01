@@ -96,10 +96,13 @@ def _patch_estimator_task(monkeypatch):
     _ConfigAPI.loaded_names = []
     _ConfigAPI.config = _RuntimeConfig()
     _Estimator.instances = []
-    artifact_calls = []
+    artifact_calls = {"metadata": [], "result": []}
 
     async def fake_create_artifact(metadata, *, key: str) -> None:
-        artifact_calls.append({"metadata": metadata, "key": key})
+        artifact_calls["metadata"].append({"metadata": metadata, "key": key})
+
+    async def fake_create_result_artifact(result, *, key: str) -> None:
+        artifact_calls["result"].append({"result": result, "key": key})
 
     monkeypatch.setattr(tasks_mod, "QiskitRuntimeConfig", _ConfigAPI)
     monkeypatch.setattr(tasks_mod, "_estimator_class", lambda: _Estimator)
@@ -107,6 +110,11 @@ def _patch_estimator_task(monkeypatch):
         tasks_mod,
         "create_qiskit_execution_markdown_artifact",
         fake_create_artifact,
+    )
+    monkeypatch.setattr(
+        tasks_mod,
+        "create_qiskit_estimator_result_artifact",
+        fake_create_result_artifact,
     )
     return artifact_calls
 
@@ -136,10 +144,12 @@ def test_run_estimator_task_uses_native_backend_and_runs_pubs(monkeypatch):
     assert result["job_id"] == "job-456"
     assert result["precision"] == 0.01
     assert isinstance(result["result"][0], _Result)
-    assert artifact_calls[0]["key"] == "estimator-summary"
-    assert artifact_calls[0]["metadata"].job_id == "job-456"
-    assert artifact_calls[0]["metadata"].program_type == "estimator"
-    assert artifact_calls[0]["metadata"].options.params["precision"] == 0.01
+    assert artifact_calls["metadata"][0]["key"] == "estimator-summary"
+    assert artifact_calls["metadata"][0]["metadata"].job_id == "job-456"
+    assert artifact_calls["metadata"][0]["metadata"].program_type == "estimator"
+    assert artifact_calls["metadata"][0]["metadata"].options.params["precision"] == 0.01
+    assert artifact_calls["result"][0]["key"] == "estimator-summary-result"
+    assert isinstance(artifact_calls["result"][0]["result"][0], _Result)
 
 
 def test_run_estimator_task_uses_default_artifact_key(monkeypatch):
@@ -152,7 +162,8 @@ def test_run_estimator_task_uses_default_artifact_key(monkeypatch):
         )
     )
 
-    assert artifact_calls[0]["key"] == "qiskit-estimator-summary"
+    assert artifact_calls["metadata"][0]["key"] == "qiskit-estimator-summary"
+    assert artifact_calls["result"][0]["key"] == "qiskit-estimator-summary-result"
 
 
 def test_run_estimator_task_wraps_block_load_errors(monkeypatch):

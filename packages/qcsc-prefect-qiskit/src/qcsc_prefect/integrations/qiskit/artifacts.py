@@ -124,6 +124,81 @@ async def create_qiskit_sampler_result_artifact(
     )
 
 
+def build_qiskit_estimator_result_markdown(result: Any) -> str:
+    """Build a compact Markdown summary of Estimator result values."""
+
+    rows = [
+        "| Pub | EVs | STDs | Ensemble Standard Error | Metadata |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    summaries = collect_estimator_result_values(result)
+    if not summaries:
+        rows.append("|  |  |  |  | No estimator values found. |")
+
+    for summary in summaries:
+        rows.append(
+            "| "
+            f"{summary['pub_index']} | "
+            f"`{_json_dumps(summary['evs'])}` | "
+            f"`{_json_dumps(summary['stds'])}` | "
+            f"`{_json_dumps(summary['ensemble_standard_error'])}` | "
+            f"`{_markdown_value(_json_dumps(summary['metadata']))}` |"
+        )
+
+    result_metadata = _safe_get_attr(result, "metadata")
+    result_metadata_json = _json_dumps(result_metadata if result_metadata is not None else {})
+    return "\n".join(
+        [
+            "# Qiskit Estimator Result Summary",
+            "",
+            *rows,
+            "",
+            "### Result Metadata",
+            "",
+            f"`{_markdown_value(result_metadata_json)}`",
+        ]
+    )
+
+
+async def create_qiskit_estimator_result_artifact(
+    result: Any,
+    *,
+    key: str = "qiskit-estimator-result",
+) -> None:
+    """Create a Prefect Markdown artifact for Estimator result values."""
+
+    await create_markdown_artifact(
+        markdown=build_qiskit_estimator_result_markdown(result),
+        key=key,
+    )
+
+
+def collect_estimator_result_values(result: Any) -> list[dict[str, Any]]:
+    """Collect per-pub estimator values from native Qiskit result objects."""
+
+    summaries: list[dict[str, Any]] = []
+    for pub_index, pub_result in enumerate(_iter_result_pubs(result)):
+        data = _safe_get_attr(pub_result, "data")
+        values = {
+            "evs": _json_value(_safe_get_attr(data, "evs")),
+            "stds": _json_value(_safe_get_attr(data, "stds")),
+            "ensemble_standard_error": _json_value(
+                _safe_get_attr(data, "ensemble_standard_error")
+            ),
+        }
+        if all(value is None for value in values.values()):
+            continue
+        metadata = _safe_get_attr(pub_result, "metadata")
+        summaries.append(
+            {
+                "pub_index": pub_index,
+                **values,
+                "metadata": _json_value(metadata) if metadata is not None else {},
+            }
+        )
+    return summaries
+
+
 def collect_sampler_result_counts(
     result: Any,
     *,
@@ -156,6 +231,35 @@ def _markdown_value(value: Any) -> str:
         return ""
     escaped = str(value).replace("|", "\\|").replace("\n", "<br>")
     return escaped
+
+
+def _json_dumps(value: Any) -> str:
+    return json.dumps(_json_value(value), sort_keys=True)
+
+
+def _json_value(value: Any) -> Any:
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, tuple | list):
+        return [_json_value(item) for item in value]
+
+    tolist = _safe_get_attr(value, "tolist")
+    if callable(tolist):
+        try:
+            return _json_value(tolist())
+        except Exception:
+            pass
+
+    item = _safe_get_attr(value, "item")
+    if callable(item):
+        try:
+            return _json_value(item())
+        except Exception:
+            pass
+
+    return str(value)
 
 
 def _iter_result_pubs(result: Any):

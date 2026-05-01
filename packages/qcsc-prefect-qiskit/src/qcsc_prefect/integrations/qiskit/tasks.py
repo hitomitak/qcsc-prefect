@@ -10,6 +10,7 @@ from typing import Any
 from anyio.to_thread import run_sync
 from prefect import get_run_logger, task
 from qcsc_prefect.integrations.qiskit.artifacts import (
+    create_qiskit_estimator_result_artifact,
     create_qiskit_execution_markdown_artifact,
     create_qiskit_sampler_result_artifact,
 )
@@ -304,6 +305,10 @@ async def run_estimator_task(
     await create_qiskit_execution_markdown_artifact(
         metadata,
         key=artifact_key or "qiskit-estimator-summary",
+    )
+    await create_qiskit_estimator_result_artifact(
+        result,
+        key=f"{artifact_key or 'qiskit-estimator-summary'}-result",
     )
 
     return {
