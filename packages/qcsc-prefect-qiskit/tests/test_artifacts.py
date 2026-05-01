@@ -106,7 +106,8 @@ def test_collects_estimator_result_values():
             "evs": 0.75,
             "stds": 0.125,
             "ensemble_standard_error": 0.0625,
-            "metadata": {"shots": 128, "target_precision": 0.1},
+            "shots": 128,
+            "target_precision": 0.1,
         }
     ]
 
@@ -116,7 +117,8 @@ def test_builds_estimator_result_markdown():
 
     assert "# Qiskit Estimator Result Summary" in markdown
     assert "`0.75`" in markdown
-    assert "target_precision" in markdown
+    assert "Target Precision" in markdown
+    assert "Result Metadata" not in markdown
 
 
 def test_create_artifact_helpers_call_prefect_artifacts(monkeypatch):

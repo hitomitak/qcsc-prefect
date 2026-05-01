@@ -128,12 +128,12 @@ def build_qiskit_estimator_result_markdown(result: Any) -> str:
     """Build a compact Markdown summary of Estimator result values."""
 
     rows = [
-        "| Pub | EVs | STDs | Ensemble Standard Error | Metadata |",
-        "| --- | --- | --- | --- | --- |",
+        "| Pub | EVs | STDs | Ensemble Standard Error | Shots | Target Precision |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     summaries = collect_estimator_result_values(result)
     if not summaries:
-        rows.append("|  |  |  |  | No estimator values found. |")
+        rows.append("|  |  |  |  |  | No estimator values found. |")
 
     for summary in summaries:
         rows.append(
@@ -142,20 +142,15 @@ def build_qiskit_estimator_result_markdown(result: Any) -> str:
             f"`{_json_dumps(summary['evs'])}` | "
             f"`{_json_dumps(summary['stds'])}` | "
             f"`{_json_dumps(summary['ensemble_standard_error'])}` | "
-            f"`{_markdown_value(_json_dumps(summary['metadata']))}` |"
+            f"`{_json_dumps(summary['shots'])}` | "
+            f"`{_json_dumps(summary['target_precision'])}` |"
         )
 
-    result_metadata = _safe_get_attr(result, "metadata")
-    result_metadata_json = _json_dumps(result_metadata if result_metadata is not None else {})
     return "\n".join(
         [
             "# Qiskit Estimator Result Summary",
             "",
             *rows,
-            "",
-            "### Result Metadata",
-            "",
-            f"`{_markdown_value(result_metadata_json)}`",
         ]
     )
 
@@ -193,7 +188,8 @@ def collect_estimator_result_values(result: Any) -> list[dict[str, Any]]:
             {
                 "pub_index": pub_index,
                 **values,
-                "metadata": _json_value(metadata) if metadata is not None else {},
+                "shots": _metadata_value(metadata, "shots"),
+                "target_precision": _metadata_value(metadata, "target_precision"),
             }
         )
     return summaries
@@ -260,6 +256,12 @@ def _json_value(value: Any) -> Any:
             pass
 
     return str(value)
+
+
+def _metadata_value(metadata: Any, key: str) -> Any:
+    if isinstance(metadata, Mapping):
+        return _json_value(metadata.get(key))
+    return _json_value(_safe_get_attr(metadata, key))
 
 
 def _iter_result_pubs(result: Any):
