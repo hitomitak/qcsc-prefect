@@ -16,6 +16,79 @@ from qcsc_prefect.integrations.qiskit.metadata import (
 def build_qiskit_execution_markdown(metadata: QiskitExecutionMetadata) -> str:
     """Build a readable Markdown summary for a Qiskit Runtime job."""
 
+    return _build_qiskit_metadata_markdown(
+        metadata,
+        title="Qiskit Runtime Job Summary",
+    )
+
+
+def build_qiskit_sampler_metadata_markdown(metadata: QiskitExecutionMetadata) -> str:
+    """Build a readable Markdown metadata summary for a Sampler job."""
+
+    return _build_qiskit_metadata_markdown(
+        metadata,
+        title="Qiskit Sampler Metadata Summary",
+    )
+
+
+def build_qiskit_estimator_metadata_markdown(
+    metadata: QiskitExecutionMetadata,
+    *,
+    result: Any | None = None,
+) -> str:
+    """Build a readable Markdown metadata summary for an Estimator job."""
+
+    sections = [
+        _build_qiskit_metadata_markdown(
+            metadata,
+            title="Qiskit Estimator Metadata Summary",
+        )
+    ]
+
+    result_metadata = _safe_get_attr(result, "metadata")
+    if result_metadata is not None:
+        sections.extend(
+            [
+                "",
+                "### Estimator Primitive Result Metadata",
+                "",
+                "```json",
+                _json_dumps(result_metadata),
+                "```",
+            ]
+        )
+
+    pub_metadata_rows = [
+        "| Pub | Metadata |",
+        "| --- | --- |",
+    ]
+    has_pub_metadata = False
+    for pub_index, pub_result in enumerate(_iter_result_pubs(result)):
+        pub_metadata = _safe_get_attr(pub_result, "metadata")
+        if pub_metadata is None:
+            continue
+        has_pub_metadata = True
+        pub_metadata_rows.append(
+            f"| {pub_index} | `{_markdown_value(_json_dumps(pub_metadata))}` |"
+        )
+    if has_pub_metadata:
+        sections.extend(
+            [
+                "",
+                "### Estimator Pub Metadata",
+                "",
+                *pub_metadata_rows,
+            ]
+        )
+
+    return "\n".join(sections)
+
+
+def _build_qiskit_metadata_markdown(
+    metadata: QiskitExecutionMetadata,
+    *,
+    title: str,
+) -> str:
     flattened = flatten_qiskit_execution_metadata(metadata)
     rows = [
         "| Key | Value |",
@@ -35,7 +108,7 @@ def build_qiskit_execution_markdown(metadata: QiskitExecutionMetadata) -> str:
 
     return "\n".join(
         [
-            "# Qiskit Runtime Job Summary",
+            f"# {title}",
             "",
             *rows,
         ]
@@ -58,6 +131,33 @@ async def create_qiskit_execution_markdown_artifact(
 
     await create_markdown_artifact(
         markdown=build_qiskit_execution_markdown(metadata),
+        key=key,
+    )
+
+
+async def create_qiskit_sampler_metadata_artifact(
+    metadata: QiskitExecutionMetadata,
+    *,
+    key: str = "qiskit-sampler-summary",
+) -> None:
+    """Create a Prefect Markdown metadata artifact for a Sampler job."""
+
+    await create_markdown_artifact(
+        markdown=build_qiskit_sampler_metadata_markdown(metadata),
+        key=key,
+    )
+
+
+async def create_qiskit_estimator_metadata_artifact(
+    metadata: QiskitExecutionMetadata,
+    *,
+    result: Any | None = None,
+    key: str = "qiskit-estimator-summary",
+) -> None:
+    """Create a Prefect Markdown metadata artifact for an Estimator job."""
+
+    await create_markdown_artifact(
+        markdown=build_qiskit_estimator_metadata_markdown(metadata, result=result),
         key=key,
     )
 

@@ -138,7 +138,6 @@ def _collect_qiskit_execution_metadata(
         pubs=_pubs_metadata(
             pub_items,
             result=result,
-            job_timestamps=timestamps,
             errors=errors,
         ),
         options=_options_metadata(options),
@@ -164,8 +163,13 @@ def flatten_qiskit_execution_metadata(
         "span.work": metadata.span.work,
         "span.qpu": metadata.span.qpu,
         "work_efficiency": metadata.work_efficiency,
-        "options.params.shots": _mapping_get(metadata.options.params, "shots"),
     }
+    shots = _mapping_get(metadata.options.params, "shots")
+    if shots is not None:
+        flattened["options.params.shots"] = shots
+    precision = _mapping_get(metadata.options.params, "precision")
+    if precision is not None:
+        flattened["options.params.precision"] = precision
 
     for pub in metadata.pubs:
         prefix = f"pub[{pub.index}]"
@@ -174,11 +178,14 @@ def flatten_qiskit_execution_metadata(
                 f"{prefix}.circuit.depth": pub.circuit.depth,
                 f"{prefix}.circuit.size": pub.circuit.size,
                 f"{prefix}.shape": _artifact_value(pub.shape),
-                f"{prefix}.timestamp.started": _artifact_value(pub.timestamp.started),
-                f"{prefix}.timestamp.completed": _artifact_value(pub.timestamp.completed),
-                f"{prefix}.duration": pub.duration,
             }
         )
+        if pub.timestamp.started is not None:
+            flattened[f"{prefix}.timestamp.started"] = _artifact_value(pub.timestamp.started)
+        if pub.timestamp.completed is not None:
+            flattened[f"{prefix}.timestamp.completed"] = _artifact_value(pub.timestamp.completed)
+        if pub.duration is not None:
+            flattened[f"{prefix}.duration"] = pub.duration
 
     return flattened
 
@@ -345,7 +352,6 @@ def _pubs_metadata(
     pubs: Sequence[Any],
     *,
     result: Any | None,
-    job_timestamps: QiskitJobTimestamps,
     errors: list[str],
 ) -> list[QiskitPubMetadata]:
     execution_spans = _result_execution_spans(result)
@@ -354,7 +360,6 @@ def _pubs_metadata(
             index=index,
             pub=pub,
             result_pub=_sequence_get(result, index),
-            fallback_timestamps=job_timestamps if len(pubs) == 1 else None,
             execution_span=_execution_span_for_pub(
                 execution_spans,
                 pub_index=index,
@@ -371,7 +376,6 @@ def _pub_metadata(
     index: int,
     pub: Any,
     result_pub: Any | None,
-    fallback_timestamps: QiskitJobTimestamps | None,
     execution_span: Any | None,
     errors: list[str],
 ) -> QiskitPubMetadata:
@@ -380,7 +384,6 @@ def _pub_metadata(
     timestamps = _pub_timestamps(
         timestamp_source,
         execution_span=execution_span,
-        fallback_timestamps=fallback_timestamps,
     )
     return QiskitPubMetadata(
         index=index,
@@ -473,28 +476,15 @@ def _pub_timestamps(
     source: Any | None,
     *,
     execution_span: Any | None = None,
-    fallback_timestamps: QiskitJobTimestamps | None = None,
 ) -> QiskitPubTimestamps:
     metadata = _metadata_mapping(source)
     timestamps = _mapping_get(metadata, "timestamps") or _mapping_get(metadata, "timestamp")
     if not isinstance(timestamps, Mapping):
         timestamps = metadata
     span_started, span_completed = _span_timestamps(execution_span)
-    fallback_started = fallback_timestamps.started if fallback_timestamps is not None else None
-    fallback_completed = (
-        fallback_timestamps.completed if fallback_timestamps is not None else None
-    )
     return QiskitPubTimestamps(
-        started=(
-            _first_present(timestamps, "started", "start", "running")
-            or span_started
-            or fallback_started
-        ),
-        completed=(
-            _first_present(timestamps, "completed", "finished", "end")
-            or span_completed
-            or fallback_completed
-        ),
+        started=_first_present(timestamps, "started", "start", "running") or span_started,
+        completed=_first_present(timestamps, "completed", "finished", "end") or span_completed,
     )
 
 

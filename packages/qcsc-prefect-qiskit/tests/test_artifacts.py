@@ -4,15 +4,19 @@ import asyncio
 
 from qcsc_prefect.integrations.qiskit import artifacts as artifacts_mod
 from qcsc_prefect.integrations.qiskit.artifacts import (
+    build_qiskit_estimator_metadata_markdown,
     build_qiskit_estimator_result_markdown,
     build_qiskit_execution_markdown,
     build_qiskit_execution_table,
+    build_qiskit_sampler_metadata_markdown,
     build_qiskit_sampler_result_markdown,
     collect_estimator_result_values,
     collect_sampler_result_counts,
+    create_qiskit_estimator_metadata_artifact,
     create_qiskit_estimator_result_artifact,
     create_qiskit_execution_markdown_artifact,
     create_qiskit_execution_table_artifact,
+    create_qiskit_sampler_metadata_artifact,
     create_qiskit_sampler_result_artifact,
 )
 from qcsc_prefect.integrations.qiskit.metadata import QiskitExecutionMetadata
@@ -47,7 +51,19 @@ class _EstimatorData:
 
 class _EstimatorPubResult:
     data = _EstimatorData()
-    metadata = {"shots": 128, "target_precision": 0.1}
+    metadata = {
+        "shots": 128,
+        "target_precision": 0.1,
+        "resilience": {"measure_mitigation": True},
+    }
+
+
+class _EstimatorPrimitiveResult(list):
+    metadata = {
+        "dynamical_decoupling": {"enable": False},
+        "twirling": {"enable_measure": True},
+        "version": 2,
+    }
 
 
 def test_builds_readable_markdown_summary():
@@ -65,6 +81,29 @@ def test_builds_readable_markdown_summary():
     assert "ibm_kawasaki" in markdown
     assert "`job_id`" in markdown
     assert "job-123" in markdown
+
+
+def test_builds_sampler_metadata_markdown_summary():
+    metadata = QiskitExecutionMetadata(resource="ibm_kawasaki")
+
+    markdown = build_qiskit_sampler_metadata_markdown(metadata)
+
+    assert "# Qiskit Sampler Metadata Summary" in markdown
+    assert "ibm_kawasaki" in markdown
+
+
+def test_builds_estimator_metadata_markdown_with_result_metadata():
+    metadata = QiskitExecutionMetadata(resource="ibm_kawasaki", program_type="estimator")
+    result = _EstimatorPrimitiveResult([_EstimatorPubResult()])
+
+    markdown = build_qiskit_estimator_metadata_markdown(metadata, result=result)
+
+    assert "# Qiskit Estimator Metadata Summary" in markdown
+    assert "Estimator Primitive Result Metadata" in markdown
+    assert "dynamical_decoupling" in markdown
+    assert "Estimator Pub Metadata" in markdown
+    assert "target_precision" in markdown
+    assert "measure_mitigation" in markdown
 
 
 def test_builds_table_artifact_payload():
@@ -119,6 +158,7 @@ def test_builds_estimator_result_markdown():
     assert "`0.75`" in markdown
     assert "Target Precision" in markdown
     assert "Result Metadata" not in markdown
+    assert "measure_mitigation" not in markdown
 
 
 def test_create_artifact_helpers_call_prefect_artifacts(monkeypatch):
@@ -143,6 +183,14 @@ def test_create_artifact_helpers_call_prefect_artifacts(monkeypatch):
 
     metadata = QiskitExecutionMetadata(resource="ibm_kawasaki")
     asyncio.run(create_qiskit_execution_markdown_artifact(metadata, key="summary"))
+    asyncio.run(create_qiskit_sampler_metadata_artifact(metadata, key="sampler-metadata"))
+    asyncio.run(
+        create_qiskit_estimator_metadata_artifact(
+            metadata,
+            result=_EstimatorPrimitiveResult([_EstimatorPubResult()]),
+            key="estimator-metadata",
+        )
+    )
     asyncio.run(create_qiskit_sampler_result_artifact([_PubResult()], key="result"))
     asyncio.run(
         create_qiskit_estimator_result_artifact(
@@ -154,9 +202,14 @@ def test_create_artifact_helpers_call_prefect_artifacts(monkeypatch):
 
     assert calls["markdown"][0]["key"] == "summary"
     assert "ibm_kawasaki" in calls["markdown"][0]["markdown"]
-    assert calls["markdown"][1]["key"] == "result"
-    assert "Qiskit Sampler Result Summary" in calls["markdown"][1]["markdown"]
-    assert calls["markdown"][2]["key"] == "estimator-result"
-    assert "Qiskit Estimator Result Summary" in calls["markdown"][2]["markdown"]
+    assert calls["markdown"][1]["key"] == "sampler-metadata"
+    assert "Qiskit Sampler Metadata Summary" in calls["markdown"][1]["markdown"]
+    assert calls["markdown"][2]["key"] == "estimator-metadata"
+    assert "Qiskit Estimator Metadata Summary" in calls["markdown"][2]["markdown"]
+    assert "dynamical_decoupling" in calls["markdown"][2]["markdown"]
+    assert calls["markdown"][3]["key"] == "result"
+    assert "Qiskit Sampler Result Summary" in calls["markdown"][3]["markdown"]
+    assert calls["markdown"][4]["key"] == "estimator-result"
+    assert "Qiskit Estimator Result Summary" in calls["markdown"][4]["markdown"]
     assert calls["table"][0]["key"] == "table"
     assert ["resource", "ibm_kawasaki"] in calls["table"][0]["table"]

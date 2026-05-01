@@ -10,8 +10,9 @@ from typing import Any
 from anyio.to_thread import run_sync
 from prefect import get_run_logger, task
 from qcsc_prefect.integrations.qiskit.artifacts import (
+    create_qiskit_estimator_metadata_artifact,
     create_qiskit_estimator_result_artifact,
-    create_qiskit_execution_markdown_artifact,
+    create_qiskit_sampler_metadata_artifact,
     create_qiskit_sampler_result_artifact,
 )
 from qcsc_prefect.integrations.qiskit.blocks import QiskitRuntimeConfig
@@ -232,7 +233,7 @@ async def run_sampler_task(
     if metadata.job_id is None:
         metadata.job_id = job_id
 
-    await create_qiskit_execution_markdown_artifact(
+    await create_qiskit_sampler_metadata_artifact(
         metadata,
         key=artifact_key or "qiskit-sampler-summary",
     )
@@ -302,8 +303,9 @@ async def run_estimator_task(
     if metadata.job_id is None:
         metadata.job_id = job_id
 
-    await create_qiskit_execution_markdown_artifact(
+    await create_qiskit_estimator_metadata_artifact(
         metadata,
+        result=result,
         key=artifact_key or "qiskit-estimator-summary",
     )
     await create_qiskit_estimator_result_artifact(

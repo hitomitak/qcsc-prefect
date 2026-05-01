@@ -175,7 +175,7 @@ def test_collects_pub_shape_and_timing_from_primitive_result_execution_spans():
     assert flattened["pub[0].duration"] == 1.0
 
 
-def test_uses_job_timing_for_single_pub_when_result_has_no_pub_timing():
+def test_omits_pub_timing_when_result_has_no_pub_timing():
     result = _PrimitiveResult(
         [SimpleNamespace(metadata={"shots": 128, "target_precision": 0.1})],
         metadata={"version": 2},
@@ -188,12 +188,12 @@ def test_uses_job_timing_for_single_pub_when_result_has_no_pub_timing():
     )
     flattened = flatten_qiskit_execution_metadata(metadata)
 
-    assert metadata.pubs[0].timestamp.started == "2026-04-27T00:00:10+00:00"
-    assert metadata.pubs[0].timestamp.completed == "2026-04-27T00:00:40+00:00"
-    assert metadata.pubs[0].duration == 30.0
-    assert flattened["pub[0].timestamp.started"] == "2026-04-27T00:00:10+00:00"
-    assert flattened["pub[0].timestamp.completed"] == "2026-04-27T00:00:40+00:00"
-    assert flattened["pub[0].duration"] == 30.0
+    assert metadata.pubs[0].timestamp.started is None
+    assert metadata.pubs[0].timestamp.completed is None
+    assert metadata.pubs[0].duration is None
+    assert "pub[0].timestamp.started" not in flattened
+    assert "pub[0].timestamp.completed" not in flattened
+    assert "pub[0].duration" not in flattened
 
 
 def test_calculates_timing_spans_from_job_metrics():
@@ -276,7 +276,7 @@ def test_missing_fields_and_metric_errors_do_not_raise():
     assert metadata.resource is None
     assert metadata.job_id is None
     assert metadata.pubs[0].circuit.depth is None
-    assert flattened["options.params.shots"] is None
+    assert "options.params.shots" not in flattened
     assert metadata.collection_errors == ["metrics: RuntimeError"]
 
 

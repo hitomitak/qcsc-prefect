@@ -98,8 +98,10 @@ def _patch_estimator_task(monkeypatch):
     _Estimator.instances = []
     artifact_calls = {"metadata": [], "result": []}
 
-    async def fake_create_artifact(metadata, *, key: str) -> None:
-        artifact_calls["metadata"].append({"metadata": metadata, "key": key})
+    async def fake_create_artifact(metadata, *, result=None, key: str) -> None:
+        artifact_calls["metadata"].append(
+            {"metadata": metadata, "result": result, "key": key}
+        )
 
     async def fake_create_result_artifact(result, *, key: str) -> None:
         artifact_calls["result"].append({"result": result, "key": key})
@@ -108,7 +110,7 @@ def _patch_estimator_task(monkeypatch):
     monkeypatch.setattr(tasks_mod, "_estimator_class", lambda: _Estimator)
     monkeypatch.setattr(
         tasks_mod,
-        "create_qiskit_execution_markdown_artifact",
+        "create_qiskit_estimator_metadata_artifact",
         fake_create_artifact,
     )
     monkeypatch.setattr(
@@ -148,6 +150,7 @@ def test_run_estimator_task_uses_native_backend_and_runs_pubs(monkeypatch):
     assert artifact_calls["metadata"][0]["metadata"].job_id == "job-456"
     assert artifact_calls["metadata"][0]["metadata"].program_type == "estimator"
     assert artifact_calls["metadata"][0]["metadata"].options.params["precision"] == 0.01
+    assert isinstance(artifact_calls["metadata"][0]["result"][0], _Result)
     assert artifact_calls["result"][0]["key"] == "estimator-summary-result"
     assert isinstance(artifact_calls["result"][0]["result"][0], _Result)
 

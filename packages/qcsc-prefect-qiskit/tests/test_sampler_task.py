@@ -108,7 +108,7 @@ def _patch_sampler_task(monkeypatch):
     monkeypatch.setattr(tasks_mod, "_sampler_class", lambda: _Sampler)
     monkeypatch.setattr(
         tasks_mod,
-        "create_qiskit_execution_markdown_artifact",
+        "create_qiskit_sampler_metadata_artifact",
         fake_create_artifact,
     )
     monkeypatch.setattr(
