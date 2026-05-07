@@ -33,9 +33,13 @@ from qcsc_prefect.integrations.qiskit.metadata import (
 )
 from qcsc_prefect.integrations.qiskit.tasks import (
     QiskitEstimatorTaskError,
+    QiskitJobFetchTaskError,
     QiskitSamplerTaskError,
+    fetch_qiskit_job_result_task,
     run_estimator_task,
     run_sampler_task,
+    submit_estimator_job_task,
+    submit_sampler_job_task,
 )
 
 __all__ = [
@@ -49,6 +53,7 @@ __all__ = [
     "QiskitRuntimeConfig",
     "QiskitRuntimeConfigError",
     "QiskitEstimatorTaskError",
+    "QiskitJobFetchTaskError",
     "QiskitSamplerTaskError",
     "build_qiskit_estimator_metadata_markdown",
     "build_qiskit_estimator_result_markdown",
@@ -66,6 +71,9 @@ __all__ = [
     "create_qiskit_sampler_metadata_artifact",
     "create_qiskit_sampler_result_artifact",
     "flatten_qiskit_execution_metadata",
+    "fetch_qiskit_job_result_task",
     "run_estimator_task",
     "run_sampler_task",
+    "submit_estimator_job_task",
+    "submit_sampler_job_task",
 ]

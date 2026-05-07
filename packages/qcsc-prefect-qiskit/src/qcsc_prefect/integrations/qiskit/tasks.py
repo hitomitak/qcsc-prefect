@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import inspect
 import logging
-from collections.abc import Iterable
-from typing import Any
+from collections.abc import Iterable, Mapping
+from typing import Any, TypedDict
 
 from anyio.to_thread import run_sync
 from prefect import get_run_logger, task
 from qcsc_prefect.integrations.qiskit.artifacts import (
     create_qiskit_estimator_metadata_artifact,
     create_qiskit_estimator_result_artifact,
+    create_qiskit_execution_markdown_artifact,
     create_qiskit_sampler_metadata_artifact,
     create_qiskit_sampler_result_artifact,
 )
@@ -39,6 +40,20 @@ class QiskitEstimatorTaskError(RuntimeError):
     """Raised when the native Qiskit Estimator task cannot complete."""
 
 
+class QiskitJobFetchTaskError(RuntimeError):
+    """Raised when an existing native Qiskit Runtime job cannot be fetched."""
+
+
+class QiskitJobReference(TypedDict, total=False):
+    """Reference to an already-submitted native Qiskit Runtime job."""
+
+    primitive: str
+    backend_name: str
+    job_id: str
+    shots: int
+    precision: float
+
+
 async def _resolve_loaded_block(value: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
@@ -59,6 +74,17 @@ async def _load_runtime_config(
         ) from None
 
 
+async def _load_runtime_backend(
+    runtime_block_name: str,
+    *,
+    error_cls: type[RuntimeError] = QiskitSamplerTaskError,
+) -> tuple[Any, Any, str]:
+    runtime_config = await _load_runtime_config(runtime_block_name, error_cls=error_cls)
+    backend = runtime_config.get_backend()
+    backend_name = _backend_name(backend) or runtime_config.backend_name
+    return runtime_config, backend, backend_name
+
+
 def _logger() -> logging.Logger:
     try:
         return get_run_logger()
@@ -73,6 +99,15 @@ def _job_id(job: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _require_job_id(job: Any, *, primitive_name: str, error_cls: type[RuntimeError]) -> str:
+    """Extract and validate a Qiskit job ID."""
+
+    job_id = _job_id(job)
+    if job_id is None:
+        raise error_cls(f"Submitted native Qiskit {primitive_name} job did not expose a job ID.")
+    return job_id
 
 
 def _backend_name(backend: Any) -> str | None:
@@ -108,6 +143,101 @@ def _metadata_options(
     return metadata_options
 
 
+def _job_reference(
+    *,
+    primitive: str,
+    backend_name: str,
+    job_id: str,
+    shots: int | None = None,
+    precision: float | None = None,
+) -> QiskitJobReference:
+    """Create a serializable job reference."""
+
+    reference: QiskitJobReference = {
+        "primitive": primitive,
+        "backend_name": backend_name,
+        "job_id": job_id,
+    }
+    if shots is not None:
+        reference["shots"] = shots
+    if precision is not None:
+        reference["precision"] = precision
+    return reference
+
+
+def _reference_value(
+    job_reference: Mapping[str, Any] | None,
+    key: str,
+    explicit: Any | None = None,
+) -> Any | None:
+    """Return explicit value or the corresponding job-reference value."""
+
+    if explicit is not None:
+        return explicit
+    if job_reference is None:
+        return None
+    return job_reference.get(key)
+
+
+def _resolve_job_reference(
+    *,
+    job_reference: Mapping[str, Any] | None,
+    job_id: str | None,
+    primitive: str | None,
+    backend_name: str | None,
+    shots: int | None,
+    precision: float | None,
+) -> QiskitJobReference:
+    """Resolve explicit fetch parameters and an optional job reference."""
+
+    resolved_job_id = _reference_value(job_reference, "job_id", job_id)
+    if resolved_job_id is None:
+        raise QiskitJobFetchTaskError("A Qiskit Runtime job ID is required to fetch a result.")
+
+    resolved: QiskitJobReference = {"job_id": str(resolved_job_id)}
+    resolved_primitive = _reference_value(job_reference, "primitive", primitive)
+    if resolved_primitive is not None:
+        resolved["primitive"] = str(resolved_primitive)
+    resolved_backend_name = _reference_value(job_reference, "backend_name", backend_name)
+    if resolved_backend_name is not None:
+        resolved["backend_name"] = str(resolved_backend_name)
+    resolved_shots = _reference_value(job_reference, "shots", shots)
+    if resolved_shots is not None:
+        resolved["shots"] = resolved_shots
+    resolved_precision = _reference_value(job_reference, "precision", precision)
+    if resolved_precision is not None:
+        resolved["precision"] = resolved_precision
+    return resolved
+
+
+def _result_response(
+    *,
+    primitive: str | None,
+    backend_name: str | None,
+    job_id: str | None,
+    result: Any,
+    metadata: Any,
+    shots: int | None = None,
+    precision: float | None = None,
+    include_shots: bool = False,
+    include_precision: bool = False,
+) -> dict[str, Any]:
+    """Build the structured task response."""
+
+    response: dict[str, Any] = {
+        "primitive": primitive,
+        "backend_name": backend_name,
+        "job_id": job_id,
+        "result": result,
+        "metadata": metadata,
+    }
+    if include_shots or shots is not None:
+        response["shots"] = shots
+    if include_precision or precision is not None:
+        response["precision"] = precision
+    return response
+
+
 def _create_sampler(*, backend: Any, backend_name: str, options: dict[str, Any] | None) -> Any:
     sampler_kwargs: dict[str, Any] = {"mode": backend}
     if options is not None:
@@ -136,6 +266,32 @@ def _create_estimator(*, backend: Any, backend_name: str, options: dict[str, Any
         ) from None
 
 
+def _run_primitive_job(
+    *,
+    primitive: Any,
+    pubs: list[Any],
+    primitive_name: str,
+    error_cls: type[RuntimeError],
+    backend_name: str,
+    shots: int | None = None,
+    precision: float | None = None,
+    include_shots: bool = False,
+    include_precision: bool = False,
+) -> Any:
+    run_kwargs: dict[str, Any] = {}
+    if include_shots or shots is not None:
+        run_kwargs["shots"] = shots
+    if include_precision or precision is not None:
+        run_kwargs["precision"] = precision
+    try:
+        return primitive.run(pubs, **run_kwargs)
+    except Exception as exc:
+        raise error_cls(
+            f"Failed to submit native Qiskit {primitive_name} job "
+            f"to backend {backend_name!r} ({type(exc).__name__})."
+        ) from None
+
+
 def _submit_sampler_job(
     *,
     sampler: Any,
@@ -143,13 +299,15 @@ def _submit_sampler_job(
     shots: int | None,
     backend_name: str,
 ) -> Any:
-    try:
-        return sampler.run(pubs, shots=shots)
-    except Exception as exc:
-        raise QiskitSamplerTaskError(
-            "Failed to submit native Qiskit SamplerV2 job "
-            f"to backend {backend_name!r} ({type(exc).__name__})."
-        ) from None
+    return _run_primitive_job(
+        primitive=sampler,
+        pubs=pubs,
+        primitive_name="SamplerV2",
+        error_cls=QiskitSamplerTaskError,
+        backend_name=backend_name,
+        shots=shots,
+        include_shots=True,
+    )
 
 
 def _submit_estimator_job(
@@ -159,13 +317,15 @@ def _submit_estimator_job(
     precision: float | None,
     backend_name: str,
 ) -> Any:
-    try:
-        return estimator.run(pubs, precision=precision)
-    except Exception as exc:
-        raise QiskitEstimatorTaskError(
-            "Failed to submit native Qiskit EstimatorV2 job "
-            f"to backend {backend_name!r} ({type(exc).__name__})."
-        ) from None
+    return _run_primitive_job(
+        primitive=estimator,
+        pubs=pubs,
+        primitive_name="EstimatorV2",
+        error_cls=QiskitEstimatorTaskError,
+        backend_name=backend_name,
+        precision=precision,
+        include_precision=True,
+    )
 
 
 async def _wait_for_primitive_result(
@@ -185,6 +345,231 @@ async def _wait_for_primitive_result(
         ) from None
 
 
+def _get_service(runtime_config: Any, *, runtime_block_name: str) -> Any:
+    """Create a native QiskitRuntimeService from runtime configuration."""
+
+    try:
+        return runtime_config.get_service()
+    except Exception as exc:
+        raise QiskitJobFetchTaskError(
+            "Failed to create native QiskitRuntimeService "
+            f"from block {runtime_block_name!r} ({type(exc).__name__})."
+        ) from None
+
+
+def _fetch_existing_job(*, service: Any, job_id: str) -> Any:
+    """Fetch an existing Qiskit Runtime job by ID."""
+
+    try:
+        return service.job(job_id)
+    except Exception as exc:
+        raise QiskitJobFetchTaskError(
+            f"Failed to fetch native Qiskit Runtime job {job_id!r} ({type(exc).__name__})."
+        ) from None
+
+
+def _primitive_name(primitive: str | None) -> str:
+    """Convert a primitive type string to a display name."""
+
+    if primitive == "sampler":
+        return "SamplerV2"
+    if primitive == "estimator":
+        return "EstimatorV2"
+    return "Runtime"
+
+
+async def _create_result_artifacts(
+    *,
+    primitive: str | None,
+    metadata: Any,
+    result: Any,
+    artifact_key: str | None,
+) -> None:
+    """Create Prefect artifacts for a Qiskit job result."""
+
+    if primitive == "sampler":
+        key = artifact_key or "qiskit-sampler-summary"
+        await create_qiskit_sampler_metadata_artifact(metadata, key=key)
+        await create_qiskit_sampler_result_artifact(result, key=f"{key}-result")
+        return
+    if primitive == "estimator":
+        key = artifact_key or "qiskit-estimator-summary"
+        await create_qiskit_estimator_metadata_artifact(metadata, result=result, key=key)
+        await create_qiskit_estimator_result_artifact(result, key=f"{key}-result")
+        return
+
+    key = artifact_key or "qiskit-runtime-summary"
+    await create_qiskit_execution_markdown_artifact(metadata, key=key)
+
+
+async def _submit_primitive_job_reference(
+    *,
+    runtime_block_name: str,
+    pubs: Iterable[Any],
+    primitive_type: str,
+    primitive_name: str,
+    error_cls: type[RuntimeError],
+    create_primitive_fn: Any,
+    options: dict[str, Any] | None = None,
+    shots: int | None = None,
+    precision: float | None = None,
+) -> QiskitJobReference:
+    """Submit a primitive job and return a serializable job reference."""
+
+    logger = _logger()
+    _, backend, backend_name = await _load_runtime_backend(
+        runtime_block_name,
+        error_cls=error_cls,
+    )
+
+    primitive = create_primitive_fn(backend=backend, backend_name=backend_name, options=options)
+    pub_list = list(pubs)
+    job = _run_primitive_job(
+        primitive=primitive,
+        pubs=pub_list,
+        primitive_name=primitive_name,
+        error_cls=error_cls,
+        backend_name=backend_name,
+        shots=shots,
+        precision=precision,
+        include_shots=primitive_type == "sampler",
+        include_precision=primitive_type == "estimator",
+    )
+    job_id = _require_job_id(job, primitive_name=primitive_name, error_cls=error_cls)
+    logger.info("Submitted Qiskit %s job %s to backend %s.", primitive_name, job_id, backend_name)
+
+    reference_kwargs: dict[str, Any] = {
+        "primitive": primitive_type,
+        "backend_name": backend_name,
+        "job_id": job_id,
+    }
+    if shots is not None:
+        reference_kwargs["shots"] = shots
+    if precision is not None:
+        reference_kwargs["precision"] = precision
+
+    return _job_reference(**reference_kwargs)
+
+
+@task(name="submit-qiskit-sampler-job")
+async def submit_sampler_job_task(
+    pubs: Iterable[Any],
+    runtime_block_name: str,
+    shots: int | None = None,
+    options: dict[str, Any] | None = None,
+) -> QiskitJobReference:
+    """Submit a native Qiskit Runtime ``SamplerV2`` job without waiting for results."""
+    return await _submit_primitive_job_reference(
+        runtime_block_name=runtime_block_name,
+        pubs=pubs,
+        primitive_type="sampler",
+        primitive_name="SamplerV2",
+        error_cls=QiskitSamplerTaskError,
+        create_primitive_fn=_create_sampler,
+        options=options,
+        shots=shots,
+    )
+
+
+@task(name="submit-qiskit-estimator-job")
+async def submit_estimator_job_task(
+    pubs: Iterable[Any],
+    runtime_block_name: str,
+    precision: float | None = None,
+    options: dict[str, Any] | None = None,
+) -> QiskitJobReference:
+    """Submit a native Qiskit Runtime ``EstimatorV2`` job without waiting for results."""
+    return await _submit_primitive_job_reference(
+        runtime_block_name=runtime_block_name,
+        pubs=pubs,
+        primitive_type="estimator",
+        primitive_name="EstimatorV2",
+        error_cls=QiskitEstimatorTaskError,
+        create_primitive_fn=_create_estimator,
+        options=options,
+        precision=precision,
+    )
+
+
+@task(name="fetch-qiskit-job-result")
+async def fetch_qiskit_job_result_task(
+    runtime_block_name: str,
+    job_id: str | None = None,
+    job_reference: Mapping[str, Any] | None = None,
+    pubs: Iterable[Any] | None = None,
+    primitive: str | None = None,
+    backend_name: str | None = None,
+    shots: int | None = None,
+    precision: float | None = None,
+    artifact_key: str | None = None,
+    options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Fetch an existing native Qiskit Runtime job and collect its result."""
+
+    reference = _resolve_job_reference(
+        job_reference=job_reference,
+        job_id=job_id,
+        primitive=primitive,
+        backend_name=backend_name,
+        shots=shots,
+        precision=precision,
+    )
+    resolved_job_id = reference["job_id"]
+    resolved_primitive = reference.get("primitive")
+    resolved_backend_name = reference.get("backend_name")
+    resolved_shots = reference.get("shots")
+    resolved_precision = reference.get("precision")
+
+    runtime_config = await _load_runtime_config(
+        runtime_block_name,
+        error_cls=QiskitJobFetchTaskError,
+    )
+    service = _get_service(runtime_config, runtime_block_name=runtime_block_name)
+    job = _fetch_existing_job(service=service, job_id=resolved_job_id)
+    logger = _logger()
+    logger.info("Fetching Qiskit Runtime job %s.", resolved_job_id)
+
+    result = await _wait_for_primitive_result(
+        job=job,
+        job_id=resolved_job_id,
+        backend_name=str(resolved_backend_name or "<unknown>"),
+        primitive_name=_primitive_name(resolved_primitive),
+        error_cls=QiskitJobFetchTaskError,
+    )
+    pub_list = list(pubs) if pubs is not None else None
+    metadata = collect_qiskit_execution_metadata(
+        job=job,
+        pubs=pub_list,
+        result=result,
+        options=_metadata_options(
+            options,
+            shots=resolved_shots,
+            precision=resolved_precision,
+        ),
+        resource=resolved_backend_name,
+        program_type=resolved_primitive,
+    )
+    if metadata.job_id is None:
+        metadata.job_id = resolved_job_id
+
+    await _create_result_artifacts(
+        primitive=resolved_primitive,
+        metadata=metadata,
+        result=result,
+        artifact_key=artifact_key,
+    )
+
+    return _result_response(
+        primitive=resolved_primitive,
+        backend_name=resolved_backend_name,
+        job_id=metadata.job_id,
+        shots=resolved_shots,
+        precision=resolved_precision,
+        result=result,
+        metadata=metadata,
+    )
+
+
 @task(name="run-qiskit-sampler")
 async def run_sampler_task(
     pubs: Iterable[Any],
@@ -196,9 +581,7 @@ async def run_sampler_task(
     """Run native Qiskit Runtime ``SamplerV2`` inside a Prefect task."""
 
     logger = _logger()
-    runtime_config = await _load_runtime_config(runtime_block_name)
-    backend = runtime_config.get_backend()
-    backend_name = _backend_name(backend) or runtime_config.backend_name
+    _, backend, backend_name = await _load_runtime_backend(runtime_block_name)
 
     sampler = _create_sampler(backend=backend, backend_name=backend_name, options=options)
     pub_list = list(pubs)
@@ -233,23 +616,22 @@ async def run_sampler_task(
     if metadata.job_id is None:
         metadata.job_id = job_id
 
-    await create_qiskit_sampler_metadata_artifact(
-        metadata,
-        key=artifact_key or "qiskit-sampler-summary",
-    )
-    await create_qiskit_sampler_result_artifact(
-        result,
-        key=f"{artifact_key or 'qiskit-sampler-summary'}-result",
+    await _create_result_artifacts(
+        primitive="sampler",
+        metadata=metadata,
+        result=result,
+        artifact_key=artifact_key,
     )
 
-    return {
-        "primitive": "sampler",
-        "backend_name": backend_name,
-        "job_id": metadata.job_id,
-        "shots": shots,
-        "result": result,
-        "metadata": metadata,
-    }
+    return _result_response(
+        primitive="sampler",
+        backend_name=backend_name,
+        job_id=metadata.job_id,
+        shots=shots,
+        result=result,
+        metadata=metadata,
+        include_shots=True,
+    )
 
 
 @task(name="run-qiskit-estimator")
@@ -263,12 +645,10 @@ async def run_estimator_task(
     """Run native Qiskit Runtime ``EstimatorV2`` inside a Prefect task."""
 
     logger = _logger()
-    runtime_config = await _load_runtime_config(
+    _, backend, backend_name = await _load_runtime_backend(
         runtime_block_name,
         error_cls=QiskitEstimatorTaskError,
     )
-    backend = runtime_config.get_backend()
-    backend_name = _backend_name(backend) or runtime_config.backend_name
 
     estimator = _create_estimator(backend=backend, backend_name=backend_name, options=options)
     pub_list = list(pubs)
@@ -303,21 +683,19 @@ async def run_estimator_task(
     if metadata.job_id is None:
         metadata.job_id = job_id
 
-    await create_qiskit_estimator_metadata_artifact(
-        metadata,
+    await _create_result_artifacts(
+        primitive="estimator",
+        metadata=metadata,
         result=result,
-        key=artifact_key or "qiskit-estimator-summary",
-    )
-    await create_qiskit_estimator_result_artifact(
-        result,
-        key=f"{artifact_key or 'qiskit-estimator-summary'}-result",
+        artifact_key=artifact_key,
     )
 
-    return {
-        "primitive": "estimator",
-        "backend_name": backend_name,
-        "job_id": metadata.job_id,
-        "precision": precision,
-        "result": result,
-        "metadata": metadata,
-    }
+    return _result_response(
+        primitive="estimator",
+        backend_name=backend_name,
+        job_id=metadata.job_id,
+        precision=precision,
+        result=result,
+        metadata=metadata,
+        include_precision=True,
+    )
