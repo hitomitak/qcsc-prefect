@@ -38,11 +38,24 @@ from qcsc_prefect.integrations.qiskit.metadata import (
     collect_qiskit_execution_metadata,
     flatten_qiskit_execution_metadata,
 )
+from qcsc_prefect.integrations.qiskit.result_summaries import (
+    extract_estimator_result_summary,
+    extract_sampler_result_summary,
+)
 from qcsc_prefect.integrations.qiskit.retry import (
     is_transient_qiskit_error,
     qiskit_retry_delays,
     should_retry_qiskit_fetch_failure,
     should_retry_qiskit_submit_failure,
+)
+from qcsc_prefect.integrations.qiskit.serializers import (
+    load_json,
+    make_json_serializable,
+    save_estimator_result_summary,
+    save_execution_metadata,
+    save_json,
+    save_sampler_result_summary,
+    serialize_execution_metadata,
 )
 from qcsc_prefect.integrations.qiskit.tasks import (
     QiskitEstimatorTaskError,
@@ -84,9 +97,13 @@ __all__ = [
     "create_qiskit_execution_table_artifact",
     "create_qiskit_sampler_metadata_artifact",
     "create_qiskit_sampler_result_artifact",
+    "extract_estimator_result_summary",
+    "extract_sampler_result_summary",
     "flatten_qiskit_execution_metadata",
     "fetch_qiskit_job_result_task",
     "is_transient_qiskit_error",
+    "load_json",
+    "make_json_serializable",
     "qiskit_cache_key_from_payload",
     "qiskit_estimator_submit_cache_key",
     "qiskit_result_fetch_cache_key",
@@ -94,6 +111,11 @@ __all__ = [
     "qiskit_sampler_submit_cache_key",
     "run_estimator_task",
     "run_sampler_task",
+    "save_estimator_result_summary",
+    "save_execution_metadata",
+    "save_json",
+    "save_sampler_result_summary",
+    "serialize_execution_metadata",
     "should_retry_qiskit_fetch_failure",
     "should_retry_qiskit_submit_failure",
     "submit_estimator_job_task",
