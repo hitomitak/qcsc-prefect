@@ -29,6 +29,7 @@ members = [
     "packages/qcsc-prefect-blocks",
     "packages/qcsc-prefect-executor",
     "packages/qcsc-prefect-dice",
+    "packages/qcsc-prefect-qiskit",
 ]
 
 
@@ -38,6 +39,7 @@ qcsc-prefect-adapters = { workspace = true }
 qcsc-prefect-blocks   = { workspace = true }
 qcsc-prefect-executor = { workspace = true }
 qcsc-prefect-dice     = { workspace = true }
+qcsc-prefect-qiskit   = { workspace = true }
 
 # --- Poetry ---
 [tool.poetry]
@@ -57,6 +59,7 @@ members = [
     "packages/qcsc-prefect-blocks",
     "packages/qcsc-prefect-executor",
     "packages/qcsc-prefect-dice",
+    "packages/qcsc-prefect-qiskit",
 ]
 
 # --- Hatch ---
@@ -67,6 +70,7 @@ members = [
     "packages/qcsc-prefect-blocks",
     "packages/qcsc-prefect-executor",
     "packages/qcsc-prefect-dice",
+    "packages/qcsc-prefect-qiskit",
 ]
 
 # -----------------------------

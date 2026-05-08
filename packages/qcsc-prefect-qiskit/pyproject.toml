@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qcsc-prefect-qiskit"
+version = "0.1.0"
+description = "Native Qiskit integration utilities for QCSC Prefect workflows"
+requires-python = ">=3.10"
+dependencies = [
+    "prefect>=2.19",
+    "qiskit-ibm-runtime>=0.46",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true

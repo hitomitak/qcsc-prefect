@@ -13,3 +13,4 @@ _ROOT = Path(__file__).resolve().parent
 _add_src_path(_ROOT / "qcsc-prefect-core" / "src")
 _add_src_path(_ROOT / "qcsc-prefect-adapters" / "src")
 _add_src_path(_ROOT / "qcsc-prefect-executor" / "src")
+_add_src_path(_ROOT / "qcsc-prefect-qiskit" / "src")
