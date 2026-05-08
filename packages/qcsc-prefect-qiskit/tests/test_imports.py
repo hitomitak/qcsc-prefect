@@ -12,12 +12,17 @@ def test_native_qiskit_integration_module_imports():
     assert module.QiskitEstimatorTaskError.__name__ == "QiskitEstimatorTaskError"
     assert module.QiskitJobFetchTaskError.__name__ == "QiskitJobFetchTaskError"
     assert module.QiskitSamplerTaskError.__name__ == "QiskitSamplerTaskError"
+    assert callable(module.build_qiskit_cache_payload)
     assert callable(module.build_qiskit_estimator_metadata_markdown)
     assert callable(module.build_qiskit_estimator_result_markdown)
     assert callable(module.create_qiskit_estimator_metadata_artifact)
     assert callable(module.create_qiskit_estimator_result_artifact)
     assert callable(module.create_qiskit_sampler_metadata_artifact)
     assert module.fetch_qiskit_job_result_task.name == "fetch-qiskit-job-result"
+    assert callable(module.qiskit_cache_key_from_payload)
+    assert callable(module.qiskit_estimator_submit_cache_key)
+    assert callable(module.qiskit_result_fetch_cache_key)
+    assert callable(module.qiskit_sampler_submit_cache_key)
     assert module.run_estimator_task.name == "run-qiskit-estimator"
     assert module.run_sampler_task.name == "run-qiskit-sampler"
     assert module.submit_estimator_job_task.name == "submit-qiskit-estimator-job"
@@ -28,6 +33,7 @@ def test_native_qiskit_placeholder_submodules_import():
     submodules = [
         "artifacts",
         "blocks",
+        "cache",
         "metadata",
         "retry",
         "serializers",

@@ -132,6 +132,7 @@ def test_run_estimator_task_uses_native_backend_and_runs_pubs(monkeypatch):
             precision=0.01,
             artifact_key="estimator-summary",
             options={"default_precision": 0.02},
+            input_digest="digest-def",
         )
     )
 
@@ -145,10 +146,12 @@ def test_run_estimator_task_uses_native_backend_and_runs_pubs(monkeypatch):
     assert result["backend_name"] == "ibm_kawasaki"
     assert result["job_id"] == "job-456"
     assert result["precision"] == 0.01
+    assert result["input_digest"] == "digest-def"
     assert isinstance(result["result"][0], _Result)
     assert artifact_calls["metadata"][0]["key"] == "estimator-summary"
     assert artifact_calls["metadata"][0]["metadata"].job_id == "job-456"
     assert artifact_calls["metadata"][0]["metadata"].program_type == "estimator"
+    assert artifact_calls["metadata"][0]["metadata"].input_digest == "digest-def"
     assert artifact_calls["metadata"][0]["metadata"].options.params["precision"] == 0.01
     assert isinstance(artifact_calls["metadata"][0]["result"][0], _Result)
     assert artifact_calls["result"][0]["key"] == "estimator-summary-result"

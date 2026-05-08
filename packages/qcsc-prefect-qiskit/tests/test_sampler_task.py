@@ -130,6 +130,7 @@ def test_run_sampler_task_uses_native_backend_and_runs_pubs(monkeypatch):
             shots=1024,
             artifact_key="sampler-summary",
             options={"params": {"resilience_level": 1}},
+            input_digest="digest-abc",
         )
     )
 
@@ -143,9 +144,11 @@ def test_run_sampler_task_uses_native_backend_and_runs_pubs(monkeypatch):
     assert result["backend_name"] == "ibm_kawasaki"
     assert result["job_id"] == "job-123"
     assert result["shots"] == 1024
+    assert result["input_digest"] == "digest-abc"
     assert isinstance(result["result"][0], _Result)
     assert artifact_calls["metadata"][0]["key"] == "sampler-summary"
     assert artifact_calls["metadata"][0]["metadata"].job_id == "job-123"
+    assert artifact_calls["metadata"][0]["metadata"].input_digest == "digest-abc"
     assert artifact_calls["metadata"][0]["metadata"].options.params["shots"] == 1024
     assert artifact_calls["result"][0]["key"] == "sampler-summary-result"
     assert isinstance(artifact_calls["result"][0]["result"][0], _Result)

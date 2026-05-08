@@ -20,6 +20,13 @@ from qcsc_prefect.integrations.qiskit.blocks import (
     QiskitRuntimeConfig,
     QiskitRuntimeConfigError,
 )
+from qcsc_prefect.integrations.qiskit.cache import (
+    build_qiskit_cache_payload,
+    qiskit_cache_key_from_payload,
+    qiskit_estimator_submit_cache_key,
+    qiskit_result_fetch_cache_key,
+    qiskit_sampler_submit_cache_key,
+)
 from qcsc_prefect.integrations.qiskit.metadata import (
     QiskitCircuitMetadata,
     QiskitExecutionMetadata,
@@ -55,6 +62,7 @@ __all__ = [
     "QiskitEstimatorTaskError",
     "QiskitJobFetchTaskError",
     "QiskitSamplerTaskError",
+    "build_qiskit_cache_payload",
     "build_qiskit_estimator_metadata_markdown",
     "build_qiskit_estimator_result_markdown",
     "build_qiskit_execution_markdown",
@@ -72,6 +80,10 @@ __all__ = [
     "create_qiskit_sampler_result_artifact",
     "flatten_qiskit_execution_metadata",
     "fetch_qiskit_job_result_task",
+    "qiskit_cache_key_from_payload",
+    "qiskit_estimator_submit_cache_key",
+    "qiskit_result_fetch_cache_key",
+    "qiskit_sampler_submit_cache_key",
     "run_estimator_task",
     "run_sampler_task",
     "submit_estimator_job_task",

@@ -60,6 +60,7 @@ class QiskitExecutionMetadata(BaseModel):
 
     resource: str | None = None
     program_type: str | None = None
+    input_digest: str | None = None
     num_pubs: int | None = None
     job_id: str | None = None
     tags: list[str] = Field(default_factory=list)
@@ -79,6 +80,7 @@ def collect_qiskit_execution_metadata(
     options: Any | None = None,
     resource: str | None = None,
     program_type: str | None = None,
+    input_digest: str | None = None,
 ) -> QiskitExecutionMetadata:
     """Collect native Qiskit execution metadata on a best-effort basis."""
 
@@ -91,6 +93,7 @@ def collect_qiskit_execution_metadata(
             options=options,
             resource=resource,
             program_type=program_type,
+            input_digest=input_digest,
             errors=errors,
         )
     except Exception as exc:
@@ -98,6 +101,7 @@ def collect_qiskit_execution_metadata(
         return QiskitExecutionMetadata(
             resource=resource,
             program_type=program_type,
+            input_digest=input_digest,
             num_pubs=_safe_len(pubs) if pubs is not None else _safe_len(result),
             collection_errors=errors,
         )
@@ -111,6 +115,7 @@ def _collect_qiskit_execution_metadata(
     options: Any | None,
     resource: str | None,
     program_type: str | None,
+    input_digest: str | None,
     errors: list[str],
 ) -> QiskitExecutionMetadata:
     """Collect native Qiskit execution metadata from known object shapes."""
@@ -129,6 +134,7 @@ def _collect_qiskit_execution_metadata(
     return QiskitExecutionMetadata(
         resource=resource or _resource_name(job, errors=errors),
         program_type=program_type or _program_type(job, errors=errors),
+        input_digest=input_digest,
         num_pubs=num_pubs,
         job_id=_coerce_str(_safe_get(job, "job_id", errors=errors)),
         tags=_tags(job, errors=errors),
@@ -153,6 +159,7 @@ def flatten_qiskit_execution_metadata(
     flattened: dict[str, Any] = {
         "resource": metadata.resource,
         "program_type": metadata.program_type,
+        "input_digest": metadata.input_digest,
         "num_pubs": metadata.num_pubs,
         "job_id": metadata.job_id,
         "tags": metadata.tags,
