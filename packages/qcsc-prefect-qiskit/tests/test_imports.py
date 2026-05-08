@@ -19,12 +19,16 @@ def test_native_qiskit_integration_module_imports():
     assert callable(module.create_qiskit_estimator_result_artifact)
     assert callable(module.create_qiskit_sampler_metadata_artifact)
     assert module.fetch_qiskit_job_result_task.name == "fetch-qiskit-job-result"
+    assert callable(module.is_transient_qiskit_error)
     assert callable(module.qiskit_cache_key_from_payload)
     assert callable(module.qiskit_estimator_submit_cache_key)
     assert callable(module.qiskit_result_fetch_cache_key)
+    assert callable(module.qiskit_retry_delays)
     assert callable(module.qiskit_sampler_submit_cache_key)
     assert module.run_estimator_task.name == "run-qiskit-estimator"
     assert module.run_sampler_task.name == "run-qiskit-sampler"
+    assert callable(module.should_retry_qiskit_fetch_failure)
+    assert callable(module.should_retry_qiskit_submit_failure)
     assert module.submit_estimator_job_task.name == "submit-qiskit-estimator-job"
     assert module.submit_sampler_job_task.name == "submit-qiskit-sampler-job"
 

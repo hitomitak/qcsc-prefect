@@ -38,6 +38,12 @@ from qcsc_prefect.integrations.qiskit.metadata import (
     collect_qiskit_execution_metadata,
     flatten_qiskit_execution_metadata,
 )
+from qcsc_prefect.integrations.qiskit.retry import (
+    is_transient_qiskit_error,
+    qiskit_retry_delays,
+    should_retry_qiskit_fetch_failure,
+    should_retry_qiskit_submit_failure,
+)
 from qcsc_prefect.integrations.qiskit.tasks import (
     QiskitEstimatorTaskError,
     QiskitJobFetchTaskError,
@@ -80,12 +86,16 @@ __all__ = [
     "create_qiskit_sampler_result_artifact",
     "flatten_qiskit_execution_metadata",
     "fetch_qiskit_job_result_task",
+    "is_transient_qiskit_error",
     "qiskit_cache_key_from_payload",
     "qiskit_estimator_submit_cache_key",
     "qiskit_result_fetch_cache_key",
+    "qiskit_retry_delays",
     "qiskit_sampler_submit_cache_key",
     "run_estimator_task",
     "run_sampler_task",
+    "should_retry_qiskit_fetch_failure",
+    "should_retry_qiskit_submit_failure",
     "submit_estimator_job_task",
     "submit_sampler_job_task",
 ]
