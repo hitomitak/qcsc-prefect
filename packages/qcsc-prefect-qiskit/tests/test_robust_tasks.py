@@ -173,6 +173,31 @@ def test_submit_sampler_job_task_returns_job_reference(monkeypatch):
     }
 
 
+def test_submit_sampler_job_task_accepts_runtime_config_object(monkeypatch):
+    _patch_runtime(monkeypatch)
+    runtime_config = _RuntimeConfig()
+    pubs = ["pub-0"]
+
+    reference = asyncio.run(
+        submit_sampler_job_task.fn(
+            pubs,
+            runtime_config=runtime_config,
+            shots=512,
+        )
+    )
+
+    sampler = _Sampler.instances[0]
+    assert _ConfigAPI.loaded_names == []
+    assert sampler.mode is runtime_config.backend
+    assert sampler.run_calls == [{"pubs": pubs, "shots": 512}]
+    assert reference == {
+        "primitive": "sampler",
+        "backend_name": "ibm_kawasaki",
+        "job_id": "sampler-job-123",
+        "shots": 512,
+    }
+
+
 def test_submit_estimator_job_task_returns_job_reference(monkeypatch):
     _patch_runtime(monkeypatch)
     pubs = ["pub-0"]
@@ -196,6 +221,31 @@ def test_submit_estimator_job_task_returns_job_reference(monkeypatch):
         "backend_name": "ibm_kawasaki",
         "job_id": "estimator-job-456",
         "precision": 0.01,
+    }
+
+
+def test_submit_estimator_job_task_accepts_runtime_config_object(monkeypatch):
+    _patch_runtime(monkeypatch)
+    runtime_config = _RuntimeConfig()
+    pubs = ["pub-0"]
+
+    reference = asyncio.run(
+        submit_estimator_job_task.fn(
+            pubs,
+            runtime_config=runtime_config,
+            precision=0.02,
+        )
+    )
+
+    estimator = _Estimator.instances[0]
+    assert _ConfigAPI.loaded_names == []
+    assert estimator.mode is runtime_config.backend
+    assert estimator.run_calls == [{"pubs": pubs, "precision": 0.02}]
+    assert reference == {
+        "primitive": "estimator",
+        "backend_name": "ibm_kawasaki",
+        "job_id": "estimator-job-456",
+        "precision": 0.02,
     }
 
 
@@ -231,6 +281,34 @@ def test_fetch_qiskit_job_result_task_uses_existing_sampler_job_id(monkeypatch):
     assert result["shots"] == 1024
     assert artifact_calls["metadata"][0]["key"] == "sampler-fetch"
     assert artifact_calls["result"][0]["key"] == "sampler-fetch-result"
+
+
+def test_fetch_qiskit_job_result_task_accepts_runtime_config_object(monkeypatch):
+    _patch_runtime(monkeypatch)
+    artifact_calls = _patch_fetch_artifacts(monkeypatch)
+    runtime_config = _RuntimeConfig()
+    job = _Job("sampler-job-123")
+    runtime_config.service.jobs = {"sampler-job-123": job}
+
+    result = asyncio.run(
+        fetch_qiskit_job_result_task.fn(
+            runtime_config=runtime_config,
+            job_reference={
+                "primitive": "sampler",
+                "backend_name": "ibm_kawasaki",
+                "job_id": "sampler-job-123",
+                "shots": 1024,
+            },
+            pubs=["pub-0"],
+            artifact_key="sampler-fetch",
+        )
+    )
+
+    assert _ConfigAPI.loaded_names == []
+    assert runtime_config.service.fetched_job_ids == ["sampler-job-123"]
+    assert job.result_called is True
+    assert result["job_id"] == "sampler-job-123"
+    assert artifact_calls["metadata"][0]["key"] == "sampler-fetch"
 
 
 def test_fetch_qiskit_job_result_task_uses_existing_estimator_job_id(monkeypatch):

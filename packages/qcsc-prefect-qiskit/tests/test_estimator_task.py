@@ -155,6 +155,28 @@ def test_run_estimator_task_uses_native_backend_and_runs_pubs(monkeypatch):
     assert isinstance(artifact_calls["result"][0]["result"][0], _Result)
 
 
+def test_run_estimator_task_accepts_runtime_config_object(monkeypatch):
+    artifact_calls = _patch_estimator_task(monkeypatch)
+    runtime_config = _RuntimeConfig()
+    pubs = ["pub-0"]
+
+    result = asyncio.run(
+        run_estimator_task.fn(
+            pubs,
+            runtime_config=runtime_config,
+            precision=0.02,
+        )
+    )
+
+    estimator = _Estimator.instances[0]
+    assert _ConfigAPI.loaded_names == []
+    assert estimator.mode is runtime_config.backend
+    assert estimator.run_calls == [{"pubs": pubs, "precision": 0.02}]
+    assert result["backend_name"] == "ibm_kawasaki"
+    assert result["precision"] == 0.02
+    assert artifact_calls["metadata"][0]["metadata"].job_id == "job-456"
+
+
 def test_run_estimator_task_uses_default_artifact_key(monkeypatch):
     artifact_calls = _patch_estimator_task(monkeypatch)
 

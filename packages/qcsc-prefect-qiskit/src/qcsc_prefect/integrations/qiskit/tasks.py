@@ -74,12 +74,32 @@ async def _load_runtime_config(
         ) from None
 
 
-async def _load_runtime_backend(
-    runtime_block_name: str,
+async def _resolve_runtime_config(
+    runtime_block_name: str | None,
     *,
+    runtime_config: Any | None = None,
+    error_cls: type[RuntimeError] = QiskitSamplerTaskError,
+) -> Any:
+    if runtime_config is not None:
+        if runtime_block_name is not None:
+            raise error_cls("Pass either runtime_block_name or runtime_config, not both.")
+        return runtime_config
+    if runtime_block_name is None:
+        raise error_cls("Either runtime_block_name or runtime_config is required.")
+    return await _load_runtime_config(runtime_block_name, error_cls=error_cls)
+
+
+async def _load_runtime_backend(
+    runtime_block_name: str | None,
+    *,
+    runtime_config: Any | None = None,
     error_cls: type[RuntimeError] = QiskitSamplerTaskError,
 ) -> tuple[Any, Any, str]:
-    runtime_config = await _load_runtime_config(runtime_block_name, error_cls=error_cls)
+    runtime_config = await _resolve_runtime_config(
+        runtime_block_name,
+        runtime_config=runtime_config,
+        error_cls=error_cls,
+    )
     backend = runtime_config.get_backend()
     backend_name = _backend_name(backend) or runtime_config.backend_name
     return runtime_config, backend, backend_name
@@ -345,7 +365,13 @@ async def _wait_for_primitive_result(
         ) from None
 
 
-def _get_service(runtime_config: Any, *, runtime_block_name: str) -> Any:
+def _runtime_config_source(runtime_block_name: str | None) -> str:
+    if runtime_block_name is None:
+        return "runtime_config argument"
+    return f"block {runtime_block_name!r}"
+
+
+def _get_service(runtime_config: Any, *, runtime_block_name: str | None) -> Any:
     """Create a native QiskitRuntimeService from runtime configuration."""
 
     try:
@@ -353,7 +379,7 @@ def _get_service(runtime_config: Any, *, runtime_block_name: str) -> Any:
     except Exception as exc:
         raise QiskitJobFetchTaskError(
             "Failed to create native QiskitRuntimeService "
-            f"from block {runtime_block_name!r} ({type(exc).__name__})."
+            f"from {_runtime_config_source(runtime_block_name)} ({type(exc).__name__})."
         ) from None
 
 
@@ -404,7 +430,8 @@ async def _create_result_artifacts(
 
 async def _submit_primitive_job_reference(
     *,
-    runtime_block_name: str,
+    runtime_block_name: str | None,
+    runtime_config: Any | None,
     pubs: Iterable[Any],
     primitive_type: str,
     primitive_name: str,
@@ -419,6 +446,7 @@ async def _submit_primitive_job_reference(
     logger = _logger()
     _, backend, backend_name = await _load_runtime_backend(
         runtime_block_name,
+        runtime_config=runtime_config,
         error_cls=error_cls,
     )
 
@@ -454,13 +482,15 @@ async def _submit_primitive_job_reference(
 @task(name="submit-qiskit-sampler-job")
 async def submit_sampler_job_task(
     pubs: Iterable[Any],
-    runtime_block_name: str,
+    runtime_block_name: str | None = None,
     shots: int | None = None,
     options: dict[str, Any] | None = None,
+    runtime_config: QiskitRuntimeConfig | None = None,
 ) -> QiskitJobReference:
     """Submit a native Qiskit Runtime ``SamplerV2`` job without waiting for results."""
     return await _submit_primitive_job_reference(
         runtime_block_name=runtime_block_name,
+        runtime_config=runtime_config,
         pubs=pubs,
         primitive_type="sampler",
         primitive_name="SamplerV2",
@@ -474,13 +504,15 @@ async def submit_sampler_job_task(
 @task(name="submit-qiskit-estimator-job")
 async def submit_estimator_job_task(
     pubs: Iterable[Any],
-    runtime_block_name: str,
+    runtime_block_name: str | None = None,
     precision: float | None = None,
     options: dict[str, Any] | None = None,
+    runtime_config: QiskitRuntimeConfig | None = None,
 ) -> QiskitJobReference:
     """Submit a native Qiskit Runtime ``EstimatorV2`` job without waiting for results."""
     return await _submit_primitive_job_reference(
         runtime_block_name=runtime_block_name,
+        runtime_config=runtime_config,
         pubs=pubs,
         primitive_type="estimator",
         primitive_name="EstimatorV2",
@@ -493,7 +525,7 @@ async def submit_estimator_job_task(
 
 @task(name="fetch-qiskit-job-result")
 async def fetch_qiskit_job_result_task(
-    runtime_block_name: str,
+    runtime_block_name: str | None = None,
     job_id: str | None = None,
     job_reference: Mapping[str, Any] | None = None,
     pubs: Iterable[Any] | None = None,
@@ -503,6 +535,7 @@ async def fetch_qiskit_job_result_task(
     precision: float | None = None,
     artifact_key: str | None = None,
     options: dict[str, Any] | None = None,
+    runtime_config: QiskitRuntimeConfig | None = None,
 ) -> dict[str, Any]:
     """Fetch an existing native Qiskit Runtime job and collect its result."""
 
@@ -520,8 +553,9 @@ async def fetch_qiskit_job_result_task(
     resolved_shots = reference.get("shots")
     resolved_precision = reference.get("precision")
 
-    runtime_config = await _load_runtime_config(
+    runtime_config = await _resolve_runtime_config(
         runtime_block_name,
+        runtime_config=runtime_config,
         error_cls=QiskitJobFetchTaskError,
     )
     service = _get_service(runtime_config, runtime_block_name=runtime_block_name)
@@ -573,15 +607,19 @@ async def fetch_qiskit_job_result_task(
 @task(name="run-qiskit-sampler")
 async def run_sampler_task(
     pubs: Iterable[Any],
-    runtime_block_name: str,
+    runtime_block_name: str | None = None,
     shots: int | None = None,
     artifact_key: str | None = None,
     options: dict[str, Any] | None = None,
+    runtime_config: QiskitRuntimeConfig | None = None,
 ) -> dict[str, Any]:
     """Run native Qiskit Runtime ``SamplerV2`` inside a Prefect task."""
 
     logger = _logger()
-    _, backend, backend_name = await _load_runtime_backend(runtime_block_name)
+    _, backend, backend_name = await _load_runtime_backend(
+        runtime_block_name,
+        runtime_config=runtime_config,
+    )
 
     sampler = _create_sampler(backend=backend, backend_name=backend_name, options=options)
     pub_list = list(pubs)
@@ -637,16 +675,18 @@ async def run_sampler_task(
 @task(name="run-qiskit-estimator")
 async def run_estimator_task(
     pubs: Iterable[Any],
-    runtime_block_name: str,
+    runtime_block_name: str | None = None,
     precision: float | None = None,
     artifact_key: str | None = None,
     options: dict[str, Any] | None = None,
+    runtime_config: QiskitRuntimeConfig | None = None,
 ) -> dict[str, Any]:
     """Run native Qiskit Runtime ``EstimatorV2`` inside a Prefect task."""
 
     logger = _logger()
     _, backend, backend_name = await _load_runtime_backend(
         runtime_block_name,
+        runtime_config=runtime_config,
         error_cls=QiskitEstimatorTaskError,
     )
 

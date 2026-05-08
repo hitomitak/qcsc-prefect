@@ -45,6 +45,7 @@ qcsc-prefect/
 - Example guides:
   - [BitCount Tutorial for Miyabi](./docs/tutorials/create_qcsc_workflow_for_miyabi.md)
   - [BitCount Tutorial for Fugaku](./docs/tutorials/create_qcsc_workflow_for_fugaku.md)
+  - [Native Qiskit on Prefect](./docs/howto/howto_use_native_qiskit_prefect.md)
   - [Miyabi Hello Demo](./examples/miyabi_prefect_hello_demo/README.md)
   - [Fugaku Hello Demo](./examples/fugaku_prefect_hello_demo/README.md)
 

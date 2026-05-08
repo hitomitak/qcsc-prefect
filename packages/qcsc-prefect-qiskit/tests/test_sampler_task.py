@@ -151,6 +151,28 @@ def test_run_sampler_task_uses_native_backend_and_runs_pubs(monkeypatch):
     assert isinstance(artifact_calls["result"][0]["result"][0], _Result)
 
 
+def test_run_sampler_task_accepts_runtime_config_object(monkeypatch):
+    artifact_calls = _patch_sampler_task(monkeypatch)
+    runtime_config = _RuntimeConfig()
+    pubs = ["pub-0"]
+
+    result = asyncio.run(
+        run_sampler_task.fn(
+            pubs,
+            runtime_config=runtime_config,
+            shots=100,
+        )
+    )
+
+    sampler = _Sampler.instances[0]
+    assert _ConfigAPI.loaded_names == []
+    assert sampler.mode is runtime_config.backend
+    assert sampler.run_calls == [{"pubs": pubs, "shots": 100}]
+    assert result["backend_name"] == "ibm_kawasaki"
+    assert result["shots"] == 100
+    assert artifact_calls["metadata"][0]["metadata"].job_id == "job-123"
+
+
 def test_run_sampler_task_uses_default_artifact_key(monkeypatch):
     artifact_calls = _patch_sampler_task(monkeypatch)
 
@@ -181,6 +203,22 @@ def test_run_sampler_task_wraps_block_load_errors(monkeypatch):
     assert "ValueError" in message
     assert "hidden-token" not in message
     assert exc_info.value.__cause__ is None
+
+
+def test_run_sampler_task_requires_one_runtime_source(monkeypatch):
+    _patch_sampler_task(monkeypatch)
+
+    with pytest.raises(QiskitSamplerTaskError, match="runtime_block_name or runtime_config"):
+        asyncio.run(run_sampler_task.fn(["pub-0"]))
+
+    with pytest.raises(QiskitSamplerTaskError, match="either runtime_block_name or runtime_config"):
+        asyncio.run(
+            run_sampler_task.fn(
+                ["pub-0"],
+                runtime_block_name="ibm-runtime",
+                runtime_config=_RuntimeConfig(),
+            )
+        )
 
 
 def test_run_sampler_task_wraps_sampler_run_errors(monkeypatch):
