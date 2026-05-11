@@ -148,7 +148,7 @@ sbd                                0.1.0
 Create a new terminal and login to Fugaku Login Node.
 Navigate to native source and build:
 
-<img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
+<img src="../images/icon-login-fugaku.png" alt="login" width="70"/>  or  <img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
 cd /path/to/work/qcsc-prefect/algorithms/sbd/native
 bash ./build_sbd_fugaku.sh
@@ -156,7 +156,8 @@ bash ./build_sbd_fugaku.sh
 
 Confirm executable:
 
-<img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
+<img src="../images/icon-login-fugaku.png" alt="login" width="70"/>  or  <img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
+
 ```bash
 ls -l | grep diag
 realpath ./diag
