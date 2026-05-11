@@ -6,6 +6,7 @@ import inspect
 import json
 import os
 import sys
+from datetime import timedelta
 from importlib import import_module
 from pathlib import Path
 from typing import Any, Literal
@@ -19,14 +20,21 @@ if str(QISKIT_PACKAGE_SRC) not in sys.path:
 
 _qiskit_integration = import_module("qcsc_prefect.integrations.qiskit")
 QiskitRuntimeConfig = _qiskit_integration.QiskitRuntimeConfig
+build_qiskit_estimator_input_digest = _qiskit_integration.build_qiskit_estimator_input_digest
+build_qiskit_sampler_input_digest = _qiskit_integration.build_qiskit_sampler_input_digest
 fetch_qiskit_job_result_task = _qiskit_integration.fetch_qiskit_job_result_task
+qiskit_estimator_submit_cache_key = _qiskit_integration.qiskit_estimator_submit_cache_key
+qiskit_retry_delays = _qiskit_integration.qiskit_retry_delays
+qiskit_sampler_submit_cache_key = _qiskit_integration.qiskit_sampler_submit_cache_key
 run_estimator_task = _qiskit_integration.run_estimator_task
 run_sampler_task = _qiskit_integration.run_sampler_task
+should_retry_qiskit_fetch_failure = _qiskit_integration.should_retry_qiskit_fetch_failure
 submit_estimator_job_task = _qiskit_integration.submit_estimator_job_task
 submit_sampler_job_task = _qiskit_integration.submit_sampler_job_task
 
 PrimitiveSelection = Literal["all", "sampler", "estimator"]
 ModeSelection = Literal["all", "simple", "robust"]
+CacheScopeSelection = Literal["flow", "global"]
 
 
 def _build_sampler_circuit() -> Any:
@@ -109,6 +117,7 @@ def _job_summary(task_output: dict[str, Any]) -> dict[str, Any]:
         "job_id": task_output.get("job_id"),
         "shots": task_output.get("shots"),
         "precision": task_output.get("precision"),
+        "input_digest": task_output.get("input_digest"),
         "metadata_job_id": getattr(metadata, "job_id", None),
         "result_type": type(result).__name__ if result is not None else None,
         "result_len": result_len,
@@ -122,7 +131,38 @@ def _reference_summary(job_reference: dict[str, Any]) -> dict[str, Any]:
         "job_id": job_reference.get("job_id"),
         "shots": job_reference.get("shots"),
         "precision": job_reference.get("precision"),
+        "input_digest": job_reference.get("input_digest"),
     }
+
+
+def _sampler_submit_task(*, enable_cache: bool, cache_expiration_days: int) -> Any:
+    if not enable_cache:
+        return submit_sampler_job_task
+    return submit_sampler_job_task.with_options(
+        cache_key_fn=qiskit_sampler_submit_cache_key,
+        cache_expiration=timedelta(days=cache_expiration_days),
+        persist_result=True,
+    )
+
+
+def _estimator_submit_task(*, enable_cache: bool, cache_expiration_days: int) -> Any:
+    if not enable_cache:
+        return submit_estimator_job_task
+    return submit_estimator_job_task.with_options(
+        cache_key_fn=qiskit_estimator_submit_cache_key,
+        cache_expiration=timedelta(days=cache_expiration_days),
+        persist_result=True,
+    )
+
+
+def _fetch_task(*, enable_retry: bool) -> Any:
+    if not enable_retry:
+        return fetch_qiskit_job_result_task
+    return fetch_qiskit_job_result_task.with_options(
+        retries=len(qiskit_retry_delays()),
+        retry_delay_seconds=qiskit_retry_delays(),
+        retry_condition_fn=should_retry_qiskit_fetch_failure,
+    )
 
 
 def _save_runtime_block(
@@ -162,22 +202,41 @@ async def native_qiskit_primitives_live_test_flow(
     shots: int = 100,
     precision: float = 0.2,
     artifact_prefix: str = "native-qiskit-live-test",
+    enable_submit_cache: bool = False,
+    cache_scope: CacheScopeSelection = "flow",
+    cache_expiration_days: int = 7,
+    enable_fetch_retry: bool = False,
 ) -> dict[str, Any]:
     logger = get_run_logger()
     sampler_pubs, estimator_pubs, backend_name = await _prepare_pubs(runtime_block_name)
     logger.warning(
         "This flow submits real Qiskit Runtime jobs to backend %s. "
-        "Selected primitive=%s, mode=%s.",
+        "Selected primitive=%s, mode=%s, submit_cache=%s, fetch_retry=%s.",
         backend_name,
         primitive,
         mode,
+        enable_submit_cache,
+        enable_fetch_retry,
     )
+    submit_sampler = _sampler_submit_task(
+        enable_cache=enable_submit_cache,
+        cache_expiration_days=cache_expiration_days,
+    )
+    submit_estimator = _estimator_submit_task(
+        enable_cache=enable_submit_cache,
+        cache_expiration_days=cache_expiration_days,
+    )
+    fetch_result = _fetch_task(enable_retry=enable_fetch_retry)
 
     summary: dict[str, Any] = {
         "runtime_block_name": runtime_block_name,
         "backend_name": backend_name,
         "shots": shots,
         "precision": precision,
+        "enable_submit_cache": enable_submit_cache,
+        "cache_scope": cache_scope,
+        "cache_expiration_days": cache_expiration_days,
+        "enable_fetch_retry": enable_fetch_retry,
         "jobs": {},
     }
 
@@ -191,12 +250,22 @@ async def native_qiskit_primitives_live_test_flow(
         summary["jobs"]["sampler_simple"] = _job_summary(output)
 
     if _selected(primitive, "sampler") and _selected(mode, "robust"):
-        reference = await submit_sampler_job_task(
+        input_digest = None
+        if enable_submit_cache:
+            input_digest = build_qiskit_sampler_input_digest(
+                sampler_pubs,
+                backend_name=backend_name,
+                runtime_block_name=runtime_block_name,
+                shots=shots,
+                cache_scope=cache_scope,
+            )
+        reference = await submit_sampler(
             sampler_pubs,
             runtime_block_name=runtime_block_name,
             shots=shots,
+            input_digest=input_digest,
         )
-        output = await fetch_qiskit_job_result_task(
+        output = await fetch_result(
             runtime_block_name=runtime_block_name,
             job_reference=reference,
             pubs=sampler_pubs,
@@ -215,12 +284,22 @@ async def native_qiskit_primitives_live_test_flow(
         summary["jobs"]["estimator_simple"] = _job_summary(output)
 
     if _selected(primitive, "estimator") and _selected(mode, "robust"):
-        reference = await submit_estimator_job_task(
+        input_digest = None
+        if enable_submit_cache:
+            input_digest = build_qiskit_estimator_input_digest(
+                estimator_pubs,
+                backend_name=backend_name,
+                runtime_block_name=runtime_block_name,
+                precision=precision,
+                cache_scope=cache_scope,
+            )
+        reference = await submit_estimator(
             estimator_pubs,
             runtime_block_name=runtime_block_name,
             precision=precision,
+            input_digest=input_digest,
         )
-        output = await fetch_qiskit_job_result_task(
+        output = await fetch_result(
             runtime_block_name=runtime_block_name,
             job_reference=reference,
             pubs=estimator_pubs,
@@ -257,6 +336,29 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--shots", type=int, default=100)
     parser.add_argument("--precision", type=float, default=0.2)
     parser.add_argument("--artifact-prefix", default="native-qiskit-live-test")
+    parser.add_argument(
+        "--enable-submit-cache",
+        action="store_true",
+        help=(
+            "Cache submit_*_job_task results. Only robust mode uses submit tasks; "
+            "raw result fetches are not cached."
+        ),
+    )
+    parser.add_argument(
+        "--cache-scope",
+        choices=("flow", "global"),
+        default="flow",
+        help=(
+            "flow scopes input_digest to this Prefect flow; global allows "
+            "different flows with the same inputs to share submit cache entries."
+        ),
+    )
+    parser.add_argument("--cache-expiration-days", type=int, default=7)
+    parser.add_argument(
+        "--enable-fetch-retry",
+        action="store_true",
+        help="Retry transient failures while fetching an already-submitted job result.",
+    )
 
     parser.add_argument(
         "--save-runtime-block",
@@ -298,6 +400,10 @@ async def _main() -> None:
         shots=args.shots,
         precision=args.precision,
         artifact_prefix=args.artifact_prefix,
+        enable_submit_cache=args.enable_submit_cache,
+        cache_scope=args.cache_scope,
+        cache_expiration_days=args.cache_expiration_days,
+        enable_fetch_retry=args.enable_fetch_retry,
     )
     print(json.dumps(summary, indent=2, sort_keys=True, default=str))
 

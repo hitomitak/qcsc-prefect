@@ -157,6 +157,7 @@ def test_submit_sampler_job_task_returns_job_reference(monkeypatch):
             runtime_block_name="ibm-runtime",
             shots=1024,
             options={"resilience_level": 1},
+            input_digest="digest-abc",
         )
     )
 
@@ -166,10 +167,14 @@ def test_submit_sampler_job_task_returns_job_reference(monkeypatch):
     assert sampler.run_calls == [{"pubs": pubs, "shots": 1024}]
     assert sampler.job.result_called is False
     assert reference == {
+        "program_type": "sampler",
         "primitive": "sampler",
         "backend_name": "ibm_kawasaki",
         "job_id": "sampler-job-123",
+        "runtime_block_name": "ibm-runtime",
         "shots": 1024,
+        "input_digest": "digest-abc",
+        "options": {"resilience_level": 1},
     }
 
 
@@ -191,9 +196,11 @@ def test_submit_sampler_job_task_accepts_runtime_config_object(monkeypatch):
     assert sampler.mode is runtime_config.backend
     assert sampler.run_calls == [{"pubs": pubs, "shots": 512}]
     assert reference == {
+        "program_type": "sampler",
         "primitive": "sampler",
         "backend_name": "ibm_kawasaki",
         "job_id": "sampler-job-123",
+        "runtime_block_name": None,
         "shots": 512,
     }
 
@@ -208,6 +215,7 @@ def test_submit_estimator_job_task_returns_job_reference(monkeypatch):
             runtime_block_name="ibm-runtime",
             precision=0.01,
             options={"default_precision": 0.02},
+            input_digest="digest-def",
         )
     )
 
@@ -217,10 +225,14 @@ def test_submit_estimator_job_task_returns_job_reference(monkeypatch):
     assert estimator.run_calls == [{"pubs": pubs, "precision": 0.01}]
     assert estimator.job.result_called is False
     assert reference == {
+        "program_type": "estimator",
         "primitive": "estimator",
         "backend_name": "ibm_kawasaki",
         "job_id": "estimator-job-456",
+        "runtime_block_name": "ibm-runtime",
         "precision": 0.01,
+        "input_digest": "digest-def",
+        "options": {"default_precision": 0.02},
     }
 
 
@@ -242,9 +254,11 @@ def test_submit_estimator_job_task_accepts_runtime_config_object(monkeypatch):
     assert estimator.mode is runtime_config.backend
     assert estimator.run_calls == [{"pubs": pubs, "precision": 0.02}]
     assert reference == {
+        "program_type": "estimator",
         "primitive": "estimator",
         "backend_name": "ibm_kawasaki",
         "job_id": "estimator-job-456",
+        "runtime_block_name": None,
         "precision": 0.02,
     }
 

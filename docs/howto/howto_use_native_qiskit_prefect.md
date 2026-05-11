@@ -241,6 +241,122 @@ async def robust_sampler_flow(pubs):
 
 The same pattern is available for Estimator with `submit_estimator_job_task`.
 
+## Example 4: add submit cache and fetch retry
+
+Choose this when you want reruns to avoid duplicate Qiskit Runtime submissions,
+while still keeping raw result fetching explicit and retryable.
+
+The important split is:
+
+- cache the submit task, because it returns a lightweight job reference
+- retry the fetch task, because it fetches an existing `job_id`
+- do not retry submit by default, because duplicate Qiskit jobs can be created
+- do not cache raw Qiskit results by default
+
+Starting from native Qiskit:
+
+```python
+sampler = SamplerV2(mode=backend)
+job = sampler.run(pubs, shots=100)
+result = job.result()
+```
+
+Add Prefect submit cache and fetch retry:
+
+```python
+from datetime import timedelta
+
+from prefect import flow
+from qcsc_prefect.integrations.qiskit import (
+    QiskitRuntimeConfig,
+    build_qiskit_sampler_input_digest,
+    fetch_qiskit_job_result_task,
+    qiskit_retry_delays,
+    qiskit_sampler_submit_cache_key,
+    should_retry_qiskit_fetch_failure,
+    submit_sampler_job_task,
+)
+
+
+@flow
+async def cached_robust_sampler_flow(pubs):
+    runtime_config = QiskitRuntimeConfig(backend_name="ibm_fez")
+
+    input_digest = build_qiskit_sampler_input_digest(
+        pubs,
+        backend_name="ibm_fez",
+        shots=100,
+        cache_scope="flow",
+    )
+
+    job_ref = await submit_sampler_job_task.with_options(
+        cache_key_fn=qiskit_sampler_submit_cache_key,
+        cache_expiration=timedelta(days=7),
+        persist_result=True,
+    )(
+        pubs,
+        runtime_config=runtime_config,
+        shots=100,
+        input_digest=input_digest,
+    )
+    return await fetch_qiskit_job_result_task.with_options(
+        retries=len(qiskit_retry_delays()),
+        retry_delay_seconds=qiskit_retry_delays(),
+        retry_condition_fn=should_retry_qiskit_fetch_failure,
+    )(
+        runtime_config=runtime_config,
+        job_reference=job_ref,
+        pubs=pubs,
+        artifact_key="native-qiskit-sampler-cached-robust",
+    )
+```
+
+`input_digest` is the stable identity of the Qiskit input and execution
+settings. It is passed as task metadata and used by
+`qiskit_sampler_submit_cache_key`. The cache key helper intentionally does not
+serialize `pubs`, circuits, backends, services, or RuntimeJob objects.
+
+Use `cache_scope="flow"` for the default behavior: reruns of the same Flow can
+reuse the submit cache. Use `cache_scope="global"` when different Flows should
+share submit cache entries for the same circuit, backend, shots, and options.
+
+For Estimator, use the Estimator variants:
+
+```python
+from datetime import timedelta
+
+from prefect import flow
+from qcsc_prefect.integrations.qiskit import (
+    build_qiskit_estimator_input_digest,
+    qiskit_estimator_submit_cache_key,
+    submit_estimator_job_task,
+)
+
+
+@flow
+async def cached_robust_estimator_flow(pubs):
+    input_digest = build_qiskit_estimator_input_digest(
+        pubs,
+        backend_name="ibm_fez",
+        precision=0.2,
+        cache_scope="flow",
+    )
+    return await submit_estimator_job_task.with_options(
+        cache_key_fn=qiskit_estimator_submit_cache_key,
+        cache_expiration=timedelta(days=7),
+        persist_result=True,
+    )(
+        pubs,
+        runtime_block_name="ibm-runtime",
+        precision=0.2,
+        input_digest=input_digest,
+    )
+```
+
+When checking this in Prefect UI, the second identical run should show the
+submit task as `Cached`. The fetch task is expected to run again unless you
+explicitly add raw result persistence/cache separately.
+
 ## Live example
 
 Runnable examples are in `examples/native_qiskit_primitives_demo/`.
@@ -257,3 +373,21 @@ uv run --package qcsc-prefect-qiskit python examples/native_qiskit_primitives_de
 
 This command submits real Qiskit Runtime jobs. No IBM Quantum token is included
 in the repository or examples.
+
+To test submit cache and fetch retry with a real backend, run robust Sampler
+mode twice:
+
+```bash
+PYTHONPATH=packages/qcsc-prefect-qiskit/src \
+uv run --package qcsc-prefect-qiskit python examples/native_qiskit_primitives_demo/flow.py \
+  --runtime-block ibm-runtime \
+  --primitive sampler \
+  --mode robust \
+  --shots 100 \
+  --enable-submit-cache \
+  --enable-fetch-retry \
+  --cache-scope flow
+```
+
+Use `--cache-scope global` when you intentionally want different Flows with the
+same Qiskit inputs and runtime settings to share submit cache entries.

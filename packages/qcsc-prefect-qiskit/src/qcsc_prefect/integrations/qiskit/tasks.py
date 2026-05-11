@@ -17,6 +17,7 @@ from qcsc_prefect.integrations.qiskit.artifacts import (
     create_qiskit_sampler_result_artifact,
 )
 from qcsc_prefect.integrations.qiskit.blocks import QiskitRuntimeConfig
+from qcsc_prefect.integrations.qiskit.cache import build_qiskit_cache_payload
 from qcsc_prefect.integrations.qiskit.metadata import collect_qiskit_execution_metadata
 
 
@@ -47,11 +48,15 @@ class QiskitJobFetchTaskError(RuntimeError):
 class QiskitJobReference(TypedDict, total=False):
     """Reference to an already-submitted native Qiskit Runtime job."""
 
+    program_type: str
     primitive: str
     backend_name: str
     job_id: str
+    runtime_block_name: str | None
     shots: int
     precision: float
+    input_digest: str
+    options: dict[str, Any]
 
 
 async def _resolve_loaded_block(value: Any) -> Any:
@@ -165,24 +170,47 @@ def _metadata_options(
 
 def _job_reference(
     *,
-    primitive: str,
+    program_type: str,
     backend_name: str,
     job_id: str,
+    runtime_block_name: str | None = None,
     shots: int | None = None,
     precision: float | None = None,
+    input_digest: str | None = None,
+    options: Mapping[str, Any] | None = None,
 ) -> QiskitJobReference:
     """Create a serializable job reference."""
 
     reference: QiskitJobReference = {
-        "primitive": primitive,
+        "program_type": program_type,
+        "primitive": program_type,
         "backend_name": backend_name,
         "job_id": job_id,
+        "runtime_block_name": runtime_block_name,
     }
     if shots is not None:
         reference["shots"] = shots
     if precision is not None:
         reference["precision"] = precision
+    if input_digest is not None:
+        reference["input_digest"] = input_digest
+    options_summary = _options_summary(options)
+    if options_summary is not None:
+        reference["options"] = options_summary
     return reference
+
+
+def _options_summary(options: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if options is None:
+        return None
+    try:
+        payload = build_qiskit_cache_payload(program_type="options", options=options)
+    except (TypeError, ValueError):
+        return None
+    summary = payload.get("options")
+    if isinstance(summary, dict):
+        return summary
+    return None
 
 
 def _reference_value(
@@ -216,8 +244,11 @@ def _resolve_job_reference(
 
     resolved: QiskitJobReference = {"job_id": str(resolved_job_id)}
     resolved_primitive = _reference_value(job_reference, "primitive", primitive)
+    if resolved_primitive is None:
+        resolved_primitive = _reference_value(job_reference, "program_type")
     if resolved_primitive is not None:
         resolved["primitive"] = str(resolved_primitive)
+        resolved["program_type"] = str(resolved_primitive)
     resolved_backend_name = _reference_value(job_reference, "backend_name", backend_name)
     if resolved_backend_name is not None:
         resolved["backend_name"] = str(resolved_backend_name)
@@ -227,6 +258,9 @@ def _resolve_job_reference(
     resolved_precision = _reference_value(job_reference, "precision", precision)
     if resolved_precision is not None:
         resolved["precision"] = resolved_precision
+    resolved_input_digest = _reference_value(job_reference, "input_digest")
+    if resolved_input_digest is not None:
+        resolved["input_digest"] = str(resolved_input_digest)
     return resolved
 
 
@@ -241,6 +275,7 @@ def _result_response(
     precision: float | None = None,
     include_shots: bool = False,
     include_precision: bool = False,
+    input_digest: str | None = None,
 ) -> dict[str, Any]:
     """Build the structured task response."""
 
@@ -255,6 +290,8 @@ def _result_response(
         response["shots"] = shots
     if include_precision or precision is not None:
         response["precision"] = precision
+    if input_digest is not None:
+        response["input_digest"] = input_digest
     return response
 
 
@@ -440,6 +477,7 @@ async def _submit_primitive_job_reference(
     options: dict[str, Any] | None = None,
     shots: int | None = None,
     precision: float | None = None,
+    input_digest: str | None = None,
 ) -> QiskitJobReference:
     """Submit a primitive job and return a serializable job reference."""
 
@@ -467,9 +505,12 @@ async def _submit_primitive_job_reference(
     logger.info("Submitted Qiskit %s job %s to backend %s.", primitive_name, job_id, backend_name)
 
     reference_kwargs: dict[str, Any] = {
-        "primitive": primitive_type,
+        "program_type": primitive_type,
         "backend_name": backend_name,
         "job_id": job_id,
+        "runtime_block_name": runtime_block_name,
+        "input_digest": input_digest,
+        "options": options,
     }
     if shots is not None:
         reference_kwargs["shots"] = shots
@@ -486,6 +527,8 @@ async def submit_sampler_job_task(
     shots: int | None = None,
     options: dict[str, Any] | None = None,
     runtime_config: QiskitRuntimeConfig | None = None,
+    *,
+    input_digest: str | None = None,
 ) -> QiskitJobReference:
     """Submit a native Qiskit Runtime ``SamplerV2`` job without waiting for results."""
     return await _submit_primitive_job_reference(
@@ -498,6 +541,7 @@ async def submit_sampler_job_task(
         create_primitive_fn=_create_sampler,
         options=options,
         shots=shots,
+        input_digest=input_digest,
     )
 
 
@@ -508,6 +552,8 @@ async def submit_estimator_job_task(
     precision: float | None = None,
     options: dict[str, Any] | None = None,
     runtime_config: QiskitRuntimeConfig | None = None,
+    *,
+    input_digest: str | None = None,
 ) -> QiskitJobReference:
     """Submit a native Qiskit Runtime ``EstimatorV2`` job without waiting for results."""
     return await _submit_primitive_job_reference(
@@ -520,6 +566,7 @@ async def submit_estimator_job_task(
         create_primitive_fn=_create_estimator,
         options=options,
         precision=precision,
+        input_digest=input_digest,
     )
 
 
@@ -552,6 +599,7 @@ async def fetch_qiskit_job_result_task(
     resolved_backend_name = reference.get("backend_name")
     resolved_shots = reference.get("shots")
     resolved_precision = reference.get("precision")
+    resolved_input_digest = reference.get("input_digest")
 
     runtime_config = await _resolve_runtime_config(
         runtime_block_name,
@@ -582,6 +630,7 @@ async def fetch_qiskit_job_result_task(
         ),
         resource=resolved_backend_name,
         program_type=resolved_primitive,
+        input_digest=resolved_input_digest,
     )
     if metadata.job_id is None:
         metadata.job_id = resolved_job_id
@@ -599,6 +648,7 @@ async def fetch_qiskit_job_result_task(
         job_id=metadata.job_id,
         shots=resolved_shots,
         precision=resolved_precision,
+        input_digest=resolved_input_digest,
         result=result,
         metadata=metadata,
     )
@@ -612,6 +662,8 @@ async def run_sampler_task(
     artifact_key: str | None = None,
     options: dict[str, Any] | None = None,
     runtime_config: QiskitRuntimeConfig | None = None,
+    *,
+    input_digest: str | None = None,
 ) -> dict[str, Any]:
     """Run native Qiskit Runtime ``SamplerV2`` inside a Prefect task."""
 
@@ -650,6 +702,7 @@ async def run_sampler_task(
         options=_metadata_options(options, shots=shots),
         resource=backend_name,
         program_type="sampler",
+        input_digest=input_digest,
     )
     if metadata.job_id is None:
         metadata.job_id = job_id
@@ -669,6 +722,7 @@ async def run_sampler_task(
         result=result,
         metadata=metadata,
         include_shots=True,
+        input_digest=input_digest,
     )
 
 
@@ -680,6 +734,8 @@ async def run_estimator_task(
     artifact_key: str | None = None,
     options: dict[str, Any] | None = None,
     runtime_config: QiskitRuntimeConfig | None = None,
+    *,
+    input_digest: str | None = None,
 ) -> dict[str, Any]:
     """Run native Qiskit Runtime ``EstimatorV2`` inside a Prefect task."""
 
@@ -719,6 +775,7 @@ async def run_estimator_task(
         options=_metadata_options(options, precision=precision),
         resource=backend_name,
         program_type="estimator",
+        input_digest=input_digest,
     )
     if metadata.job_id is None:
         metadata.job_id = job_id
@@ -738,4 +795,5 @@ async def run_estimator_task(
         result=result,
         metadata=metadata,
         include_precision=True,
+        input_digest=input_digest,
     )
