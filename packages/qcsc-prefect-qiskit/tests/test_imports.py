@@ -15,8 +15,11 @@ def test_native_qiskit_integration_module_imports():
     assert callable(module.build_qiskit_cache_payload)
     assert callable(module.build_qiskit_estimator_metadata_markdown)
     assert callable(module.build_qiskit_estimator_result_markdown)
+    assert callable(module.build_qiskit_estimator_input_digest)
     assert callable(module.create_qiskit_estimator_metadata_artifact)
     assert callable(module.create_qiskit_estimator_result_artifact)
+    assert callable(module.build_qiskit_input_digest_payload)
+    assert callable(module.build_qiskit_sampler_input_digest)
     assert callable(module.create_qiskit_sampler_metadata_artifact)
     assert callable(module.extract_estimator_result_summary)
     assert callable(module.extract_sampler_result_summary)
@@ -26,6 +29,7 @@ def test_native_qiskit_integration_module_imports():
     assert callable(module.make_json_serializable)
     assert callable(module.qiskit_cache_key_from_payload)
     assert callable(module.qiskit_estimator_submit_cache_key)
+    assert callable(module.qiskit_input_digest_from_payload)
     assert callable(module.qiskit_result_fetch_cache_key)
     assert callable(module.qiskit_retry_delays)
     assert callable(module.qiskit_sampler_submit_cache_key)
@@ -47,6 +51,7 @@ def test_native_qiskit_placeholder_submodules_import():
         "artifacts",
         "blocks",
         "cache",
+        "input_digest",
         "metadata",
         "result_summaries",
         "retry",

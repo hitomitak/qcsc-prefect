@@ -27,6 +27,12 @@ from qcsc_prefect.integrations.qiskit.cache import (
     qiskit_result_fetch_cache_key,
     qiskit_sampler_submit_cache_key,
 )
+from qcsc_prefect.integrations.qiskit.input_digest import (
+    build_qiskit_estimator_input_digest,
+    build_qiskit_input_digest_payload,
+    build_qiskit_sampler_input_digest,
+    qiskit_input_digest_from_payload,
+)
 from qcsc_prefect.integrations.qiskit.metadata import (
     QiskitCircuitMetadata,
     QiskitExecutionMetadata,
@@ -84,8 +90,11 @@ __all__ = [
     "build_qiskit_cache_payload",
     "build_qiskit_estimator_metadata_markdown",
     "build_qiskit_estimator_result_markdown",
+    "build_qiskit_estimator_input_digest",
     "build_qiskit_execution_markdown",
     "build_qiskit_execution_table",
+    "build_qiskit_input_digest_payload",
+    "build_qiskit_sampler_input_digest",
     "build_qiskit_sampler_metadata_markdown",
     "build_qiskit_sampler_result_markdown",
     "collect_estimator_result_values",
@@ -106,6 +115,7 @@ __all__ = [
     "make_json_serializable",
     "qiskit_cache_key_from_payload",
     "qiskit_estimator_submit_cache_key",
+    "qiskit_input_digest_from_payload",
     "qiskit_result_fetch_cache_key",
     "qiskit_retry_delays",
     "qiskit_sampler_submit_cache_key",
