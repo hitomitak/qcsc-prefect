@@ -146,7 +146,7 @@ sbd                                0.1.0
 ### Step 3. Build the SBD solver on Fugaku Login Node (prepare the HPC executable)
 
 Create a new terminal and login to Fugaku Login Node.
-Navigate to native source and build:
+Navigate to native source and build. This procedure can also be executed on the Pre-Post Node.
 
 <img src="../images/icon-login-fugaku.png" alt="login" width="70"/>  or  <img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
