@@ -21,6 +21,11 @@ plugins:
       handlers:
         python:
           paths:
+            - packages/qcsc-prefect-core/src
+            - packages/qcsc-prefect-adapters/src
+            - packages/qcsc-prefect-blocks/src
+            - packages/qcsc-prefect-executor/src
+            - packages/qcsc-prefect-dice/src
             - packages/qcsc-prefect-qiskit/src
           options:
             docstring_style: google
@@ -73,4 +78,5 @@ nav:
       - MPI Locally: howto/howto_use_mpi_locally.md
       - Slurm Docker Cluster: howto/howto_test_slurm_with_docker_cluster.md
   - Reference:
+      - QCSC Prefect API: reference/qcsc_prefect_api.md
       - Native Qiskit API: reference/native_qiskit_api.md

@@ -107,7 +107,13 @@ def _read_text_if_exists(path: str | Path | None) -> str:
 
 @dataclass(frozen=True)
 class MiyabiRunResult:
-    """Normalized result returned by :func:`run_miyabi_job`."""
+    """Normalized result returned by `run_miyabi_job`.
+
+    Attributes:
+        job_id: PBS job id returned by ``qsub``.
+        exit_status: Integer PBS ``Exit_status`` value.
+        job_status: Parsed final PBS status dictionary from ``qstat -fH``.
+    """
 
     job_id: str
     exit_status: int
@@ -141,7 +147,7 @@ async def run_miyabi_job(
         metrics_artifact_key: Prefect artifact key for job metrics table.
 
     Returns:
-        :class:`MiyabiRunResult` containing job id, exit status, and final
+        `MiyabiRunResult` containing job id, exit status, and final
         scheduler status payload.
     """
     logger = get_run_logger()

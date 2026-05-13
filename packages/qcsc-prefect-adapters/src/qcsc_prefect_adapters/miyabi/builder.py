@@ -12,7 +12,13 @@ _TEMPLATE = "batch.pbs.j2"
 
 @dataclass(frozen=True)
 class MiyabiJobRequest:
-    """Target-specific request fields required to build a Miyabi PBS job."""
+    """Target-specific request fields required to build a Miyabi PBS job.
+
+    Attributes:
+        queue_name: Miyabi PBS queue name, for example ``"regular-c"``.
+        project: Miyabi group/project name passed to the PBS template.
+        executable: Absolute or scheduler-visible command path to execute.
+    """
 
     queue_name: str
     project: str
@@ -82,11 +88,11 @@ def write_script_file(*, work_dir: Path, filename: str, text: str) -> Path:
 
     .. note::
         This function is expected to be called inside
-        :func:`qcsc_prefect_executor.miyabi.run.run_miyabi_job`.
+        `qcsc_prefect_executor.miyabi.run.run_miyabi_job`.
         Workflow authors normally do not need to call it directly.
 
     .. note::
-        The ``text`` argument is expected to come from :func:`render_script`,
+        The ``text`` argument is expected to come from `render_script`,
         which renders the ``.j2`` template specified by ``_TEMPLATE``.
 
     Args:

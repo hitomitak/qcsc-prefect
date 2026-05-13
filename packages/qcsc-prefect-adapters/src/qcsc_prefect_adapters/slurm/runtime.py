@@ -19,7 +19,20 @@ class CancelError(RuntimeError):
 
 
 async def run_command(*args: str, cwd: Path | None = None) -> str:
-    """Run a command asynchronously and return decoded stdout."""
+    """Run a Slurm command asynchronously and return decoded stdout.
+
+    Args:
+        *args: Command and arguments passed to
+            `asyncio.create_subprocess_exec`.
+        cwd: Optional working directory for the subprocess.
+
+    Returns:
+        Standard output decoded with replacement for invalid bytes.
+
+    Raises:
+        RuntimeError: If the command exits with a non-zero return code. The
+            error message includes decoded stdout and stderr for diagnostics.
+    """
 
     proc = await asyncio.create_subprocess_exec(
         *args,
@@ -39,7 +52,12 @@ async def run_command(*args: str, cwd: Path | None = None) -> str:
 
 @dataclass(frozen=True)
 class SubmitResult:
-    """Submission result payload returned by runtime ``submit`` methods."""
+    """Submission result returned after a scheduler accepts a batch script.
+
+    Attributes:
+        job_id: Scheduler job id parsed from the submission command output.
+        raw_output: Raw, stripped stdout emitted by the submission command.
+    """
 
     job_id: str
     raw_output: str
@@ -61,10 +79,27 @@ def _is_terminal_state(state: str) -> bool:
 
 
 class SlurmRuntime:
-    """Minimal async runtime for Slurm ``sbatch``/``sacct``/``scancel`` commands."""
+    """Async runtime wrapper for Slurm scheduler commands.
+
+    This class is the low-level boundary around ``sbatch``, ``sacct``, and
+    ``scancel``. Workflow code usually calls
+    `qcsc_prefect_executor.slurm.run.run_slurm_job` or
+    `qcsc_prefect_executor.from_blocks.run_job_from_blocks` instead.
+    """
 
     async def submit(self, script_path: Path, *, cwd: Path | None = None) -> SubmitResult:
-        """Submit a Slurm script with ``sbatch --parsable``."""
+        """Submit a Slurm batch script with ``sbatch --parsable``.
+
+        Args:
+            script_path: Path to the generated Slurm script.
+            cwd: Optional working directory for ``sbatch``.
+
+        Returns:
+            Parsed submission payload containing the Slurm job id.
+
+        Raises:
+            SubmitError: If ``sbatch`` fails or the job id cannot be parsed.
+        """
 
         try:
             stdout = await run_command("sbatch", "--parsable", str(script_path), cwd=cwd)
@@ -86,7 +121,24 @@ class SlurmRuntime:
         watch_poll_interval: float = 10.0,
         timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
-        """Poll ``sacct`` until the job reaches a terminal state."""
+        """Poll ``sacct`` until the job reaches a terminal state.
+
+        The returned dictionary is normalized to the fields requested from
+        ``sacct``: ``JobID``, ``State``, ``ExitCode``, ``Elapsed``,
+        ``AllocCPUS``, and ``NodeList``.
+
+        Args:
+            job_id: Slurm job id to watch.
+            watch_poll_interval: Seconds to wait between ``sacct`` calls.
+            timeout_seconds: Optional maximum wait time.
+
+        Returns:
+            Parsed terminal ``sacct`` row for the batch job.
+
+        Raises:
+            WaitTimeout: If ``timeout_seconds`` elapses before a terminal state.
+            RuntimeError: If an underlying ``sacct`` command fails.
+        """
 
         start = asyncio.get_running_loop().time()
         try:
@@ -131,7 +183,14 @@ class SlurmRuntime:
             return {}
 
     async def cancel(self, job_id: str) -> None:
-        """Cancel a Slurm job using ``scancel``."""
+        """Cancel a Slurm job using ``scancel``.
+
+        Args:
+            job_id: Target Slurm job id.
+
+        Raises:
+            CancelError: If ``scancel`` exits with an error.
+        """
 
         try:
             await run_command("scancel", job_id)

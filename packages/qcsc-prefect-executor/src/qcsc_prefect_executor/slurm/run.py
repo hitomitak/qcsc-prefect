@@ -51,7 +51,14 @@ def _create_job_artifact(
 
 @dataclass(frozen=True)
 class SlurmRunResult:
-    """Normalized result returned by :func:`run_slurm_job`."""
+    """Normalized result returned by `run_slurm_job`.
+
+    Attributes:
+        job_id: Slurm job id returned by ``sbatch``.
+        exit_status: Integer process exit code parsed from Slurm ``ExitCode``.
+        state: Final Slurm job state.
+        job_status: Parsed terminal ``sacct`` status dictionary.
+    """
 
     job_id: str
     exit_status: int
@@ -69,7 +76,25 @@ async def run_slurm_job(
     timeout_seconds: float | None = None,
     metrics_artifact_key: str = "slurm-job-metrics",
 ) -> SlurmRunResult:
-    """Execute a Slurm job end-to-end from runtime models."""
+    """Execute a Slurm job end-to-end from runtime models.
+
+    This high-level executor renders the Slurm script, submits it with
+    ``sbatch``, waits for terminal ``sacct`` status, captures stdout/stderr
+    files, and publishes a Prefect table artifact with scheduler metrics.
+
+    Args:
+        work_dir: Working directory where scripts and job outputs are written.
+        script_filename: Job script filename to create in ``work_dir``.
+        exec_profile: Scheduler-independent execution profile.
+        req: Slurm-specific scheduler request fields.
+        watch_poll_interval: Poll interval in seconds for job status checks.
+        timeout_seconds: Optional timeout for waiting final status.
+        metrics_artifact_key: Prefect artifact key for job metrics table.
+
+    Returns:
+        `SlurmRunResult` containing job id, exit status, state, and
+        final scheduler status payload.
+    """
 
     logger = get_run_logger()
 

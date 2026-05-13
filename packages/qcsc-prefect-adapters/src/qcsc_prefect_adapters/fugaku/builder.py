@@ -12,7 +12,18 @@ _TEMPLATE = "batch.pjm.j2"
 
 @dataclass(frozen=True)
 class FugakuJobRequest:
-    """Target-specific request fields required to build a Fugaku PJM job."""
+    """Target-specific request fields required to build a Fugaku PJM job.
+
+    Attributes:
+        queue_name: Fugaku resource group name.
+        project: Fugaku group name passed to PJM.
+        executable: Absolute or scheduler-visible command path to execute.
+        job_name: PJM job name used for scheduler display and output filenames.
+        gfscache: Optional ``PJM_LLIO_GFSCACHE`` path.
+        mpi_options_for_pjm: Optional MPI options emitted as PJM directives.
+        spack_modules: Optional Spack modules loaded by the generated script.
+        pjm_resources: Additional raw ``#PJM -L`` resource directives.
+    """
 
     queue_name: str
     project: str
@@ -108,11 +119,11 @@ def write_script_file(*, work_dir: Path, filename: str, text: str) -> Path:
 
     .. note::
         This function is expected to be called inside
-        :func:`qcsc_prefect_executor.fugaku.run.run_fugaku_job`.
+        `qcsc_prefect_executor.fugaku.run.run_fugaku_job`.
         Workflow authors normally do not need to call it directly.
 
     .. note::
-        The ``text`` argument is expected to come from :func:`render_script`,
+        The ``text`` argument is expected to come from `render_script`,
         which renders the ``.j2`` template specified by ``_TEMPLATE``.
 
     Args:

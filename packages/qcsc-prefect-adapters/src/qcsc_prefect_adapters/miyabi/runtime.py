@@ -20,8 +20,19 @@ class CancelError(RuntimeError):
 
 
 async def run_command(*args: str, cwd: Path | None = None) -> str:
-    """
-    Minimal async command runner (stdout returned; stderr included on error).
+    """Run a Miyabi PBS command asynchronously and return decoded stdout.
+
+    Args:
+        *args: Command and arguments passed to
+            `asyncio.create_subprocess_exec`.
+        cwd: Optional working directory for the subprocess.
+
+    Returns:
+        Standard output decoded with replacement for invalid bytes.
+
+    Raises:
+        RuntimeError: If the command exits with a non-zero return code. The
+            error message includes decoded stdout and stderr for diagnostics.
     """
     proc = await asyncio.create_subprocess_exec(
         *args,
@@ -42,20 +53,25 @@ async def run_command(*args: str, cwd: Path | None = None) -> str:
 
 @dataclass(frozen=True)
 class SubmitResult:
-    """Submission result payload returned by runtime ``submit`` methods."""
+    """Submission result returned after PBS accepts a batch script.
+
+    Attributes:
+        job_id: PBS job id parsed from ``qsub`` stdout.
+        raw_output: Raw, stripped stdout emitted by ``qsub``.
+    """
 
     job_id: str
     raw_output: str
 
 
 class MiyabiPBSRuntime:
-    """
-    Miyabi PBS runtime:
-      - submit: qsub
-      - wait:   qstat -fH (finished jobs list)
-      - cancel: qdel
+    """Async runtime wrapper for Miyabi PBS scheduler commands.
 
-    This mirrors the behavior of your existing prefect-miyabi executor.py.
+    The runtime maps to the core PBS commands used on Miyabi:
+    ``qsub`` for submission, ``qstat -fH`` for completed-job status, and
+    ``qdel`` for cancellation. Workflow code usually calls
+    `qcsc_prefect_executor.miyabi.run.run_miyabi_job` or
+    `qcsc_prefect_executor.from_blocks.run_job_from_blocks` instead.
     """
 
     QSTAT_OUT: ClassVar[re.Pattern] = re.compile(r"Job Id: (\d+\.\w+)\n((?:[ \t]+.*(?:\n|$))*)")
@@ -92,9 +108,24 @@ class MiyabiPBSRuntime:
         watch_poll_interval: float = 10.0,
         timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
-        """
-        Wait until the job shows up in finished-job list (-fH) and return parsed dict.
-        This is a near-copy of the existing _wait() logic.
+        """Wait until PBS reports the job in the finished-job list.
+
+        ``qstat -fH`` exposes completed jobs on Miyabi. This method polls that
+        view, parses PBS ``key = value`` records, and preserves continuation
+        lines in the returned payload.
+
+        Args:
+            job_id: PBS job id to watch.
+            watch_poll_interval: Seconds to wait between ``qstat`` calls.
+            timeout_seconds: Optional maximum wait time.
+
+        Returns:
+            Parsed final PBS status dictionary.
+
+        Raises:
+            WaitTimeout: If ``timeout_seconds`` elapses before final status is
+                observed.
+            RuntimeError: If an underlying ``qstat`` command fails.
         """
         start = asyncio.get_running_loop().time()
         try:
