@@ -50,18 +50,18 @@ Create API Key in Prefect Cloud. Settings -> API Keys
 
 ![Create API Keys](../images/img-prefect-api.png)
 
-Create and switch to a new Prefect profile:
-
-<img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
-```bash
-prefect profile create cloud-fugaku && prefect profile use cloud-fugaku
-```
-
 Log in to your Prefect Cloud workspace using your API key:
 
 <img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
 prefect cloud login -k '<my-api-key>'
+```
+
+Create and switch to a new Prefect profile:
+
+<img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
+```bash
+prefect profile create cloud-fugaku && prefect profile use cloud-fugaku
 ```
 
 ### Step 4: Register IBM Quantum Blocks
