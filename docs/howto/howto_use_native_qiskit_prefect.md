@@ -241,6 +241,153 @@ async def robust_sampler_flow(pubs):
 
 The same pattern is available for Estimator with `submit_estimator_job_task`.
 
+## Wrapper classes
+
+Choose this when you want a small Sampler/Estimator-shaped object while still
+using the existing Prefect tasks internally. These wrappers do not reimplement
+Qiskit Runtime primitives; they only keep runtime settings and choose between
+simple mode and robust submit/fetch mode.
+
+```python
+from prefect import flow
+from qcsc_prefect.integrations.qiskit import QCSCSamplerV2, QiskitRuntimeConfig
+
+
+@flow
+async def wrapper_sampler_flow(pubs):
+    sampler = QCSCSamplerV2(
+        runtime_config=QiskitRuntimeConfig(backend_name="ibm_fez"),
+    )
+    job = await sampler.run(
+        pubs,
+        shots=100,
+        cache_submit=True,
+        cache_result=True,
+        retry_fetch=True,
+        artifact_key="native-qiskit-sampler-wrapper",
+    )
+    return await job.result()
+```
+
+`run(...)` follows the Native Qiskit naming: it submits the job and returns a
+job-like handle. If you want the same structured dictionary as the underlying
+tasks, use `run_and_fetch(...)`:
+
+```python
+output = await sampler.run_and_fetch(
+    pubs,
+    shots=100,
+    cache_submit=True,
+    cache_result=True,
+    retry_fetch=True,
+)
+result = output["result"]
+```
+
+`QCSCEstimatorV2` uses the same shape with `precision`:
+
+```python
+from qcsc_prefect.integrations.qiskit import QCSCEstimatorV2, QiskitRuntimeConfig
+
+estimator = QCSCEstimatorV2(
+    runtime_config=QiskitRuntimeConfig(backend_name="ibm_fez"),
+)
+job = await estimator.run(
+    pubs,
+    precision=0.2,
+    cache_submit=True,
+    cache_result=True,
+    retry_fetch=True,
+)
+result = await job.result()
+```
+
+Cache and retry flags require the default `robust=True` mode because they
+operate on split submit/fetch tasks.
+
+### Cache and fetch with wrapper classes
+
+The wrapper classes use the same submit/fetch tasks internally. `run(...)`
+submits a native Qiskit Runtime job and returns a `QCSCPrimitiveJob`; the actual
+fetch happens when you call `job.result()` or `job.output()`.
+
+```python
+from datetime import timedelta
+
+from prefect import flow
+from qcsc_prefect.integrations.qiskit import QCSCSamplerV2, QiskitRuntimeConfig
+
+
+@flow
+async def cached_wrapper_sampler_flow(pubs):
+    sampler = QCSCSamplerV2(
+        runtime_config=QiskitRuntimeConfig(backend_name="ibm_fez"),
+    )
+
+    job = await sampler.run(
+        pubs,
+        shots=100,
+        cache_submit=True,
+        cache_result=True,
+        retry_fetch=True,
+        cache_scope="flow",
+        cache_expiration=timedelta(days=7),
+        artifact_key="native-qiskit-sampler-wrapper",
+    )
+
+    output = await job.output()
+    return output["result"]
+```
+
+In this form:
+
+- `cache_submit=True` caches the lightweight job reference returned by the
+  submit task, keyed by the wrapper-generated input digest.
+- On an identical rerun, the submit step can return the cached `job_id` instead
+  of submitting a duplicate Qiskit Runtime job.
+- `job.result()` fetches and returns only the native Qiskit primitive result.
+- `job.output()` fetches and returns the full qcsc-prefect dictionary, including
+  `result`, `metadata`, and job fields.
+- `cache_result=True` persists the fetch output locally through Prefect using
+  `qiskit_result_fetch_cache_key` and `compressed/pickle`.
+- If the local fetch cache exists for the same `job_id`, Prefect restores that
+  result without calling IBM Quantum Platform again. If it does not exist, the
+  fetch task asks Qiskit Runtime for the existing job by `job_id`.
+- `retry_fetch=True` retries only the fetch step, not the submit step.
+
+`run_and_fetch(...)` is the compact form when you do not need to hold the
+job-like handle yourself:
+
+```python
+output = await sampler.run_and_fetch(
+    pubs,
+    shots=100,
+    cache_submit=True,
+    cache_result=True,
+    retry_fetch=True,
+    cache_scope="flow",
+)
+result = output["result"]
+```
+
+Estimator uses the same cache and fetch options:
+
+```python
+from qcsc_prefect.integrations.qiskit import QCSCEstimatorV2, QiskitRuntimeConfig
+
+estimator = QCSCEstimatorV2(
+    runtime_config=QiskitRuntimeConfig(backend_name="ibm_fez"),
+)
+job = await estimator.run(
+    pubs,
+    precision=0.2,
+    cache_submit=True,
+    cache_result=True,
+    retry_fetch=True,
+)
+result = await job.result()
+```
+
 ## Example 4: add submit cache and fetch retry
 
 Choose this when you want reruns to avoid duplicate Qiskit Runtime submissions,
@@ -271,6 +418,7 @@ from qcsc_prefect.integrations.qiskit import (
     QiskitRuntimeConfig,
     build_qiskit_sampler_input_digest,
     fetch_qiskit_job_result_task,
+    qiskit_result_fetch_cache_key,
     qiskit_retry_delays,
     qiskit_sampler_submit_cache_key,
     should_retry_qiskit_fetch_failure,
@@ -300,6 +448,9 @@ async def cached_robust_sampler_flow(pubs):
         input_digest=input_digest,
     )
     return await fetch_qiskit_job_result_task.with_options(
+        cache_key_fn=qiskit_result_fetch_cache_key,
+        persist_result=True,
+        result_serializer="compressed/pickle",
         retries=len(qiskit_retry_delays()),
         retry_delay_seconds=qiskit_retry_delays(),
         retry_condition_fn=should_retry_qiskit_fetch_failure,
@@ -354,8 +505,43 @@ async def cached_robust_estimator_flow(pubs):
 ```
 
 When checking this in Prefect UI, the second identical run should show the
-submit task as `Cached`. The fetch task is expected to run again unless you
-explicitly add raw result persistence/cache separately.
+submit task as `Cached`. If the same `job_id` has already been fetched
+successfully, the fetch task can also restore its result from Prefect's result
+cache instead of calling IBM Quantum Platform again.
+
+## Restore with Prefect result cache
+
+IBM Quantum Platform may stop retaining a job or its result after some time.
+For automatic retry/rerun recovery, use the same approach as prefect-qiskit:
+let Prefect persist the fetch task result with
+`result_serializer="compressed/pickle"` and a stable cache key.
+
+Use the same `with_options(...)(...)` style as the robust example:
+
+```python
+from qcsc_prefect.integrations.qiskit import (
+    fetch_qiskit_job_result_task,
+    qiskit_result_fetch_cache_key,
+)
+
+result = await fetch_qiskit_job_result_task.with_options(
+    cache_key_fn=qiskit_result_fetch_cache_key,
+    persist_result=True,
+    result_serializer="compressed/pickle",
+)(
+    runtime_config=runtime_config,
+    job_reference=job_ref,
+    pubs=pubs,
+)
+```
+
+On the first successful fetch, Prefect persists the returned dictionary,
+including the native Qiskit result object. When the same `job_id` is fetched
+again and the cache is still available, Prefect restores that stored result and
+does not call IBM Quantum Platform again.
+
+This cache helps after a successful fetch has already been persisted. If the
+first fetch never completed, there is no local result to restore.
 
 ## Live example
 
@@ -370,6 +556,9 @@ uv run --package qcsc-prefect-qiskit python examples/native_qiskit_primitives_de
   --shots 100 \
   --precision 0.2
 ```
+
+Add `--enable-result-cache` to let Prefect restore a previously fetched result
+by Qiskit job ID.
 
 This command submits real Qiskit Runtime jobs. No IBM Quantum token is included
 in the repository or examples.
@@ -386,6 +575,7 @@ uv run --package qcsc-prefect-qiskit python examples/native_qiskit_primitives_de
   --shots 100 \
   --enable-submit-cache \
   --enable-fetch-retry \
+  --enable-result-cache \
   --cache-scope flow
 ```
 

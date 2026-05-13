@@ -8,8 +8,7 @@ Example:
 
 These helpers serialize compact JSON summaries only. They are not intended to
 replace Prefect result persistence and are not full Qiskit PrimitiveResult
-serializers. For raw result caching, use Prefect result persistence with
-``result_serializer="compressed/pickle"``.
+serializers.
 """
 
 from __future__ import annotations

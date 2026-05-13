@@ -67,11 +67,18 @@ from qcsc_prefect.integrations.qiskit.tasks import (
     QiskitEstimatorTaskError,
     QiskitJobFetchTaskError,
     QiskitSamplerTaskError,
+    build_cached_fetch_qiskit_job_result_task,
+    cached_fetch_qiskit_job_result_task,
     fetch_qiskit_job_result_task,
     run_estimator_task,
     run_sampler_task,
     submit_estimator_job_task,
     submit_sampler_job_task,
+)
+from qcsc_prefect.integrations.qiskit.wrappers import (
+    QCSCEstimatorV2,
+    QCSCPrimitiveJob,
+    QCSCSamplerV2,
 )
 
 __all__ = [
@@ -87,7 +94,11 @@ __all__ = [
     "QiskitEstimatorTaskError",
     "QiskitJobFetchTaskError",
     "QiskitSamplerTaskError",
+    "QCSCEstimatorV2",
+    "QCSCPrimitiveJob",
+    "QCSCSamplerV2",
     "build_qiskit_cache_payload",
+    "build_cached_fetch_qiskit_job_result_task",
     "build_qiskit_estimator_metadata_markdown",
     "build_qiskit_estimator_result_markdown",
     "build_qiskit_estimator_input_digest",
@@ -109,6 +120,7 @@ __all__ = [
     "extract_estimator_result_summary",
     "extract_sampler_result_summary",
     "flatten_qiskit_execution_metadata",
+    "cached_fetch_qiskit_job_result_task",
     "fetch_qiskit_job_result_task",
     "is_transient_qiskit_error",
     "load_json",

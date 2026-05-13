@@ -17,6 +17,18 @@ theme:
 
 plugins:
   - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths:
+            - packages/qcsc-prefect-qiskit/src
+          options:
+            docstring_style: google
+            merge_init_into_class: true
+            members_order: source
+            separate_signature: true
+            show_root_heading: true
+            show_signature_annotations: true
 
 markdown_extensions:
   - admonition
@@ -60,3 +72,5 @@ nav:
       - Shutdown Workflow: howto/howto_shutdown_workflow.md
       - MPI Locally: howto/howto_use_mpi_locally.md
       - Slurm Docker Cluster: howto/howto_test_slurm_with_docker_cluster.md
+  - Reference:
+      - Native Qiskit API: reference/native_qiskit_api.md
