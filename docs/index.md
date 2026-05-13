@@ -37,5 +37,5 @@ uv sync
 To preview this documentation locally:
 
 ```bash
-uv run --with mkdocs-material mkdocs serve
+uv run --with mkdocs-material --with "mkdocstrings[python]" --with ruff mkdocs serve
 ```

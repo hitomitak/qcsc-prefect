@@ -241,6 +241,68 @@ async def robust_sampler_flow(pubs):
 
 The same pattern is available for Estimator with `submit_estimator_job_task`.
 
+## Wrapper classes
+
+Choose this when you want a small Sampler/Estimator-shaped object while still
+using the existing Prefect tasks internally. These wrappers do not reimplement
+Qiskit Runtime primitives; they only keep runtime settings and choose between
+simple mode and robust submit/fetch mode.
+
+```python
+from prefect import flow
+from qcsc_prefect.integrations.qiskit import QCSCSamplerV2, QiskitRuntimeConfig
+
+
+@flow
+async def wrapper_sampler_flow(pubs):
+    sampler = QCSCSamplerV2(
+        runtime_config=QiskitRuntimeConfig(backend_name="ibm_fez"),
+    )
+    output = await sampler.run(
+        pubs,
+        shots=100,
+        cache_submit=True,
+        cache_result=True,
+        retry_fetch=True,
+        artifact_key="native-qiskit-sampler-wrapper",
+    )
+    return output["result"]
+```
+
+`run(...)` returns the same structured dictionary as the underlying tasks. If
+you prefer a job-like shape, use `submit(...)` and then `job.result()`:
+
+```python
+job = await sampler.submit(
+    pubs,
+    shots=100,
+    cache_submit=True,
+    cache_result=True,
+    retry_fetch=True,
+)
+result = await job.result()
+```
+
+`QCSCEstimatorV2` uses the same shape with `precision`:
+
+```python
+from qcsc_prefect.integrations.qiskit import QCSCEstimatorV2, QiskitRuntimeConfig
+
+estimator = QCSCEstimatorV2(
+    runtime_config=QiskitRuntimeConfig(backend_name="ibm_fez"),
+)
+result = await estimator.run(
+    pubs,
+    precision=0.2,
+    cache_submit=True,
+    cache_result=True,
+    retry_fetch=True,
+)
+```
+
+Cache and retry flags require the default `robust=True` mode because they
+operate on split submit/fetch tasks.
+
 ## Example 4: add submit cache and fetch retry
 
 Choose this when you want reruns to avoid duplicate Qiskit Runtime submissions,

@@ -82,7 +82,43 @@ result = await run_sampler_task(
 )
 ```
 
-### 3. Use robust submit/fetch mode
+### 3. Use wrapper classes
+
+Use this when you want a small object that keeps runtime settings and delegates
+to the same Prefect tasks internally.
+
+```python
+from qcsc_prefect.integrations.qiskit import QCSCSamplerV2, QiskitRuntimeConfig
+
+sampler = QCSCSamplerV2(
+    runtime_config=QiskitRuntimeConfig(backend_name="ibm_fez"),
+)
+output = await sampler.run(
+    pubs,
+    shots=100,
+    cache_submit=True,
+    cache_result=True,
+    retry_fetch=True,
+)
+```
+
+If you prefer a job-like shape, submit first and then fetch the native Qiskit
+result through `job.result()`:
+
+```python
+job = await sampler.submit(
+    pubs,
+    shots=100,
+    cache_submit=True,
+    cache_result=True,
+    retry_fetch=True,
+)
+result = await job.result()
+```
+
+Estimator uses `QCSCEstimatorV2(...).run(pubs, precision=...)`.
+
+### 4. Use robust submit/fetch mode
 
 Use this when a retry after job submission must not submit a duplicate job.
 
@@ -110,7 +146,7 @@ result = await fetch_qiskit_job_result_task(
 Estimator uses the same pattern with `run_estimator_task` and
 `submit_estimator_job_task`.
 
-### 4. Add submit cache and fetch retry
+### 5. Add submit cache and fetch retry
 
 Submitting a Qiskit Runtime job is not safely retryable by default: if the
 client loses the response after the job was accepted, a retry can create a

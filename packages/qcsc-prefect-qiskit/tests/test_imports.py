@@ -14,6 +14,9 @@ def test_native_qiskit_integration_module_imports():
     assert module.QiskitSamplerTaskError.__name__ == "QiskitSamplerTaskError"
     assert callable(module.build_cached_fetch_qiskit_job_result_task)
     assert callable(module.build_qiskit_cache_payload)
+    assert module.QCSCEstimatorV2.__name__ == "QCSCEstimatorV2"
+    assert module.QCSCPrimitiveJob.__name__ == "QCSCPrimitiveJob"
+    assert module.QCSCSamplerV2.__name__ == "QCSCSamplerV2"
     assert callable(module.build_qiskit_estimator_metadata_markdown)
     assert callable(module.build_qiskit_estimator_result_markdown)
     assert callable(module.build_qiskit_estimator_input_digest)
@@ -59,6 +62,7 @@ def test_native_qiskit_placeholder_submodules_import():
         "retry",
         "serializers",
         "tasks",
+        "wrappers",
     ]
 
     for submodule in submodules:

@@ -75,6 +75,11 @@ from qcsc_prefect.integrations.qiskit.tasks import (
     submit_estimator_job_task,
     submit_sampler_job_task,
 )
+from qcsc_prefect.integrations.qiskit.wrappers import (
+    QCSCEstimatorV2,
+    QCSCPrimitiveJob,
+    QCSCSamplerV2,
+)
 
 __all__ = [
     "QiskitCircuitMetadata",
@@ -89,6 +94,9 @@ __all__ = [
     "QiskitEstimatorTaskError",
     "QiskitJobFetchTaskError",
     "QiskitSamplerTaskError",
+    "QCSCEstimatorV2",
+    "QCSCPrimitiveJob",
+    "QCSCSamplerV2",
     "build_qiskit_cache_payload",
     "build_cached_fetch_qiskit_job_result_task",
     "build_qiskit_estimator_metadata_markdown",

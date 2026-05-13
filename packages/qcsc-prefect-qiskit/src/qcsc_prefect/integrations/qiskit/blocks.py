@@ -22,7 +22,14 @@ class QiskitRuntimeConfigError(RuntimeError):
 
 
 class QiskitRuntimeConfig(Block):
-    """Configuration needed to create native Qiskit Runtime objects."""
+    """Configuration needed to create native Qiskit Runtime objects.
+
+    The block stores only the configuration needed to construct native
+    ``qiskit_ibm_runtime`` objects. It does not reimplement Runtime behavior.
+
+    If ``token`` is not set, Qiskit's normal saved account file and environment
+    variable discovery are used.
+    """
 
     _block_type_name = "Qiskit Runtime Config"
     _block_type_slug = "qiskit_runtime_config"
@@ -80,7 +87,14 @@ class QiskitRuntimeConfig(Block):
         )
 
     def get_service(self) -> QiskitRuntimeService:
-        """Create a native ``QiskitRuntimeService`` from configured fields."""
+        """Create a native ``QiskitRuntimeService`` from configured fields.
+
+        Returns:
+            A native ``qiskit_ibm_runtime.QiskitRuntimeService``.
+
+        Raises:
+            QiskitRuntimeConfigError: If the service cannot be created.
+        """
 
         kwargs: dict[str, Any] = {}
         if self.channel is not None:
@@ -104,7 +118,15 @@ class QiskitRuntimeConfig(Block):
             ) from None
 
     def get_backend(self) -> Any:
-        """Return the configured backend from the native Qiskit service."""
+        """Return the configured backend from the native Qiskit service.
+
+        Returns:
+            The native backend returned by ``service.backend(backend_name)``.
+
+        Raises:
+            QiskitRuntimeConfigError: If the service or backend cannot be
+                created.
+        """
 
         service = self.get_service()
         try:

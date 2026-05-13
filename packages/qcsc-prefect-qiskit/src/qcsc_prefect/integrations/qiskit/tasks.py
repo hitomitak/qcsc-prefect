@@ -533,7 +533,21 @@ async def submit_sampler_job_task(
     *,
     input_digest: str | None = None,
 ) -> QiskitJobReference:
-    """Submit a native Qiskit Runtime ``SamplerV2`` job without waiting for results."""
+    """Submit a native Qiskit Runtime ``SamplerV2`` job without waiting.
+
+    Args:
+        pubs: Native Qiskit Sampler pubs.
+        runtime_block_name: Name of a saved ``QiskitRuntimeConfig`` block.
+        shots: Optional number of shots passed to ``SamplerV2.run``.
+        options: Optional native Qiskit Sampler options.
+        runtime_config: Inline runtime configuration. Mutually exclusive with
+            ``runtime_block_name``.
+        input_digest: Optional stable digest used by submit cache helpers.
+
+    Returns:
+        A serializable job reference containing primitive, backend, job ID and
+        optional execution settings.
+    """
     return await _submit_primitive_job_reference(
         runtime_block_name=runtime_block_name,
         runtime_config=runtime_config,
@@ -558,7 +572,21 @@ async def submit_estimator_job_task(
     *,
     input_digest: str | None = None,
 ) -> QiskitJobReference:
-    """Submit a native Qiskit Runtime ``EstimatorV2`` job without waiting for results."""
+    """Submit a native Qiskit Runtime ``EstimatorV2`` job without waiting.
+
+    Args:
+        pubs: Native Qiskit Estimator pubs.
+        runtime_block_name: Name of a saved ``QiskitRuntimeConfig`` block.
+        precision: Optional target precision passed to ``EstimatorV2.run``.
+        options: Optional native Qiskit Estimator options.
+        runtime_config: Inline runtime configuration. Mutually exclusive with
+            ``runtime_block_name``.
+        input_digest: Optional stable digest used by submit cache helpers.
+
+    Returns:
+        A serializable job reference containing primitive, backend, job ID and
+        optional execution settings.
+    """
     return await _submit_primitive_job_reference(
         runtime_block_name=runtime_block_name,
         runtime_config=runtime_config,
@@ -587,7 +615,30 @@ async def fetch_qiskit_job_result_task(
     options: dict[str, Any] | None = None,
     runtime_config: QiskitRuntimeConfig | None = None,
 ) -> dict[str, Any]:
-    """Fetch an existing native Qiskit Runtime job and collect its result."""
+    """Fetch an existing native Qiskit Runtime job and collect its result.
+
+    Args:
+        runtime_block_name: Name of a saved ``QiskitRuntimeConfig`` block.
+        job_id: Qiskit Runtime job ID. Optional when ``job_reference`` is
+            provided.
+        job_reference: Reference returned by ``submit_sampler_job_task`` or
+            ``submit_estimator_job_task``.
+        pubs: Original native Qiskit pubs used for best-effort metadata.
+        primitive: Optional primitive type when not present in
+            ``job_reference``.
+        backend_name: Optional backend name when not present in
+            ``job_reference``.
+        shots: Optional shots value for metadata.
+        precision: Optional precision value for metadata.
+        artifact_key: Optional Prefect artifact key prefix.
+        options: Optional native Qiskit primitive options for metadata.
+        runtime_config: Inline runtime configuration. Mutually exclusive with
+            ``runtime_block_name``.
+
+    Returns:
+        A structured dictionary containing primitive, backend name, job ID,
+        native Qiskit result and collected metadata.
+    """
 
     reference = _resolve_job_reference(
         job_reference=job_reference,
@@ -689,7 +740,25 @@ async def run_sampler_task(
     *,
     input_digest: str | None = None,
 ) -> dict[str, Any]:
-    """Run native Qiskit Runtime ``SamplerV2`` inside a Prefect task."""
+    """Run native Qiskit Runtime ``SamplerV2`` inside a Prefect task.
+
+    This is the simple one-task execution path. It submits a Qiskit Runtime job,
+    waits for the result, records artifacts and returns the result dictionary.
+
+    Args:
+        pubs: Native Qiskit Sampler pubs.
+        runtime_block_name: Name of a saved ``QiskitRuntimeConfig`` block.
+        shots: Optional number of shots passed to ``SamplerV2.run``.
+        artifact_key: Optional Prefect artifact key prefix.
+        options: Optional native Qiskit Sampler options.
+        runtime_config: Inline runtime configuration. Mutually exclusive with
+            ``runtime_block_name``.
+        input_digest: Optional input digest included in collected metadata.
+
+    Returns:
+        A structured dictionary containing primitive, backend name, job ID,
+        shots, native Qiskit result and collected metadata.
+    """
 
     logger = _logger()
     _, backend, backend_name = await _load_runtime_backend(
@@ -761,7 +830,25 @@ async def run_estimator_task(
     *,
     input_digest: str | None = None,
 ) -> dict[str, Any]:
-    """Run native Qiskit Runtime ``EstimatorV2`` inside a Prefect task."""
+    """Run native Qiskit Runtime ``EstimatorV2`` inside a Prefect task.
+
+    This is the simple one-task execution path. It submits a Qiskit Runtime job,
+    waits for the result, records artifacts and returns the result dictionary.
+
+    Args:
+        pubs: Native Qiskit Estimator pubs.
+        runtime_block_name: Name of a saved ``QiskitRuntimeConfig`` block.
+        precision: Optional target precision passed to ``EstimatorV2.run``.
+        artifact_key: Optional Prefect artifact key prefix.
+        options: Optional native Qiskit Estimator options.
+        runtime_config: Inline runtime configuration. Mutually exclusive with
+            ``runtime_block_name``.
+        input_digest: Optional input digest included in collected metadata.
+
+    Returns:
+        A structured dictionary containing primitive, backend name, job ID,
+        precision, native Qiskit result and collected metadata.
+    """
 
     logger = _logger()
     _, backend, backend_name = await _load_runtime_backend(
