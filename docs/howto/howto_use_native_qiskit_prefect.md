@@ -258,7 +258,7 @@ async def wrapper_sampler_flow(pubs):
     sampler = QCSCSamplerV2(
         runtime_config=QiskitRuntimeConfig(backend_name="ibm_fez"),
     )
-    output = await sampler.run(
+    job = await sampler.run(
         pubs,
         shots=100,
         cache_submit=True,
@@ -266,21 +266,22 @@ async def wrapper_sampler_flow(pubs):
         retry_fetch=True,
         artifact_key="native-qiskit-sampler-wrapper",
     )
-    return output["result"]
+    return await job.result()
 ```
 
-`run(...)` returns the same structured dictionary as the underlying tasks. If
-you prefer a job-like shape, use `submit(...)` and then `job.result()`:
+`run(...)` follows the Native Qiskit naming: it submits the job and returns a
+job-like handle. If you want the same structured dictionary as the underlying
+tasks, use `run_and_fetch(...)`:
 
 ```python
-job = await sampler.submit(
+output = await sampler.run_and_fetch(
     pubs,
     shots=100,
     cache_submit=True,
     cache_result=True,
     retry_fetch=True,
 )
-result = await job.result()
+result = output["result"]
 ```
 
 `QCSCEstimatorV2` uses the same shape with `precision`:
@@ -291,17 +292,101 @@ from qcsc_prefect.integrations.qiskit import QCSCEstimatorV2, QiskitRuntimeConfi
 estimator = QCSCEstimatorV2(
     runtime_config=QiskitRuntimeConfig(backend_name="ibm_fez"),
 )
-result = await estimator.run(
+job = await estimator.run(
     pubs,
     precision=0.2,
     cache_submit=True,
     cache_result=True,
     retry_fetch=True,
 )
+result = await job.result()
 ```
 
 Cache and retry flags require the default `robust=True` mode because they
 operate on split submit/fetch tasks.
+
+### Cache and fetch with wrapper classes
+
+The wrapper classes use the same submit/fetch tasks internally. `run(...)`
+submits a native Qiskit Runtime job and returns a `QCSCPrimitiveJob`; the actual
+fetch happens when you call `job.result()` or `job.output()`.
+
+```python
+from datetime import timedelta
+
+from prefect import flow
+from qcsc_prefect.integrations.qiskit import QCSCSamplerV2, QiskitRuntimeConfig
+
+
+@flow
+async def cached_wrapper_sampler_flow(pubs):
+    sampler = QCSCSamplerV2(
+        runtime_config=QiskitRuntimeConfig(backend_name="ibm_fez"),
+    )
+
+    job = await sampler.run(
+        pubs,
+        shots=100,
+        cache_submit=True,
+        cache_result=True,
+        retry_fetch=True,
+        cache_scope="flow",
+        cache_expiration=timedelta(days=7),
+        artifact_key="native-qiskit-sampler-wrapper",
+    )
+
+    output = await job.output()
+    return output["result"]
+```
+
+In this form:
+
+- `cache_submit=True` caches the lightweight job reference returned by the
+  submit task, keyed by the wrapper-generated input digest.
+- On an identical rerun, the submit step can return the cached `job_id` instead
+  of submitting a duplicate Qiskit Runtime job.
+- `job.result()` fetches and returns only the native Qiskit primitive result.
+- `job.output()` fetches and returns the full qcsc-prefect dictionary, including
+  `result`, `metadata`, and job fields.
+- `cache_result=True` persists the fetch output locally through Prefect using
+  `qiskit_result_fetch_cache_key` and `compressed/pickle`.
+- If the local fetch cache exists for the same `job_id`, Prefect restores that
+  result without calling IBM Quantum Platform again. If it does not exist, the
+  fetch task asks Qiskit Runtime for the existing job by `job_id`.
+- `retry_fetch=True` retries only the fetch step, not the submit step.
+
+`run_and_fetch(...)` is the compact form when you do not need to hold the
+job-like handle yourself:
+
+```python
+output = await sampler.run_and_fetch(
+    pubs,
+    shots=100,
+    cache_submit=True,
+    cache_result=True,
+    retry_fetch=True,
+    cache_scope="flow",
+)
+result = output["result"]
+```
+
+Estimator uses the same cache and fetch options:
+
+```python
+from qcsc_prefect.integrations.qiskit import QCSCEstimatorV2, QiskitRuntimeConfig
+
+estimator = QCSCEstimatorV2(
+    runtime_config=QiskitRuntimeConfig(backend_name="ibm_fez"),
+)
+job = await estimator.run(
+    pubs,
+    precision=0.2,
+    cache_submit=True,
+    cache_result=True,
+    retry_fetch=True,
+)
+result = await job.result()
+```
 
 ## Example 4: add submit cache and fetch retry
 

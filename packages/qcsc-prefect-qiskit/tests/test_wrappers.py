@@ -61,7 +61,7 @@ def test_sampler_wrapper_simple_mode_delegates_to_run_task(monkeypatch):
         options={"default_shots": 100},
     )
     result = asyncio.run(
-        sampler.run(
+        sampler.run_and_fetch(
             ["pub-0"],
             shots=100,
             artifact_key="sampler-artifact",
@@ -119,7 +119,7 @@ def test_sampler_wrapper_robust_mode_can_cache_submit_and_fetch(monkeypatch):
 
     sampler = QCSCSamplerV2(runtime_config=_RuntimeConfig())
     result = asyncio.run(
-        sampler.run(
+        sampler.run_and_fetch(
             ["pub-0"],
             shots=100,
             artifact_key="sampler-artifact",
@@ -150,7 +150,7 @@ def test_sampler_wrapper_robust_mode_can_cache_submit_and_fetch(monkeypatch):
     assert fetch_calls[0]["task_options"]["retries"] == 2
 
 
-def test_sampler_submit_returns_job_like_handle_with_result(monkeypatch):
+def test_sampler_run_returns_job_like_handle_with_result(monkeypatch):
     fetch_calls = []
 
     def submit_handler(task_options, args, kwargs):
@@ -182,7 +182,7 @@ def test_sampler_submit_returns_job_like_handle_with_result(monkeypatch):
 
     sampler = QCSCSamplerV2(runtime_config=_RuntimeConfig())
     job = asyncio.run(
-        sampler.submit(
+        sampler.run(
             ["pub-0"],
             shots=100,
             cache_result=True,
@@ -246,7 +246,7 @@ def test_estimator_wrapper_robust_mode_can_cache_submit_and_fetch(monkeypatch):
 
     estimator = QCSCEstimatorV2(runtime_config=_RuntimeConfig())
     result = asyncio.run(
-        estimator.run(
+        estimator.run_and_fetch(
             ["pub-0"],
             precision=0.01,
             cache_submit=True,
@@ -273,4 +273,4 @@ def test_wrapper_rejects_cache_options_in_simple_mode():
     sampler = QCSCSamplerV2(runtime_config=_RuntimeConfig())
 
     with pytest.raises(ValueError, match="require robust=True"):
-        asyncio.run(sampler.run(["pub-0"], robust=False, cache_result=True))
+        asyncio.run(sampler.run_and_fetch(["pub-0"], robust=False, cache_result=True))

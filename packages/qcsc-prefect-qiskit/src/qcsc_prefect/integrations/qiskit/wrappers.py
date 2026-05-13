@@ -32,8 +32,8 @@ from qcsc_prefect.integrations.qiskit.tasks import (
 class QCSCPrimitiveJob:
     """Job-like handle for split native Qiskit submit/fetch execution.
 
-    The handle is returned by :meth:`QCSCSamplerV2.submit` and
-    :meth:`QCSCEstimatorV2.submit`. It stores a serializable Qiskit Runtime job
+    The handle is returned by :meth:`QCSCSamplerV2.run` and
+    :meth:`QCSCEstimatorV2.run`. It stores a serializable Qiskit Runtime job
     reference and fetches the existing job through ``fetch_qiskit_job_result_task``.
 
     This is not a native Qiskit ``RuntimeJobV2``. It is a small Prefect-facing
@@ -165,8 +165,8 @@ class QCSCSamplerV2:
             block. Mutually exclusive with ``runtime_config``.
         runtime_config: Inline runtime configuration. Mutually exclusive with
             ``runtime_block_name``.
-        options: Default native Qiskit Sampler options. ``run`` and ``submit``
-            can override this value.
+        options: Default native Qiskit Sampler options. ``run`` and
+            ``run_and_fetch`` can override this value.
         backend_name: Optional backend name used only for submit cache input
             digest construction when it cannot be inferred from
             ``runtime_config``.
@@ -186,7 +186,7 @@ class QCSCSamplerV2:
         self.options = _copy_options(options)
         self.backend_name = backend_name or _config_backend_name(runtime_config)
 
-    async def run(
+    async def run_and_fetch(
         self,
         pubs: Iterable[Any],
         *,
@@ -202,11 +202,14 @@ class QCSCSamplerV2:
         cache_expiration: timedelta | None = None,
         input_digest: str | None = None,
     ) -> dict[str, Any]:
-        """Run Sampler pubs through the configured Prefect integration path.
+        """Submit Sampler pubs and fetch the completed task output.
 
         With ``robust=True`` this method submits a native Qiskit Runtime job,
         fetches the same job by ID, records artifacts and returns the full task
         output. With ``robust=False`` it delegates to ``run_sampler_task``.
+
+        Use :meth:`run` when you want the Native Qiskit-style API that returns a
+        job handle first, then call ``job.result()`` or ``job.output()``.
 
         Args:
             pubs: Native Qiskit Sampler pubs.
@@ -253,7 +256,7 @@ class QCSCSamplerV2:
                 input_digest=input_digest,
             )
 
-        job = await self.submit(
+        job = await self.run(
             pub_list,
             shots=shots,
             artifact_key=artifact_key,
@@ -268,7 +271,7 @@ class QCSCSamplerV2:
         )
         return await job.output()
 
-    async def submit(
+    async def run(
         self,
         pubs: Iterable[Any],
         *,
@@ -363,7 +366,7 @@ class QCSCEstimatorV2:
         runtime_config: Inline runtime configuration. Mutually exclusive with
             ``runtime_block_name``.
         options: Default native Qiskit Estimator options. ``run`` and
-            ``submit`` can override this value.
+            ``run_and_fetch`` can override this value.
         backend_name: Optional backend name used only for submit cache input
             digest construction when it cannot be inferred from
             ``runtime_config``.
@@ -383,7 +386,7 @@ class QCSCEstimatorV2:
         self.options = _copy_options(options)
         self.backend_name = backend_name or _config_backend_name(runtime_config)
 
-    async def run(
+    async def run_and_fetch(
         self,
         pubs: Iterable[Any],
         *,
@@ -399,11 +402,14 @@ class QCSCEstimatorV2:
         cache_expiration: timedelta | None = None,
         input_digest: str | None = None,
     ) -> dict[str, Any]:
-        """Run Estimator pubs through the configured Prefect integration path.
+        """Submit Estimator pubs and fetch the completed task output.
 
         With ``robust=True`` this method submits a native Qiskit Runtime job,
         fetches the same job by ID, records artifacts and returns the full task
         output. With ``robust=False`` it delegates to ``run_estimator_task``.
+
+        Use :meth:`run` when you want the Native Qiskit-style API that returns a
+        job handle first, then call ``job.result()`` or ``job.output()``.
 
         Args:
             pubs: Native Qiskit Estimator pubs.
@@ -450,7 +456,7 @@ class QCSCEstimatorV2:
                 input_digest=input_digest,
             )
 
-        job = await self.submit(
+        job = await self.run(
             pub_list,
             precision=precision,
             artifact_key=artifact_key,
@@ -465,7 +471,7 @@ class QCSCEstimatorV2:
         )
         return await job.output()
 
-    async def submit(
+    async def run(
         self,
         pubs: Iterable[Any],
         *,

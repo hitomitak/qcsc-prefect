@@ -93,20 +93,7 @@ from qcsc_prefect.integrations.qiskit import QCSCSamplerV2, QiskitRuntimeConfig
 sampler = QCSCSamplerV2(
     runtime_config=QiskitRuntimeConfig(backend_name="ibm_fez"),
 )
-output = await sampler.run(
-    pubs,
-    shots=100,
-    cache_submit=True,
-    cache_result=True,
-    retry_fetch=True,
-)
-```
-
-If you prefer a job-like shape, submit first and then fetch the native Qiskit
-result through `job.result()`:
-
-```python
-job = await sampler.submit(
+job = await sampler.run(
     pubs,
     shots=100,
     cache_submit=True,
@@ -116,7 +103,46 @@ job = await sampler.submit(
 result = await job.result()
 ```
 
+If you want the full structured dictionary returned by the underlying fetch
+task, use `run_and_fetch(...)`:
+
+```python
+output = await sampler.run_and_fetch(
+    pubs,
+    shots=100,
+    cache_submit=True,
+    cache_result=True,
+    retry_fetch=True,
+)
+result = output["result"]
+```
+
 Estimator uses `QCSCEstimatorV2(...).run(pubs, precision=...)`.
+
+Cache and fetch behavior with wrappers:
+
+- `cache_submit=True` lets an identical rerun reuse the cached `job_id` instead
+  of submitting a duplicate Runtime job.
+- `job.result()` fetches the native Qiskit result for that `job_id`.
+- `job.output()` fetches the full qcsc-prefect output dictionary, including
+  result metadata and artifact fields.
+- `cache_result=True` stores the fetched output in Prefect result storage with
+  `compressed/pickle`; if that local cache exists, the same `job_id` can be
+  restored without asking IBM Quantum Platform again.
+- `retry_fetch=True` retries the fetch step only.
+
+```python
+job = await sampler.run(
+    pubs,
+    shots=100,
+    cache_submit=True,
+    cache_result=True,
+    retry_fetch=True,
+)
+
+output = await job.output()
+result = output["result"]
+```
 
 ### 4. Use robust submit/fetch mode
 
