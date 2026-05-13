@@ -12,7 +12,14 @@ _TEMPLATE = "batch.slurm.j2"
 
 @dataclass(frozen=True)
 class SlurmJobRequest:
-    """Target-specific request fields required to build a Slurm batch job."""
+    """Target-specific request fields required to build a Slurm batch job.
+
+    Attributes:
+        partition: Slurm partition name passed to ``#SBATCH --partition``.
+        executable: Absolute or scheduler-visible command path to execute.
+        account: Optional Slurm account passed to ``#SBATCH --account``.
+        qpu: Optional QPU resource selector emitted by the Slurm template.
+    """
 
     partition: str
     executable: str
@@ -21,7 +28,15 @@ class SlurmJobRequest:
 
 
 def to_slurm_template_kwargs(*, exec_profile: ExecutionProfile, req: SlurmJobRequest) -> dict:
-    """Build template variables for the Slurm job script."""
+    """Build template variables for the Slurm job script.
+
+    Args:
+        exec_profile: Scheduler-independent execution profile.
+        req: Slurm-specific scheduler request fields.
+
+    Returns:
+        A dictionary that can be passed to the Slurm Jinja template.
+    """
 
     kw: dict = {
         "partition": req.partition,
@@ -53,7 +68,16 @@ def to_slurm_template_kwargs(*, exec_profile: ExecutionProfile, req: SlurmJobReq
 
 
 def render_script(*, work_dir: Path, exec_profile: ExecutionProfile, req: SlurmJobRequest) -> str:
-    """Render a Slurm job script text from the configured Jinja template."""
+    """Render Slurm job script text from the configured Jinja template.
+
+    Args:
+        work_dir: Working directory injected into the template.
+        exec_profile: Scheduler-independent execution profile.
+        req: Slurm-specific scheduler request fields.
+
+    Returns:
+        Rendered Slurm script text.
+    """
 
     template = _ENV.get_template(_TEMPLATE)
     kwargs = to_slurm_template_kwargs(exec_profile=exec_profile, req=req)
@@ -61,7 +85,16 @@ def render_script(*, work_dir: Path, exec_profile: ExecutionProfile, req: SlurmJ
 
 
 def write_script_file(*, work_dir: Path, filename: str, text: str) -> Path:
-    """Write a rendered job script into the work directory."""
+    """Write a rendered Slurm script into the work directory.
+
+    Args:
+        work_dir: Base working directory where the script file is created.
+        filename: Script file name, for example ``batch.slurm``.
+        text: Rendered script text.
+
+    Returns:
+        Absolute path to the created job script file.
+    """
 
     work_dir.mkdir(parents=True, exist_ok=True)
     path = work_dir / filename

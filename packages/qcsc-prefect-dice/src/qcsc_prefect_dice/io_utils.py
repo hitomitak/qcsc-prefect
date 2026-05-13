@@ -28,7 +28,20 @@ def _logger():
 
 
 def make_job_work_dir(base_work_dir: Path) -> Path:
-    """Create a unique work directory for one DICE execution."""
+    """Create a unique work directory for one DICE execution.
+
+    Args:
+        base_work_dir: Parent directory under which per-job directories are
+            created.
+
+    Returns:
+        Newly created job directory named with a UTC timestamp and short random
+        suffix.
+
+    Raises:
+        FileExistsError: If the generated unique directory already exists.
+        OSError: If the directory cannot be created.
+    """
 
     base_work_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -85,7 +98,34 @@ def prep_dice_input_files(
     energy_tol: float,
     max_iter: int,
 ) -> None:
-    """Prepare DICE input files in ``work_dir``."""
+    """Prepare all input files required by the DICE SHCI executable.
+
+    The helper writes ``fcidump.txt`` from molecular integrals, renders
+    ``input.dat`` from solver controls, and serializes alpha/beta determinant
+    seeds into ``AlphaDets.bin`` and ``BetaDets.bin`` using the DICE binary
+    format expected by the bundled template.
+
+    Args:
+        work_dir: Directory where DICE input files are written.
+        ci_strings: Alpha and beta determinant bitstrings used as the initial
+            CI space.
+        one_body_tensor: One-electron integral tensor passed to PySCF's
+            FCIDUMP writer.
+        two_body_tensor: Two-electron integral tensor passed to PySCF's
+            FCIDUMP writer.
+        norb: Number of spatial orbitals.
+        nelec: Number of alpha and beta electrons.
+        spin_sq: Optional target spin-squared value for ``input.dat``.
+        select_cutoff: DICE selection cutoff.
+        davidson_tol: Davidson solver convergence tolerance.
+        energy_tol: SCI energy convergence tolerance.
+        max_iter: Maximum number of HCI iterations.
+
+    Raises:
+        OSError: If any input file cannot be written.
+        OverflowError: If a determinant bitstring cannot be encoded into the
+            fixed-width DICE determinant representation.
+    """
 
     logger = _logger()
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -130,7 +170,29 @@ def read_dice_output_files(
     nelec: tuple[int, int],
     return_sci_state: bool,
 ) -> SCIResult:
-    """Read DICE output files and reconstruct an ``SCIResult``."""
+    """Read DICE output files and reconstruct an ``SCIResult``.
+
+    The helper reads orbital occupancies from ``spin1RDM.0.0.txt`` and the
+    variational energy from ``shci.e``. When ``return_sci_state`` is true, it
+    also parses ``dets.bin`` and reconstructs a
+    `qiskit_addon_sqd.fermion.SCIState` compatible with the SQD addon.
+
+    Args:
+        work_dir: Directory containing DICE output files.
+        norb: Number of spatial orbitals.
+        nelec: Number of alpha and beta electrons.
+        return_sci_state: Whether to parse ``dets.bin`` and include the SCI
+            state in the returned result.
+
+    Returns:
+        Parsed SCI result containing energy, optional SCI state, and alpha/beta
+        orbital occupancies.
+
+    Raises:
+        FileNotFoundError: If a required DICE output file is missing.
+        ValueError: If text output cannot be parsed into numeric arrays.
+        struct.error: If binary output is truncated or malformed.
+    """
 
     logger = _logger()
 

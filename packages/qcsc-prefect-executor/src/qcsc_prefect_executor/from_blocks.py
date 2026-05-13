@@ -37,7 +37,17 @@ _KNOWN_SCRIPT_SUFFIXES = frozenset(_SCRIPT_SUFFIX_BY_TARGET.values())
 
 @dataclass(frozen=True)
 class SubmissionTarget:
-    """Scheduler routing information resolved from Prefect blocks."""
+    """Scheduler routing information resolved from Prefect blocks.
+
+    Attributes:
+        hpc_target: Scheduler backend name, such as ``"miyabi"``,
+            ``"fugaku"``, or ``"slurm"``.
+        queue_name: Queue, partition, or resource-group name selected for the
+            execution profile's resource class.
+        project: Project, group, or account name selected for the resource
+            class. This can be empty for scheduler targets that do not require
+            an account.
+    """
 
     hpc_target: str
     queue_name: str
@@ -71,7 +81,16 @@ def _resolve_submission_target_from_loaded_blocks(
 
 
 async def resolve_hpc_target(*, hpc_profile_block_name: str) -> str:
-    """Load an ``HPCProfileBlock`` and return its scheduler target name."""
+    """Load an ``HPCProfileBlock`` and return its scheduler target name.
+
+    Args:
+        hpc_profile_block_name: Prefect block document name for
+            `qcsc_prefect_blocks.common.blocks.HPCProfileBlock`.
+
+    Returns:
+        The configured ``hpc_target`` value, for example ``"miyabi"``,
+        ``"fugaku"``, or ``"slurm"``.
+    """
 
     hpc_block = await _load_block(HPCProfileBlock, hpc_profile_block_name)
     return str(hpc_block.hpc_target)
@@ -82,7 +101,23 @@ async def resolve_submission_target(
     hpc_profile_block_name: str,
     execution_profile_block_name: str,
 ) -> SubmissionTarget:
-    """Resolve scheduler routing from block names without submitting a job."""
+    """Resolve scheduler routing from block names without submitting a job.
+
+    This helper is useful when a flow needs to inspect the target queue or
+    project before it creates scheduler-specific filenames or logs. It loads
+    the ``HPCProfileBlock`` and ``ExecutionProfileBlock`` and chooses CPU or
+    GPU queue/project fields from the execution profile's ``resource_class``.
+
+    Args:
+        hpc_profile_block_name: Prefect block document name for target-specific
+            scheduler settings.
+        execution_profile_block_name: Prefect block document name for
+            scheduler-independent execution settings.
+
+    Returns:
+        Resolved scheduler target, queue/partition/resource group, and
+        project/account values.
+    """
 
     hpc_block = await _load_block(HPCProfileBlock, hpc_profile_block_name)
     execution_profile_block = await _load_block(ExecutionProfileBlock, execution_profile_block_name)
@@ -92,7 +127,23 @@ async def resolve_submission_target(
 
 
 def build_scheduler_script_filename(script_stem: str, hpc_target: str) -> str:
-    """Build a scheduler-specific script filename from a logical stem."""
+    """Build a scheduler-specific script filename from a logical stem.
+
+    Existing scheduler suffixes are replaced, while names without a known
+    scheduler suffix receive the target suffix appended. For example,
+    ``"batch"`` becomes ``"batch.pbs"`` for Miyabi and ``"batch.slurm"`` for
+    Slurm; ``"batch.pbs"`` becomes ``"batch.pjm"`` for Fugaku.
+
+    Args:
+        script_stem: Logical script name or existing scheduler script filename.
+        hpc_target: Scheduler target name.
+
+    Returns:
+        Script filename with the suffix required by the scheduler target.
+
+    Raises:
+        NotImplementedError: If ``hpc_target`` is not supported.
+    """
 
     suffix = _SCRIPT_SUFFIX_BY_TARGET.get(hpc_target)
     if suffix is None:
@@ -111,7 +162,16 @@ async def resolve_scheduler_script_filename(
     script_stem: str,
     hpc_profile_block_name: str,
 ) -> str:
-    """Resolve scheduler target from blocks and return a matching script filename."""
+    """Resolve scheduler target from blocks and return a matching filename.
+
+    Args:
+        script_stem: Logical script name or existing scheduler script filename.
+        hpc_profile_block_name: Prefect block document name used to determine
+            the scheduler target.
+
+    Returns:
+        Scheduler-specific script filename.
+    """
 
     hpc_target = await resolve_hpc_target(hpc_profile_block_name=hpc_profile_block_name)
     return build_scheduler_script_filename(script_stem, hpc_target)
@@ -181,14 +241,44 @@ async def run_job_from_blocks(
     fugaku_job_name: str | None = None,
     execution_profile_overrides: dict[str, Any] | None = None,
 ) -> Any:
-    """
-    Resolve block names into runtime models and execute on the target HPC system.
+    """Resolve Prefect blocks and execute a job on the configured HPC target.
 
-    Hidden from workflow code:
-    - Block loading
-    - ExecutionProfile conversion
-    - Target-specific request creation
-    - Target-specific executor dispatch
+    This is the main block-driven entrypoint for workflow authors. It loads the
+    command, execution profile, and HPC profile blocks; converts them into the
+    internal runtime models; creates the target-specific scheduler request; and
+    dispatches to the Miyabi, Fugaku, or Slurm executor.
+
+    Args:
+        command_block_name: Prefect block document name for the command to run.
+        execution_profile_block_name: Prefect block document name describing
+            resources, launcher, environment, and default execution behavior.
+        hpc_profile_block_name: Prefect block document name describing the
+            scheduler target, queues, projects, and executable mapping.
+        work_dir: Working directory where scheduler scripts and job outputs are
+            created.
+        script_filename: Logical or scheduler-specific script filename. The
+            suffix is normalized for the resolved target.
+        user_args: Optional extra command-line arguments appended after the
+            command block's default arguments.
+        watch_poll_interval: Seconds to wait between scheduler status polls.
+        timeout_seconds: Optional maximum wait time for terminal job status.
+        metrics_artifact_key: Prefect artifact key used for job metrics.
+        fugaku_job_name: Optional Fugaku PJM job name. When omitted, a safe name
+            is derived from the command name.
+        execution_profile_overrides: Optional runtime overrides for selected
+            execution profile fields, such as ``num_nodes`` or ``walltime``.
+
+    Returns:
+        A target-specific result object: ``MiyabiRunResult``,
+        ``FugakuRunResult``, or ``SlurmRunResult``.
+
+    Raises:
+        ValueError: If the command and execution profile blocks refer to
+            different command names, if a required project/group is missing, or
+            if unsupported execution profile override keys are provided.
+        KeyError: If the command's executable key is missing from the HPC
+            profile's executable map.
+        NotImplementedError: If the resolved ``hpc_target`` is unsupported.
     """
     command_block = await _load_block(CommandBlock, command_block_name)
     execution_profile_block = await _load_block(ExecutionProfileBlock, execution_profile_block_name)

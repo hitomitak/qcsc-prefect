@@ -51,14 +51,26 @@ async def run_command(*args: str, cwd: Path | None = None) -> str:
 
 @dataclass(frozen=True)
 class SubmitResult:
-    """Submission result payload returned by runtime ``submit`` methods."""
+    """Submission result returned after PJM accepts a batch script.
+
+    Attributes:
+        job_id: PJM job id parsed from ``pjsub`` stdout.
+        raw_output: Raw, stripped stdout emitted by ``pjsub``.
+    """
 
     job_id: str
     raw_output: str
 
 
 class FugakuPJMRuntime:
-    """Minimal async runtime for Fugaku PJM commands."""
+    """Async runtime wrapper for Fugaku PJM scheduler commands.
+
+    The runtime maps to the core PJM commands used on Fugaku: ``pjsub`` for
+    submission, ``pjstat`` for status polling, and ``pjdel`` for cancellation.
+    Workflow code usually calls
+    `qcsc_prefect_executor.fugaku.run.run_fugaku_job` or
+    `qcsc_prefect_executor.from_blocks.run_job_from_blocks` instead.
+    """
 
     JOB_ID_RE = re.compile(r"Job\s+(\d+)\s+submitted\.?")
     PJSTAT_KEYS = [
@@ -114,6 +126,8 @@ class FugakuPJMRuntime:
         return SubmitResult(job_id=m.group(1), raw_output=out)
 
     def _parse_pjstat(self, stdout: str) -> dict[str, Any] | None:
+        """Parse a single ``pjstat -v`` row into a dictionary."""
+
         for line in stdout.splitlines():
             s = line.strip()
             if not s or s.startswith("JOB_ID") or s.startswith("===="):
@@ -133,6 +147,10 @@ class FugakuPJMRuntime:
     ) -> dict[str, Any]:
         """Poll PJM status until a terminal state is reached.
 
+        This method first checks the active job view with ``pjstat -v`` and
+        falls back to the historical view with ``pjstat -H -v`` when needed.
+        The job is considered terminal when PJM reports ``EXT`` or ``CCL``.
+
         Args:
             job_id: Target PJM job id.
             watch_poll_interval: Poll interval in seconds.
@@ -143,6 +161,7 @@ class FugakuPJMRuntime:
 
         Raises:
             WaitTimeout: If timeout is exceeded.
+            RuntimeError: If an underlying ``pjstat`` command fails.
         """
 
         start = asyncio.get_running_loop().time()

@@ -47,7 +47,14 @@ def _read_text_if_exists(path: Path) -> str:
 
 @dataclass(frozen=True)
 class FugakuRunResult:
-    """Normalized result returned by :func:`run_fugaku_job`."""
+    """Normalized result returned by `run_fugaku_job`.
+
+    Attributes:
+        job_id: PJM job id returned by ``pjsub``.
+        exit_status: Integer exit status derived from PJM ``EC`` when present.
+        state: Final PJM state, such as ``"EXT"`` or ``"CCL"``.
+        job_status: Parsed final PJM status dictionary from ``pjstat``.
+    """
 
     job_id: str
     exit_status: int
@@ -82,7 +89,7 @@ async def run_fugaku_job(
         metrics_artifact_key: Prefect artifact key for job metrics table.
 
     Returns:
-        :class:`FugakuRunResult` containing job id, exit status, state, and
+        `FugakuRunResult` containing job id, exit status, state, and
         final scheduler status payload.
     """
 
