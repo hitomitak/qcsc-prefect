@@ -12,6 +12,7 @@ def test_native_qiskit_integration_module_imports():
     assert module.QiskitEstimatorTaskError.__name__ == "QiskitEstimatorTaskError"
     assert module.QiskitJobFetchTaskError.__name__ == "QiskitJobFetchTaskError"
     assert module.QiskitSamplerTaskError.__name__ == "QiskitSamplerTaskError"
+    assert callable(module.build_cached_fetch_qiskit_job_result_task)
     assert callable(module.build_qiskit_cache_payload)
     assert callable(module.build_qiskit_estimator_metadata_markdown)
     assert callable(module.build_qiskit_estimator_result_markdown)
@@ -23,6 +24,7 @@ def test_native_qiskit_integration_module_imports():
     assert callable(module.create_qiskit_sampler_metadata_artifact)
     assert callable(module.extract_estimator_result_summary)
     assert callable(module.extract_sampler_result_summary)
+    assert module.cached_fetch_qiskit_job_result_task.name == "fetch-qiskit-job-result"
     assert module.fetch_qiskit_job_result_task.name == "fetch-qiskit-job-result"
     assert callable(module.is_transient_qiskit_error)
     assert callable(module.load_json)

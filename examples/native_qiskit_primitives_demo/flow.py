@@ -24,6 +24,7 @@ build_qiskit_estimator_input_digest = _qiskit_integration.build_qiskit_estimator
 build_qiskit_sampler_input_digest = _qiskit_integration.build_qiskit_sampler_input_digest
 fetch_qiskit_job_result_task = _qiskit_integration.fetch_qiskit_job_result_task
 qiskit_estimator_submit_cache_key = _qiskit_integration.qiskit_estimator_submit_cache_key
+qiskit_result_fetch_cache_key = _qiskit_integration.qiskit_result_fetch_cache_key
 qiskit_retry_delays = _qiskit_integration.qiskit_retry_delays
 qiskit_sampler_submit_cache_key = _qiskit_integration.qiskit_sampler_submit_cache_key
 run_estimator_task = _qiskit_integration.run_estimator_task
@@ -155,14 +156,27 @@ def _estimator_submit_task(*, enable_cache: bool, cache_expiration_days: int) ->
     )
 
 
-def _fetch_task(*, enable_retry: bool) -> Any:
-    if not enable_retry:
+def _fetch_task(*, enable_retry: bool, enable_result_cache: bool) -> Any:
+    options: dict[str, Any] = {}
+    if enable_result_cache:
+        options.update(
+            {
+                "cache_key_fn": qiskit_result_fetch_cache_key,
+                "persist_result": True,
+                "result_serializer": "compressed/pickle",
+            }
+        )
+    if enable_retry:
+        options.update(
+            {
+                "retries": len(qiskit_retry_delays()),
+                "retry_delay_seconds": qiskit_retry_delays(),
+                "retry_condition_fn": should_retry_qiskit_fetch_failure,
+            }
+        )
+    if not options:
         return fetch_qiskit_job_result_task
-    return fetch_qiskit_job_result_task.with_options(
-        retries=len(qiskit_retry_delays()),
-        retry_delay_seconds=qiskit_retry_delays(),
-        retry_condition_fn=should_retry_qiskit_fetch_failure,
-    )
+    return fetch_qiskit_job_result_task.with_options(**options)
 
 
 def _save_runtime_block(
@@ -206,17 +220,20 @@ async def native_qiskit_primitives_live_test_flow(
     cache_scope: CacheScopeSelection = "flow",
     cache_expiration_days: int = 7,
     enable_fetch_retry: bool = False,
+    enable_result_cache: bool = False,
 ) -> dict[str, Any]:
     logger = get_run_logger()
     sampler_pubs, estimator_pubs, backend_name = await _prepare_pubs(runtime_block_name)
     logger.warning(
         "This flow submits real Qiskit Runtime jobs to backend %s. "
-        "Selected primitive=%s, mode=%s, submit_cache=%s, fetch_retry=%s.",
+        "Selected primitive=%s, mode=%s, submit_cache=%s, fetch_retry=%s, "
+        "result_cache=%s.",
         backend_name,
         primitive,
         mode,
         enable_submit_cache,
         enable_fetch_retry,
+        enable_result_cache,
     )
     submit_sampler = _sampler_submit_task(
         enable_cache=enable_submit_cache,
@@ -226,7 +243,10 @@ async def native_qiskit_primitives_live_test_flow(
         enable_cache=enable_submit_cache,
         cache_expiration_days=cache_expiration_days,
     )
-    fetch_result = _fetch_task(enable_retry=enable_fetch_retry)
+    fetch_result = _fetch_task(
+        enable_retry=enable_fetch_retry,
+        enable_result_cache=enable_result_cache,
+    )
 
     summary: dict[str, Any] = {
         "runtime_block_name": runtime_block_name,
@@ -237,6 +257,7 @@ async def native_qiskit_primitives_live_test_flow(
         "cache_scope": cache_scope,
         "cache_expiration_days": cache_expiration_days,
         "enable_fetch_retry": enable_fetch_retry,
+        "enable_result_cache": enable_result_cache,
         "jobs": {},
     }
 
@@ -359,6 +380,14 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Retry transient failures while fetching an already-submitted job result.",
     )
+    parser.add_argument(
+        "--enable-result-cache",
+        action="store_true",
+        help=(
+            "Persist fetch_qiskit_job_result_task results with Prefect's "
+            "compressed/pickle result cache, keyed by Qiskit job ID."
+        ),
+    )
 
     parser.add_argument(
         "--save-runtime-block",
@@ -404,6 +433,7 @@ async def _main() -> None:
         cache_scope=args.cache_scope,
         cache_expiration_days=args.cache_expiration_days,
         enable_fetch_retry=args.enable_fetch_retry,
+        enable_result_cache=args.enable_result_cache,
     )
     print(json.dumps(summary, indent=2, sort_keys=True, default=str))
 

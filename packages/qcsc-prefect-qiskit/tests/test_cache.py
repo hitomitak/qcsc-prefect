@@ -10,7 +10,11 @@ from qcsc_prefect.integrations.qiskit.cache import (
     qiskit_result_fetch_cache_key,
     qiskit_sampler_submit_cache_key,
 )
-from qcsc_prefect.integrations.qiskit.tasks import submit_sampler_job_task
+from qcsc_prefect.integrations.qiskit.tasks import (
+    build_cached_fetch_qiskit_job_result_task,
+    cached_fetch_qiskit_job_result_task,
+    submit_sampler_job_task,
+)
 
 
 class _UnserializablePub:
@@ -198,6 +202,30 @@ def test_result_fetch_cache_key_uses_job_reference_and_result_prefix():
 
     assert key is not None
     assert key.startswith("qiskit-result-")
+
+
+def test_cached_fetch_task_uses_prefect_compressed_pickle_result_cache():
+    assert cached_fetch_qiskit_job_result_task.cache_key_fn is qiskit_result_fetch_cache_key
+    assert cached_fetch_qiskit_job_result_task.persist_result is True
+    assert cached_fetch_qiskit_job_result_task.result_serializer == "compressed/pickle"
+
+
+def test_build_cached_fetch_task_preserves_extra_task_options():
+    cached_task = build_cached_fetch_qiskit_job_result_task(retries=2)
+
+    assert cached_task.cache_key_fn is qiskit_result_fetch_cache_key
+    assert cached_task.persist_result is True
+    assert cached_task.result_serializer == "compressed/pickle"
+    assert cached_task.retries == 2
+
+
+def test_cached_fetch_task_can_be_combined_with_retry_options():
+    retried_cached_task = cached_fetch_qiskit_job_result_task.with_options(retries=2)
+
+    assert retried_cached_task.cache_key_fn is qiskit_result_fetch_cache_key
+    assert retried_cached_task.persist_result is True
+    assert retried_cached_task.result_serializer == "compressed/pickle"
+    assert retried_cached_task.retries == 2
 
 
 def test_submit_task_job_reference_includes_input_digest(monkeypatch):

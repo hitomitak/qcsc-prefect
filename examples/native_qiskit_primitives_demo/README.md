@@ -115,7 +115,8 @@ Estimator uses the same pattern with `run_estimator_task` and
 Submitting a Qiskit Runtime job is not safely retryable by default: if the
 client loses the response after the job was accepted, a retry can create a
 duplicate quantum job. For robust execution, cache the submit task and retry
-only the fetch task.
+only the fetch task. If you also want repeated fetches of the same `job_id` to
+return the saved result, add Prefect result caching to the fetch task.
 
 Starting from the robust native pattern:
 
@@ -133,6 +134,7 @@ from prefect import flow
 from qcsc_prefect.integrations.qiskit import (
     build_qiskit_sampler_input_digest,
     fetch_qiskit_job_result_task,
+    qiskit_result_fetch_cache_key,
     qiskit_retry_delays,
     qiskit_sampler_submit_cache_key,
     should_retry_qiskit_fetch_failure,
@@ -160,6 +162,9 @@ async def cached_robust_sampler_flow(pubs):
         input_digest=input_digest,
     )
     return await fetch_qiskit_job_result_task.with_options(
+        cache_key_fn=qiskit_result_fetch_cache_key,
+        persist_result=True,
+        result_serializer="compressed/pickle",
         retries=len(qiskit_retry_delays()),
         retry_delay_seconds=qiskit_retry_delays(),
         retry_condition_fn=should_retry_qiskit_fetch_failure,
@@ -247,8 +252,8 @@ metadata and result artifacts are registered in Prefect.
 
 This submits one real Sampler job on the first run. Run the same command again
 to confirm that `submit-qiskit-sampler-job` becomes `Cached` in Prefect and the
-same `job_id` is reused. The fetch task still runs and can retry transient
-network/service failures.
+same `job_id` is reused. With `--enable-result-cache`, the fetch result is also
+persisted by Prefect and can be restored by job ID.
 
 ```bash
 cd /Users/hitomi/Project/qcsc-prefect
@@ -261,9 +266,12 @@ uv run --package qcsc-prefect-qiskit python examples/native_qiskit_primitives_de
   --shots 100 \
   --enable-submit-cache \
   --enable-fetch-retry \
+  --enable-result-cache \
   --cache-scope flow
 ```
 
 For cross-Flow submit cache reuse, change `--cache-scope flow` to
 `--cache-scope global`. The runtime Block name is still part of the submit cache
 key, so use the same `--runtime-block` when checking reuse with this example.
+`--enable-result-cache` lets Prefect restore the fetched result locally if the
+same job ID is requested again.

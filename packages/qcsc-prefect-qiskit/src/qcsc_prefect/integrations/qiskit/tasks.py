@@ -17,7 +17,10 @@ from qcsc_prefect.integrations.qiskit.artifacts import (
     create_qiskit_sampler_result_artifact,
 )
 from qcsc_prefect.integrations.qiskit.blocks import QiskitRuntimeConfig
-from qcsc_prefect.integrations.qiskit.cache import build_qiskit_cache_payload
+from qcsc_prefect.integrations.qiskit.cache import (
+    build_qiskit_cache_payload,
+    qiskit_result_fetch_cache_key,
+)
 from qcsc_prefect.integrations.qiskit.metadata import collect_qiskit_execution_metadata
 
 
@@ -652,6 +655,27 @@ async def fetch_qiskit_job_result_task(
         result=result,
         metadata=metadata,
     )
+
+
+def build_cached_fetch_qiskit_job_result_task(**task_options: Any) -> Any:
+    """Build a fetch task that persists native Qiskit results with Prefect.
+
+    This mirrors prefect-qiskit's execution cache pattern: the task result is
+    persisted with Prefect's compressed pickle serializer and keyed by Qiskit
+    Runtime job ID. On cache hits, Prefect restores the stored result without
+    calling the Qiskit Runtime service again.
+    """
+
+    options: dict[str, Any] = {
+        "cache_key_fn": qiskit_result_fetch_cache_key,
+        "persist_result": True,
+        "result_serializer": "compressed/pickle",
+    }
+    options.update(task_options)
+    return fetch_qiskit_job_result_task.with_options(**options)
+
+
+cached_fetch_qiskit_job_result_task = build_cached_fetch_qiskit_job_result_task()
 
 
 @task(name="run-qiskit-sampler")
