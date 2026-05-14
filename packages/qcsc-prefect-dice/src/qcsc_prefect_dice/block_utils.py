@@ -80,11 +80,12 @@ def create_dice_blocks(
     resolved_metrics_key = metrics_artifact_key or (
         "miyabi-dice-metrics" if hpc_target == "miyabi" else "fugaku-dice-metrics"
     )
-    resolved_dice_executable = str(Path(dice_executable).expanduser().resolve())
+    resolved_dice_executable = str(dice_executable)
     resolved_environments = dict(environments or {})
     if hpc_target == "fugaku" and "LD_LIBRARY_PATH" not in resolved_environments:
         dice_bin_dir = str(Path(resolved_dice_executable).parent)
-        resolved_environments["LD_LIBRARY_PATH"] = f"{dice_bin_dir}:$LD_LIBRARY_PATH"
+        if dice_bin_dir != ".":
+            resolved_environments["LD_LIBRARY_PATH"] = f"{dice_bin_dir}:$LD_LIBRARY_PATH"
 
     CommandBlock(
         command_name=command_name,

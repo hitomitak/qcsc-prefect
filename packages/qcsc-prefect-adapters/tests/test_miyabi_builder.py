@@ -32,6 +32,9 @@ def test_render_miyabi_script(tmp_path: Path):
     assert "module load intelmpi" in text
     assert "unset OMPI_MCA_mca_base_env_list" in text
     assert 'export OMP_NUM_THREADS="1"' in text
+    assert 'QCSC_PREFECT_EXECUTABLE="/path/to/hello"' in text
+    assert "QCSC Prefect preflight failed: executable '${QCSC_PREFECT_EXECUTABLE}'" in text
     assert req.executable in text
     assert text.index("unset OMPI_MCA_mca_base_env_list") < text.index('export OMP_NUM_THREADS="1"')
-    assert text.index('export OMP_NUM_THREADS="1"') < text.index("mpirun")
+    assert text.index('export OMP_NUM_THREADS="1"') < text.index("QCSC_PREFECT_EXECUTABLE")
+    assert 'mpirun "${QCSC_PREFECT_EXECUTABLE}" --foo bar' in text

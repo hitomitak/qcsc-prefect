@@ -39,10 +39,30 @@ export {{ k }}="{{ v }}"
 
 cd {{ work_dir }}
 
+QCSC_PREFECT_EXECUTABLE="{{ executable }}"
+if [ -z "${QCSC_PREFECT_EXECUTABLE}" ]; then
+  echo "QCSC Prefect preflight failed: executable path is empty." >&2
+  exit 127
+fi
+case "${QCSC_PREFECT_EXECUTABLE}" in
+  */*)
+    if [ ! -x "${QCSC_PREFECT_EXECUTABLE}" ]; then
+      echo "QCSC Prefect preflight failed: executable '${QCSC_PREFECT_EXECUTABLE}' does not exist or is not executable on this HPC node." >&2
+      exit 127
+    fi
+    ;;
+  *)
+    if ! command -v "${QCSC_PREFECT_EXECUTABLE}" >/dev/null 2>&1; then
+      echo "QCSC Prefect preflight failed: executable '${QCSC_PREFECT_EXECUTABLE}' was not found on PATH on this HPC node." >&2
+      exit 127
+    fi
+    ;;
+esac
+
 {% if launcher != "single" -%}
-{{ launcher }}{% if mpi_options is defined %} {{ mpi_options | join(' ') }}{% endif %} {{ executable }}
+{{ launcher }}{% if mpi_options is defined %} {{ mpi_options | join(' ') }}{% endif %} "${QCSC_PREFECT_EXECUTABLE}"
 {%- else -%}
-{{ executable }}
+"${QCSC_PREFECT_EXECUTABLE}"
 {%- endif %}
 {%- if arguments is defined -%}
 {{ ' ' ~ arguments | join(' ') }}

@@ -46,4 +46,6 @@ def test_render_fugaku_script_with_modules_env_and_extra_resources(tmp_path: Pat
     assert 'export OMP_NUM_THREADS="48"' in text
     assert 'export UTOFU_SWAP_PROTECT="1"' in text
     assert 'export LD_LIBRARY_PATH="/lib64:$LD_LIBRARY_PATH"' in text
-    assert "mpirun -n 4 /path/to/gb-demo --foo bar" in text
+    assert 'QCSC_PREFECT_EXECUTABLE="/path/to/gb-demo"' in text
+    assert "QCSC Prefect preflight failed: executable '${QCSC_PREFECT_EXECUTABLE}'" in text
+    assert 'mpirun -n 4 "${QCSC_PREFECT_EXECUTABLE}" --foo bar' in text

@@ -39,4 +39,6 @@ def test_render_slurm_script(tmp_path: Path):
     assert "module load gcc" in text
     assert "echo before-run" in text
     assert 'export OMP_NUM_THREADS="8"' in text
-    assert "srun --cpu-bind=cores /path/to/hello --foo bar" in text
+    assert 'QCSC_PREFECT_EXECUTABLE="/path/to/hello"' in text
+    assert "QCSC Prefect preflight failed: executable '${QCSC_PREFECT_EXECUTABLE}'" in text
+    assert 'srun --cpu-bind=cores "${QCSC_PREFECT_EXECUTABLE}" --foo bar' in text

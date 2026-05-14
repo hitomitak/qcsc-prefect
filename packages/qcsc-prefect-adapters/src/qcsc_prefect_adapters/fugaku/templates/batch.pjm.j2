@@ -44,19 +44,38 @@ spack load {{ module }}
 export {{ k }}="{{ v }}"
 {% endfor %}
 {% endif %}
+QCSC_PREFECT_EXECUTABLE="{{ executable }}"
+if [ -z "${QCSC_PREFECT_EXECUTABLE}" ]; then
+  echo "QCSC Prefect preflight failed: executable path is empty." >&2
+  exit 127
+fi
+case "${QCSC_PREFECT_EXECUTABLE}" in
+  */*)
+    if [ ! -x "${QCSC_PREFECT_EXECUTABLE}" ]; then
+      echo "QCSC Prefect preflight failed: executable '${QCSC_PREFECT_EXECUTABLE}' does not exist or is not executable on this HPC node." >&2
+      exit 127
+    fi
+    ;;
+  *)
+    if ! command -v "${QCSC_PREFECT_EXECUTABLE}" >/dev/null 2>&1; then
+      echo "QCSC Prefect preflight failed: executable '${QCSC_PREFECT_EXECUTABLE}' was not found on PATH on this HPC node." >&2
+      exit 127
+    fi
+    ;;
+esac
 {% if launcher == "single" %}
-{% set base_cmd = executable %}
+{% set base_cmd = '"${QCSC_PREFECT_EXECUTABLE}"' %}
 {% elif launcher == "mpiexec" %}
 {% if mpi_options %}
-{% set base_cmd = "mpiexec " ~ (' '.join(mpi_options)) ~ " " ~ executable %}
+{% set base_cmd = "mpiexec " ~ (' '.join(mpi_options)) ~ ' "${QCSC_PREFECT_EXECUTABLE}"' %}
 {% else %}
-{% set base_cmd = "mpiexec " ~ executable %}
+{% set base_cmd = 'mpiexec "${QCSC_PREFECT_EXECUTABLE}"' %}
 {% endif %}
 {% else %}
 {% if mpi_options %}
-{% set base_cmd = launcher ~ " " ~ (' '.join(mpi_options)) ~ " " ~ executable %}
+{% set base_cmd = launcher ~ " " ~ (' '.join(mpi_options)) ~ ' "${QCSC_PREFECT_EXECUTABLE}"' %}
 {% else %}
-{% set base_cmd = launcher ~ " " ~ executable %}
+{% set base_cmd = launcher ~ ' "${QCSC_PREFECT_EXECUTABLE}"' %}
 {% endif %}
 {% endif %}
 {% if arguments %}
