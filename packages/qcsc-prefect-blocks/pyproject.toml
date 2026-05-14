@@ -1,15 +1,30 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "qcsc-prefect-blocks"
 version = "0.1.0"
 description = "Prefect block definitions for HPC + Miyabi execution"
+readme = "README.md"
 requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [
+    { name = "QCSC Prefect Contributors" },
+]
+maintainers = [
+    { name = "QCSC Prefect Maintainers" },
+]
 dependencies = [
     "prefect>=2.19",
+    "pydantic>=2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/qiskit-community/qcsc-prefect"
+Repository = "https://github.com/qiskit-community/qcsc-prefect"
+Documentation = "https://qiskit-community.github.io/qcsc-prefect/"
+Issues = "https://github.com/qiskit-community/qcsc-prefect/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,24 +1,29 @@
 # QCSC Prefect DICE
 
-Shared DICE SHCI solver integration for qcsc-prefect workflows.
+Shared Python-side DICE SHCI solver integration for qcsc-prefect workflows.
 
 This package provides:
 
 - `DiceSHCISolverJob` as a Prefect block
 - DICE input/output utilities
 - Block registration and block creation helpers for Miyabi and Fugaku
+- Scheduler script integration and runtime executable preflight checks
 
-It is intended to be reused by multiple algorithms such as SQD and SKQD.
+It is intended to be reused by multiple algorithms such as SQD and SKQD. Installing this
+package does not build, download, vendor, or install the external DICE/SBD executable.
+The executable must be compiled separately for each target HPC environment.
 
-Native build assets live under:
+Build instructions are site-specific because compilers, MPI stacks, BLAS/LAPACK libraries,
+GPU support, filesystem layout, and scheduler environments differ across HPC systems.
+
+Source-tree native build helper assets live under:
 
 ```text
 packages/qcsc-prefect-dice/native
 ```
 
-See [native/README.md](./native/README.md)
-for build instructions and how to point `dice_executable` at the resulting
-binary.
+They are not part of the Python package install. See [native/README.md](./native/README.md)
+for development notes and how to point `dice_executable` at the separately built binary.
 
 ## Usage Example
 
@@ -30,7 +35,7 @@ block_names = create_dice_blocks(
     project="gz00",
     queue="regular-c",
     root_dir="/work/gz00/<user>/dice_jobs",
-    dice_executable="/work/gz00/<user>/qcsc-prefect-dice/native/bin/Dice",
+    dice_executable="/work/gz00/<user>/dice/bin/Dice",
     solver_block_name="sqd-dice-solver",
 )
 
@@ -46,3 +51,7 @@ result = await solver.run(
 
 `SQD` and `SKQD` can use the same shared package and only vary block names or
 their algorithm-specific setup wrappers.
+
+The configured executable path is stored in the HPC profile executable map under the command
+block key `dice_solver`. Generated job scripts validate that path on the HPC node before
+launching DICE and fail early with a clear message if it is missing or not executable.

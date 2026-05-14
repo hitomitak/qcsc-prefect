@@ -1,21 +1,39 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "qcsc-prefect-adapters"
 version = "0.1.0"
 description = "HPC adapters (Miyabi, Fugaku, Slurm) for QCSC Prefect workflows"
+readme = "README.md"
 requires-python = ">=3.10"
-dependencies = [
-    "qcsc-prefect-core",
+license = "Apache-2.0"
+authors = [
+    { name = "QCSC Prefect Contributors" },
 ]
+maintainers = [
+    { name = "QCSC Prefect Maintainers" },
+]
+dependencies = [
+    "Jinja2>=3.1",
+    "qcsc-prefect-core==0.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/qiskit-community/qcsc-prefect"
+Repository = "https://github.com/qiskit-community/qcsc-prefect"
+Documentation = "https://qiskit-community.github.io/qcsc-prefect/"
+Issues = "https://github.com/qiskit-community/qcsc-prefect/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+namespaces = true
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.package-data]
-"qcsc_prefect_adapters" = ["**/*.j2"]
+"qcsc_prefect_adapters.miyabi" = ["templates/*.j2"]
+"qcsc_prefect_adapters.fugaku" = ["templates/*.j2"]
+"qcsc_prefect_adapters.slurm" = ["templates/*.j2"]
