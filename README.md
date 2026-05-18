@@ -176,6 +176,20 @@ Do not add PyPI API tokens or password secrets to this repository.
 7. Confirm PyPI or TestPyPI Trusted Publisher settings match the workflow and environment.
 8. Push a tag like `v0.1.0` to trigger the PyPI publish workflow.
 
+### Release Validation Note
+
+For the `0.1.0` packaging validation:
+
+- GitHub Actions build-only dry run completed.
+- All packages built into wheel and sdist distributions.
+- `twine check` passed.
+- Local install from `dist/` passed with
+  `pip install --find-links qcsc-prefect-dist "qcsc-prefect[all]==0.1.0"`.
+- The Qiskit integration import path is `qcsc_prefect.integrations.qiskit`.
+- The DICE executable is not installed by `pip`; it must be built separately on the target HPC system.
+- TestPyPI Trusted Publisher registration for multiple packages is currently blocked by a suspected
+  PyPI/TestPyPI pending publisher issue, so no actual upload was performed.
+
 ## Contribution Guidelines
 
 1. Install pre-commit hooks:
