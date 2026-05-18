@@ -24,6 +24,7 @@ packages = []
 # --- uv ---
 [tool.uv.workspace]
 members = [
+    "packages/qcsc-prefect",
     "packages/qcsc-prefect-core",
     "packages/qcsc-prefect-adapters",
     "packages/qcsc-prefect-blocks",
@@ -34,6 +35,7 @@ members = [
 
 
 [tool.uv.sources]
+qcsc-prefect          = { workspace = true }
 qcsc-prefect-core     = { workspace = true }
 qcsc-prefect-adapters = { workspace = true }
 qcsc-prefect-blocks   = { workspace = true }
@@ -54,6 +56,7 @@ python = ">=3.10"
 
 [tool.poetry.workspace]
 members = [
+    "packages/qcsc-prefect",
     "packages/qcsc-prefect-core",
     "packages/qcsc-prefect-adapters",
     "packages/qcsc-prefect-blocks",
@@ -65,6 +68,7 @@ members = [
 # --- Hatch ---
 [tool.hatch.workspace]
 members = [
+    "packages/qcsc-prefect",
     "packages/qcsc-prefect-core",
     "packages/qcsc-prefect-adapters",
     "packages/qcsc-prefect-blocks",

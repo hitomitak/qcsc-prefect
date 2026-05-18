@@ -20,6 +20,7 @@ qcsc-prefect/
 │   ├── qcsc-prefect-blocks/
 │   ├── qcsc-prefect-adapters/
 │   ├── qcsc-prefect-executor/
+│   ├── qcsc-prefect-qiskit/
 │   └── qcsc-prefect-dice/
 ├── algorithms/
 ├── examples/

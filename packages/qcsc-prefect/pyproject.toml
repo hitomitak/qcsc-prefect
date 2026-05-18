@@ -3,9 +3,9 @@ requires = ["setuptools>=77.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "qcsc-prefect-core"
+name = "qcsc-prefect"
 version = "0.1.0"
-description = "Core models and resolution logic for QCSC Prefect workflows"
+description = "Meta-package for installing QCSC Prefect core packages"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -15,7 +15,24 @@ authors = [
 maintainers = [
     { name = "QCSC Prefect Maintainers" },
 ]
-dependencies = []
+dependencies = [
+    "qcsc-prefect-adapters==0.1.0",
+    "qcsc-prefect-blocks==0.1.0",
+    "qcsc-prefect-core==0.1.0",
+    "qcsc-prefect-executor==0.1.0",
+]
+
+[project.optional-dependencies]
+qiskit = [
+    "qcsc-prefect-qiskit==0.1.0",
+]
+dice = [
+    "qcsc-prefect-dice==0.1.0",
+]
+all = [
+    "qcsc-prefect-dice==0.1.0",
+    "qcsc-prefect-qiskit==0.1.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/qiskit-community/qcsc-prefect"
@@ -23,5 +40,5 @@ Repository = "https://github.com/qiskit-community/qcsc-prefect"
 Documentation = "https://qiskit-community.github.io/qcsc-prefect/"
 Issues = "https://github.com/qiskit-community/qcsc-prefect/issues"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+packages = []

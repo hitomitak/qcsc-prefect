@@ -3,6 +3,10 @@
 This directory stores the native build scripts and site-specific build settings
 used to build the DICE executable for qcsc-prefect workflows.
 
+These scripts are source-tree helpers only. Installing `qcsc-prefect-dice` with
+pip does not run them, download native dependencies, or install a DICE/SBD
+binary.
+
 The Python integration lives in:
 
 ```text

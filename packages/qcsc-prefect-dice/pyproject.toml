@@ -1,26 +1,43 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "qcsc-prefect-dice"
-version = "1.0.0"
+version = "0.1.0"
 description = "DICE SHCI solver integration for qcsc-prefect"
 readme = "README.md"
 requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [
+    { name = "QCSC Prefect Contributors" },
+]
+maintainers = [
+    { name = "QCSC Prefect Maintainers" },
+]
 dependencies = [
-    "Jinja2",
+    "Jinja2>=3.1",
     "numpy",
     "prefect>=2.19",
+    "pydantic>=2",
     "pyscf",
     "qiskit-addon-sqd==0.11.0",
-    "qcsc-prefect-core",
-    "qcsc-prefect-blocks",
-    "qcsc-prefect-executor",
+    "qcsc-prefect-blocks==0.1.0",
+    "qcsc-prefect-core==0.1.0",
+    "qcsc-prefect-executor==0.1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/qiskit-community/qcsc-prefect"
+Repository = "https://github.com/qiskit-community/qcsc-prefect"
+Documentation = "https://qiskit-community.github.io/qcsc-prefect/"
+Issues = "https://github.com/qiskit-community/qcsc-prefect/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools]
+include-package-data = true
 
 [tool.setuptools.package-data]
 qcsc_prefect_dice = ["templates/*.j2"]

@@ -36,7 +36,7 @@ def test_create_dice_blocks_miyabi(monkeypatch, tmp_path):
         project="gz00",
         queue="regular-c",
         root_dir=str(tmp_path / "jobs"),
-        dice_executable=str(tmp_path / "bin" / "Dice"),
+        dice_executable="$DICE_ROOT/bin/Dice",
     )
 
     assert names == {
@@ -52,6 +52,7 @@ def test_create_dice_blocks_miyabi(monkeypatch, tmp_path):
     assert hpc_block.hpc_target == "miyabi"
     assert hpc_block.queue_cpu == "regular-c"
     assert hpc_block.project_cpu == "gz00"
+    assert hpc_block.executable_map["dice_solver"] == "$DICE_ROOT/bin/Dice"
 
 
 def test_create_dice_blocks_fugaku(monkeypatch, tmp_path):
