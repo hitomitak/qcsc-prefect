@@ -79,5 +79,6 @@ nav:
       - MPI Locally: howto/howto_use_mpi_locally.md
       - Slurm Docker Cluster: howto/howto_test_slurm_with_docker_cluster.md
   - Reference:
+      - PyPI Release Guide: release.md
       - QCSC Prefect API: reference/qcsc_prefect_api.md
       - Native Qiskit API: reference/native_qiskit_api.md
