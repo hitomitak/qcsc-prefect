@@ -12,11 +12,10 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   prepare:
-    name: Prepare release PR
+    name: Prepare release branch
     runs-on: ubuntu-latest
     steps:
       - name: Check out main
@@ -55,20 +54,23 @@ jobs:
           "${RUNNER_TEMP}/qcsc-smoke-qiskit/bin/python" -m pip install --find-links dist "qcsc-prefect[qiskit]==${{ inputs.new_version }}"
           "${RUNNER_TEMP}/qcsc-smoke-qiskit/bin/python" scripts/smoke-test-packages.py
 
-      - name: Create release PR
-        uses: peter-evans/create-pull-request@v6
-        with:
-          base: main
-          branch: release/v${{ inputs.new_version }}
-          commit-message: Bump version to ${{ inputs.new_version }}
-          title: Release v${{ inputs.new_version }}
-          body: |
-            Release preparation for `v${{ inputs.new_version }}`.
-
-            - Updated all qcsc-prefect package versions.
-            - Updated internal dependency pins.
-            - Built all distributions.
-            - Ran twine check.
-            - Ran smoke tests.
-
-            Reminder: after merge, publish by pushing tag `v${{ inputs.new_version }}`.
+      - name: Create release branch
+        env:
+          NEW_VERSION: ${{ inputs.new_version }}
+        run: |
+          BRANCH="release/v${NEW_VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "${BRANCH}"
+          git add packages/*/pyproject.toml
+          git commit -m "Bump version to ${NEW_VERSION}"
+          git push --set-upstream origin "${BRANCH}"
+          {
+            echo "### Release branch created"
+            echo
+            echo "- Branch: \`${BRANCH}\`"
+            echo "- PR title: \`Release v${NEW_VERSION}\`"
+            echo "- Commit message: \`Bump version to ${NEW_VERSION}\`"
+            echo "- Open a pull request manually from \`${BRANCH}\` into \`main\`."
+            echo "- After merge, publish by pushing tag \`v${NEW_VERSION}\`."
+          } >> "${GITHUB_STEP_SUMMARY}"

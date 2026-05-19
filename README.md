@@ -169,10 +169,11 @@ Do not add PyPI API tokens or password secrets to this repository.
 Normal release flow:
 
 1. Run the `Prepare release` workflow with `old_version` and `new_version`.
-2. Review and merge the generated release PR.
-3. Push tag `v<new_version>`.
-4. Approve the `pypi` environment deployment in GitHub Actions.
-5. Confirm PyPI installation.
+2. Open a pull request manually from the generated `release/v<new_version>` branch.
+3. Review and merge the release PR.
+4. Push tag `v<new_version>`.
+5. Approve the `pypi` environment deployment in GitHub Actions.
+6. Confirm PyPI installation.
 
 After release, verify installation with:
 
