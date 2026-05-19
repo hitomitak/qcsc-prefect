@@ -161,20 +161,35 @@ The root project is a workspace coordinator (`qcsc-prefect-workspace`) and is no
 For a coordinated PyPI release, keep the `qcsc-prefect-*` package versions and exact internal
 dependency pins aligned, for example `0.1.0`.
 
-## Release Checklist
+## Release Workflow
 
-Maintainers can publish through GitHub Actions with PyPI Trusted Publishing.
+Maintainers publish through GitHub Actions with PyPI Trusted Publishing.
 Do not add PyPI API tokens or password secrets to this repository.
 
-1. Update versions in every publishable package under `packages/`.
-2. Update exact internal dependency pins between `qcsc-prefect-*` packages.
-3. Run `python -m pip install --upgrade build twine`.
-4. Run `bash scripts/build-all-packages.sh`.
-5. Run `python -m twine check dist/*`.
-6. Test local wheel installs from `dist/`, including `qcsc-prefect`,
-   `qcsc-prefect[qiskit]`, `qcsc-prefect[dice]`, and `qcsc-prefect[all]`.
-7. Confirm PyPI or TestPyPI Trusted Publisher settings match the workflow and environment.
-8. Push a tag like `v0.1.0` to trigger the PyPI publish workflow.
+Normal release flow:
+
+1. Run the `Prepare release` workflow with `old_version` and `new_version`.
+2. Open a pull request manually from the generated `release/v<new_version>` branch.
+3. Review and merge the release PR.
+4. Push tag `v<new_version>`.
+5. Approve the `pypi` environment deployment in GitHub Actions.
+6. Confirm PyPI installation.
+
+After release, verify installation with:
+
+```bash
+python -m pip install "qcsc-prefect==<version>"
+python -m pip install "qcsc-prefect[all]==<version>"
+```
+
+Release notes:
+
+- Use the release workflows for normal releases; do not use PyPI API tokens.
+- Trusted Publisher is already configured for the PyPI projects.
+- The `pypi-publish.yml` workflow validates tag/package version consistency before publishing.
+- The DICE/SBD executable is not installed by `pip`.
+- DICE/SBD must be built separately for each target HPC environment.
+- If a broken release is published, prefer yanking over deleting.
 
 ### Release Validation Note
 
