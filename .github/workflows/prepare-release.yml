@@ -1,0 +1,74 @@
+name: Prepare release
+
+on:
+  workflow_dispatch:
+    inputs:
+      old_version:
+        description: "Current qcsc-prefect package version"
+        required: true
+      new_version:
+        description: "New qcsc-prefect package version"
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare:
+    name: Prepare release PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build twine setuptools wheel
+
+      - name: Bump package versions
+        run: python scripts/bump-version.py "${{ inputs.old_version }}" "${{ inputs.new_version }}"
+
+      - name: Build all packages
+        run: bash scripts/build-all-packages.sh
+
+      - name: Check distributions
+        run: python -m twine check dist/*
+
+      - name: Smoke test core installation
+        run: |
+          python -m venv "${RUNNER_TEMP}/qcsc-smoke-core"
+          "${RUNNER_TEMP}/qcsc-smoke-core/bin/python" -m pip install --upgrade pip
+          "${RUNNER_TEMP}/qcsc-smoke-core/bin/python" -m pip install --find-links dist "qcsc-prefect==${{ inputs.new_version }}"
+          "${RUNNER_TEMP}/qcsc-smoke-core/bin/python" scripts/smoke-test-packages.py
+
+      - name: Smoke test Qiskit extra installation
+        run: |
+          python -m venv "${RUNNER_TEMP}/qcsc-smoke-qiskit"
+          "${RUNNER_TEMP}/qcsc-smoke-qiskit/bin/python" -m pip install --upgrade pip
+          "${RUNNER_TEMP}/qcsc-smoke-qiskit/bin/python" -m pip install --find-links dist "qcsc-prefect[qiskit]==${{ inputs.new_version }}"
+          "${RUNNER_TEMP}/qcsc-smoke-qiskit/bin/python" scripts/smoke-test-packages.py
+
+      - name: Create release PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          base: main
+          branch: release/v${{ inputs.new_version }}
+          commit-message: Bump version to ${{ inputs.new_version }}
+          title: Release v${{ inputs.new_version }}
+          body: |
+            Release preparation for `v${{ inputs.new_version }}`.
+
+            - Updated all qcsc-prefect package versions.
+            - Updated internal dependency pins.
+            - Built all distributions.
+            - Ran twine check.
+            - Ran smoke tests.
+
+            Reminder: after merge, publish by pushing tag `v${{ inputs.new_version }}`.
