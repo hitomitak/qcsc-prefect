@@ -14,7 +14,7 @@ You do not need IBM Quantum credentials or real HPC credentials.
 
 ## Prerequisites
 
-- Python 3.10 or newer
+- Python 3.11 or newer
 - A shell with `python3` or `python` available
 - No IBM Quantum account
 - No Miyabi, Fugaku, or Slurm account
@@ -30,6 +30,16 @@ source .venv/bin/activate
 ```
 
 The Level 0 quickstart does not need the `qiskit` extra.
+
+If the system Python is older than 3.11, install `uv` first. The bootstrap
+helper will then create `.venv` with Python 3.12:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+./scripts/bootstrap_tutorial_env.sh
+source .venv/bin/activate
+```
 
 Manual setup is:
 

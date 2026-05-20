@@ -139,6 +139,10 @@ The helper creates `.venv`, upgrades `pip`, and installs
 `qcsc-prefect[qiskit]`. It does not configure IBM Quantum credentials, start
 Prefect services, or submit HPC jobs.
 
+If the system Python is older than 3.11, install `uv` first. The bootstrap
+helper will then create `.venv` with Python 3.12. See
+[How to Set Up Python Environment](../howto/howto_setup_python_env.md).
+
 The older `./scripts/bootstrap_bitcount_tutorial_env.sh` command remains
 available as a BitCount-specific wrapper around the same bootstrap helper.
 
