@@ -102,6 +102,20 @@ fi
 # shellcheck source=/dev/null
 source "${VENV_DIR}/bin/activate"
 
+if ! python -m pip --version >/dev/null 2>&1; then
+  echo "pip is not available in ${VENV_DIR}; bootstrapping pip with ensurepip..."
+  if ! python -m ensurepip --upgrade; then
+    cat >&2 <<EOF
+Error: could not bootstrap pip in ${VENV_DIR}.
+
+Your Python installation may not include ensurepip. Use a Python build with
+venv/ensurepip support, or remove ${VENV_DIR} and recreate it after pip is
+available.
+EOF
+    exit 1
+  fi
+fi
+
 python -m pip install --upgrade pip
 python -m pip install "${PACKAGE_SPEC}"
 
