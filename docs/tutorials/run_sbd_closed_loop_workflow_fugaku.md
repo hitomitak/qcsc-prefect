@@ -3,6 +3,12 @@
 This tutorial walks us through reproducing a Sample-based Quantum Diagonalization (SQD) experiment using the `qcsc-prefect` architecture.
 We will run a hybrid quantum-classical workflow using the [SBD](https://github.com/r-ccs-cms/sbd) solver to diagonalize a sparse chemistry Hamiltonian on Fugaku, orchestrated via Prefect.
 
+> [!NOTE]
+> This is a Level 3 advanced tutorial. It assumes you already understand the
+> BitCount/HPC workflow shape and are ready to run the SBD solver with
+> production-like HPC settings. For the staged tutorial path, see the
+> [Tutorial Roadmap](./index.md).
+
 <img src="../images/img-closed-loop-fugaku.png" alt="sbd" width="90%"/><br>
 
 The goal is to compute the ground state energy of N2-MO state.
@@ -11,8 +17,15 @@ The goal is to compute the ground state energy of N2-MO state.
 
 Before starting, make sure:
 
+- You are familiar with the BitCount / HPC workflow pattern from the earlier
+  tutorials.
 - You have completed [Step1 : How to Set Up Python Environment on Fugaku Pre/Post Node](../howto/howto_setup_python_env_fugaku.md).
 - You have completed [Step2 : How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit_fugaku.md).
+- You can build and configure the SBD solver executable (`diag`) on Fugaku.
+- You have access to the target Fugaku environment, including the required
+  group, resource group, filesystem paths, and scheduler commands.
+- IBM Quantum is configured for this workflow, unless your deployment is
+  explicitly configured to use another supported quantum source.
 
 > [!IMPORTANT]
 > Replace `ra00000`, `u12345` and `vol0000x` with your actual group, account name and mount volume.

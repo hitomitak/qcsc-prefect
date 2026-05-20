@@ -5,6 +5,12 @@ We will run a hybrid quantum-classical workflow using the [SBD](https://github.c
 
 For Fugaku, see [Run SBD Closed-loop Workflow on Fugaku](./run_sbd_closed_loop_workflow_fugaku.md).
 
+> [!NOTE]
+> This is a Level 3 advanced tutorial. It assumes you already understand the
+> BitCount/HPC workflow shape and are ready to run the SBD solver with
+> production-like HPC settings. For the staged tutorial path, see the
+> [Tutorial Roadmap](./index.md).
+
 <img src="../images/img-closed-loop.png" alt="sbd" width="90%"/><br>
 
 The goal is to compute the ground state energy of N2-Mo State.
@@ -13,8 +19,15 @@ The goal is to compute the ground state energy of N2-Mo State.
 
 Before starting, make sure:
 
+- You are familiar with the BitCount / HPC workflow pattern from the earlier
+  tutorials.
 - You have completed [Create Your QCSC Workflow with Prefect](./create_qcsc_workflow_for_miyabi.md).
 - You have completed [How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit.md).
+- You can build and configure the SBD solver executable (`diag`) on Miyabi-C.
+- You have access to the target Miyabi-C environment, including the required
+  project, queue, filesystem paths, and scheduler commands.
+- IBM Quantum is configured for this workflow, unless your deployment is
+  explicitly configured to use another supported quantum source.
 
 > [!IMPORTANT]
 > - Replace `gz00` and `z12345` with your actual group and account name.
