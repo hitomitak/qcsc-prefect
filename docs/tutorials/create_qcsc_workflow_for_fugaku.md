@@ -1,7 +1,8 @@
 # Create Your QCSC Workflow with Prefect for Fugaku
 
-This hands-on tutorial guides you through building a small C++ program on the Fugaku environment and integrating it into a Prefect workflow using a custom `FugakuJobBlock` class.
-On the Prefect workflow, we also use [Prefect Qiskit](https://github.com/qiskit-community/prefect-qiskit) to show how to write a complete QCSC workflow from scratch.
+This hands-on tutorial guides you through building a small C++ program on the Fugaku environment and integrating it into a Prefect workflow.
+The beginner path uses deterministic random quantum data first, so you can confirm the Fugaku HPC execution flow without IBM Quantum credentials.
+After that works, you can optionally switch the same workflow to IBM Quantum Runtime.
 
 Our objective is to compute a count dictionary of sampler bitstrings using MPI programming on the QCSC architecture.
 
@@ -14,6 +15,8 @@ Key principles in this tutorial:
 - Workflows run by specifying block names
 - Existing assets are reused as-is from `examples/prefect_bitcount_demo`
 
+For the staged tutorial path, see the [Tutorial Roadmap](index.md).
+
 ---
 
 ## Prefect Core Concepts (quick mapping with [Introduction to Prefect](./Prefect_tutorial_miyabi.pdf))
@@ -25,17 +28,18 @@ You will see these terms:
   - `quantum-sampling-task` in `flow_optimized.py`
   - `hpc-bitcount-task` in `flow_optimized.py`
 - **Block**: reusable server-side configuration stored in Prefect
-  - `IBM Quantum Credentials`: IBM Cloud CRN + API key
-  - `QuantumRuntime` block: `ibm-runner` (pre-created)
   - `CommandBlock`: `cmd-bitcount-hist`
   - `ExecutionProfileBlock`: `exec-bitcount-fugaku`
   - `HPCProfileBlock`: `hpc-fugaku-bitcount`
+  - Optional for real-device runs: `IBM Quantum Credentials` and `QuantumRuntime` block (`ibm-runner`)
 - **Variable**: server-side runtime parameters
   - `fugaku-bitcount-options`
 
 ## What you need
 
-- **Accounts / IDs**: (a) Fugaku account, (b) Prefect Web Portal account (API Key), (c) IBM Cloud API key + Service CRN (Quantum)
+- **Accounts / IDs**:
+  - Required for the random-source path: Fugaku account and Prefect Web Portal account (API Key)
+  - Optional for IBM Quantum / real-device execution: IBM Cloud API key + Service CRN (Quantum)
 - **Local tools**: SSH client and a modern browser.
 
 ---
@@ -46,10 +50,14 @@ The whole process image is :
 
 ![Prerequisites Flow](../images/img-prerequisites-fugaku.png)
 
-Before starting, make sure:
+Required for the random-source path:
 
 - You have completed [Step1 : How to Set Up Python Environment on Fugaku Pre/Post Node](../howto/howto_setup_python_env_fugaku.md).
-- You have completed [Step2 : How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit_fugaku.md).
+
+Optional for IBM Quantum / real-device execution:
+
+- Complete [Step2 : How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit_fugaku.md).
+- Install and configure `prefect-qiskit` only before using `--quantum-source real-device`.
 
 > [!IMPORTANT]
 > Replace `ra00000`, `u12345` and `vol0000x` with your actual group, account name and mount volume.
@@ -94,7 +102,7 @@ Create a project directory:
 mkdir fugaku_tutorial && cd fugaku_tutorial
 ```
 
-## Step 3. Prepare Prefect and Quantum runtime (Pre/Post Node)
+## Step 3. Prepare Prefect environment (Pre/Post Node)
 
 <img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
@@ -104,8 +112,6 @@ git clone git@github.com:qiskit-community/qcsc-prefect.git
 cd qcsc-prefect
 
 source ~/venv/prefect/bin/activate
-export SSL_CERT_FILE=$(python -c 'import certifi; print(certifi.where())')
-uv pip install prefect-qiskit
 uv pip install --no-deps \
   -e packages/qcsc-prefect-core \
   -e packages/qcsc-prefect-adapters \
@@ -113,7 +119,7 @@ uv pip install --no-deps \
   -e packages/qcsc-prefect-executor
 ```
 
-`SSL_CERT_FILE` is required on Fugaku for IBM Quantum access in this environment.
+For the random-source path, no IBM Quantum Runtime block is required.
 
 Use Fugaku cloud profile
 
@@ -227,7 +233,45 @@ python examples/prefect_bitcount_demo/create_blocks.py \
 
 ## Step 7. Run workflow by specifying block names (Pre/Post Node)
 
-Use `flow_optimized.py` with Fugaku block names:
+Use `flow_optimized.py` with Fugaku block names. Start with deterministic
+random bitstrings so the first run does not require IBM Quantum credentials:
+
+<img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
+```bash
+python examples/prefect_bitcount_demo/flow_optimized.py \
+  --quantum-source random \
+  --random-seed 24 \
+  --command-block cmd-bitcount-hist \
+  --execution-profile-block exec-bitcount-fugaku \
+  --hpc-profile-block hpc-fugaku-bitcount \
+  --options-variable fugaku-bitcount-options \
+  --script-filename bitcount_optimized.pjm
+```
+
+In this mode, the main user inputs are block names.
+We can also monitor the progress on the Prefect console:
+
+![Get Counts Flow Run](../images/img-get-counts-fugaku.png)
+
+### Optional: switch to IBM Quantum Runtime
+
+After the random-source run succeeds, you can run the same workflow against IBM
+Quantum Runtime.
+
+Before using `--quantum-source real-device`, complete
+[How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit_fugaku.md)
+and install the Prefect Qiskit integration:
+
+<img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
+```bash
+uv pip install prefect-qiskit
+export SSL_CERT_FILE=$(python -c 'import certifi; print(certifi.where())')
+prefect block inspect quantum-runtime/ibm-runner
+```
+
+`SSL_CERT_FILE` is required on Fugaku for IBM Quantum access in this environment.
+
+Then run:
 
 <img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
@@ -241,12 +285,6 @@ python examples/prefect_bitcount_demo/flow_optimized.py \
   --script-filename bitcount_optimized.pjm
 ```
 
-In this mode, the main user inputs are block names.
-If you want to skip IBM Quantum for a tutorial/demo run, add `--quantum-source random --random-seed 24`.
-We can also monitor the progress on the Prefect console:
-
-![Get Counts Flow Run](../images/img-get-counts-fugaku.png)
-
 ### Step 7.1. What `flow_optimized.py` does
 
 Code location:
@@ -256,9 +294,9 @@ Code location:
 Execution sequence:
 
 1. `quantum-sampling-task`
-2. Load `QuantumRuntime` block (`ibm-runner`)
-3. Load sampler options variable (`fugaku-bitcount-options`)
-4. Build and run GHZ sampling, or generate deterministic pseudo-random bitstrings when `--quantum-source random` is selected
+2. Load sampler options variable (`fugaku-bitcount-options`)
+3. If `--quantum-source random`, generate deterministic pseudo-random bitstrings.
+4. If `--quantum-source real-device`, load `QuantumRuntime` block (`ibm-runner`), then build and run GHZ sampling.
 5. Write `input.bin` into a run-specific job directory
 6. `hpc-bitcount-task`
 7. Submit HPC job via `run_job_from_blocks(...)` using `CommandBlock`, `ExecutionProfileBlock`, and `HPCProfileBlock`
