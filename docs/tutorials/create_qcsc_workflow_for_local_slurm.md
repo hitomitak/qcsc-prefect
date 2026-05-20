@@ -7,6 +7,12 @@ The controller and worker nodes run inside Docker on your Mac, while the
 workflow itself still uses the same `qcsc-prefect` flow and MPI executable
 assets as the Miyabi and Fugaku tutorials.
 
+> [!NOTE]
+> This tutorial is related local validation material, not the default beginner
+> path. For the staged tutorial order, start with the
+> [Tutorial Roadmap](index.md). Use the Miyabi and Fugaku BitCount tutorials as
+> the main Level 1/2 HPC path.
+
 Our objective is to compute a count dictionary of sampler bitstrings using MPI
 programming on the QCSC architecture.
 
@@ -49,8 +55,8 @@ You will see these terms:
 
 If you want to run against IBM Quantum Runtime later, you will also need:
 
-- a configured `QuantumRuntime` block such as `ibm-runner`
-- IBM Quantum credentials set up in the Prefect backend you use
+- a configured `QiskitRuntimeConfig` block such as `ibm-runner`
+- IBM Quantum credentials set up for native Qiskit Runtime
 
 ---
 
@@ -176,17 +182,20 @@ cd /data/qcsc-prefect
 . .venv/bin/activate
 ```
 
-Install Python packages required by the BitCount flow:
+The random-source path does not require IBM Quantum credentials or the external
+`prefect-qiskit` package.
+
+If you plan to run the optional real-device path later, install the native
+Qiskit integration:
 
 <img src="../images/icon-slurmctld.png" alt="pc" width="50"/><br>
 ```bash
-python -m pip install prefect-qiskit qiskit
+python -m pip install "qcsc-prefect[qiskit]"
 ```
 
 > [!NOTE]
-> Even when `--quantum-source random` is used, the current implementation still
-> imports `prefect_qiskit` and `qiskit`, so both packages must be installed in
-> the controller virtual environment.
+> The `qiskit` extra is only needed for `--quantum-source real-device`.
+> `--quantum-source random` uses deterministic local bitstrings.
 
 ---
 
@@ -380,8 +389,10 @@ You should see files such as:
 Once the local Slurm path works in `random` mode, you can switch the same flow
 to a real backend by changing only the quantum-source arguments.
 
-Make sure a `QuantumRuntime` block such as `ibm-runner` already exists in the
-same Prefect backend, then run:
+Make sure a `QiskitRuntimeConfig` block such as `ibm-runner` already exists in
+the same Prefect backend. See
+[Native Qiskit on Prefect](../howto/howto_use_native_qiskit_prefect.md), then
+run:
 
 <img src="../images/icon-slurmctld.png" alt="pc" width="50"/><br>
 ```bash

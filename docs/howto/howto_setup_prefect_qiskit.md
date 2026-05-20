@@ -2,6 +2,13 @@
 
 This guide explains how to configure Prefect Qiskit integration to access IBM Quantum services from the MDX workflow server.
 
+> [!NOTE]
+> This is legacy `prefect-qiskit` setup for workflows that still use
+> `QuantumRuntime`, including the current Level 3 SBD tutorials. For new
+> BitCount and Native Qiskit workflows, use
+> [Native Qiskit on Prefect](./howto_use_native_qiskit_prefect.md) and install
+> `qcsc-prefect[qiskit]`.
+
 You will create two Blocks: (1) `IBMQuantumCredentials` and (2) `QuantumRuntime`.
 
 **Concept: Block** — Blocks store reusable configuration and credentials.

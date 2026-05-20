@@ -7,9 +7,8 @@ multiple HPC systems by switching reusable execution blocks.
 ## What You Can Find Here
 
 - The core architecture and execution model in [Architecture](./concept.md)
-- Step-by-step tutorials for Miyabi and Fugaku in
-  [Tutorials](./tutorials/create_qcsc_workflow_for_miyabi.md)
-- Operational setup guides in [How-to](./howto/howto_setup_prefect_qiskit.md)
+- Step-by-step tutorials in the [Tutorial Roadmap](./tutorials/index.md)
+- Operational setup guides in [How-to](./howto/howto_use_native_qiskit_prefect.md)
 
 ## Repository Layout
 
