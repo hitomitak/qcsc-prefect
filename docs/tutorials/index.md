@@ -10,7 +10,7 @@ new users can learn one concept at a time.
 | --- | --- | --- | --- |
 | Level 0 | Local or mock execution | No IBM Quantum credentials and no real HPC credentials | Available |
 | Level 1 | Random quantum source + HPC execution | No IBM Quantum credentials; real HPC scheduler required for the main path | Partially covered |
-| Level 2 | Native Qiskit + HPC execution | IBM Quantum credentials and HPC scheduler may be required | Incomplete / planned |
+| Level 2 | Native Qiskit + HPC execution | IBM Quantum credentials and HPC scheduler required for the main path | Covered by integrated BitCount tutorial |
 | Level 3 | Real application / SBD closed-loop workflow | Production-like quantum and HPC setup | Covered by advanced tutorials |
 
 ## Level 0: Local or mock execution
@@ -78,9 +78,17 @@ workflow.
 - Uses `qcsc-prefect` helpers for Prefect integration, such as artifacts,
   retries, caching, or orchestration
 - Goal: connect quantum execution and HPC execution in one workflow
-- Status: incomplete / planned
+- Status: covered by an integrated BitCount tutorial
 
-Related material exists, but it is not yet an integrated tutorial:
+Existing tutorial:
+
+- [Native Qiskit + HPC Workflow](native_qiskit_hpc_workflow.md)
+  - Current: native Qiskit Runtime sampling connected to BitCount HPC
+    execution
+  - Recommended level: Level 2
+  - Note: requires IBM Quantum credentials and a real HPC environment.
+
+Related material:
 
 - [Native Qiskit on Prefect](../howto/howto_use_native_qiskit_prefect.md)
 
@@ -109,7 +117,8 @@ Existing tutorials:
 
 1. Start with the [Level 0 Quickstart](quickstart.md).
 2. Use the Level 1 random-source path to learn HPC submission and monitoring.
-3. Move to Level 2 when you need Native Qiskit and HPC in the same workflow.
+3. Move to [Native Qiskit + HPC Workflow](native_qiskit_hpc_workflow.md) when
+   you need Native Qiskit and HPC in the same workflow.
 4. Use Level 3 only after the BitCount and HPC concepts are familiar.
 
 Use the Level 1 random-source path only when you already have an HPC
@@ -122,5 +131,3 @@ scheduler validation, not as the default first tutorial.
   setup burden.
 - The Local Slurm workflow can stay as reference material until a hands-on
   Local Slurm tutorial is explicitly needed.
-- Do not treat the planned Level 2 tutorial as existing documentation until it
-  is added in a separate PR.

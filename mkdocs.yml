@@ -64,6 +64,7 @@ nav:
       - Level 0 Quickstart: tutorials/quickstart.md
       - Miyabi Workflow: tutorials/create_qcsc_workflow_for_miyabi.md
       - Fugaku Workflow: tutorials/create_qcsc_workflow_for_fugaku.md
+      - Native Qiskit + HPC Workflow: tutorials/native_qiskit_hpc_workflow.md
       - Local Slurm Workflow: tutorials/create_qcsc_workflow_for_local_slurm.md
       - Closed Loop Workflow: tutorials/run_sbd_closed_loop_workflow.md
       - Closed Loop Workflow (Fugaku): tutorials/run_sbd_closed_loop_workflow_fugaku.md
