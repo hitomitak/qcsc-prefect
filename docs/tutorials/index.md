@@ -111,8 +111,6 @@ for local scheduler validation, not as the default first tutorial.
 
 ## Known cleanup items
 
-- `tmp.md` is an old tutorial fragment and should be reviewed in a later cleanup
-  task. It is not listed in the documentation navigation.
 - Beginner tutorials still need follow-up work to reduce `prefect-qiskit` and
   editable install assumptions.
 - The Local Slurm workflow can stay as reference material until a hands-on
