@@ -61,6 +61,7 @@ nav:
       - Architecture: concept.md
   - Tutorials:
       - Tutorial Roadmap: tutorials/index.md
+      - Level 0 Quickstart: tutorials/quickstart.md
       - Miyabi Workflow: tutorials/create_qcsc_workflow_for_miyabi.md
       - Fugaku Workflow: tutorials/create_qcsc_workflow_for_fugaku.md
       - Local Slurm Workflow: tutorials/create_qcsc_workflow_for_local_slurm.md

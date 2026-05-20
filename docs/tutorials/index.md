@@ -8,7 +8,7 @@ new users can learn one concept at a time.
 
 | Level | Focus | Credentials required | Status |
 | --- | --- | --- | --- |
-| Level 0 | Local or mock execution | No IBM Quantum credentials and no real HPC credentials | Planned / missing |
+| Level 0 | Local or mock execution | No IBM Quantum credentials and no real HPC credentials | Available |
 | Level 1 | Random quantum source + HPC execution | No IBM Quantum credentials; real HPC scheduler required for the main path | Partially covered |
 | Level 2 | Native Qiskit + HPC execution | IBM Quantum credentials and HPC scheduler may be required | Incomplete / planned |
 | Level 3 | Real application / SBD closed-loop workflow | Production-like quantum and HPC setup | Covered by advanced tutorials |
@@ -22,9 +22,15 @@ account.
 - IBM Quantum credentials: not required
 - Real HPC credentials: not required
 - Goal: understand the basic flow/task/block shape used by `qcsc-prefect`
-- Status: planned / missing
+- Status: available
 
-No Level 0 tutorial exists yet.
+Existing tutorial:
+
+- [Level 0 Quickstart](quickstart.md)
+  - Current: local mock workflow
+  - Recommended level: Level 0
+  - Note: this tutorial does not submit jobs, configure IBM Quantum, or require
+    real HPC credentials.
 
 ## Level 1: Random quantum source + HPC execution
 
@@ -101,14 +107,14 @@ Existing tutorials:
 
 ## Recommended path for first-time users
 
-1. Start with the planned Level 0 tutorial when it becomes available.
+1. Start with the [Level 0 Quickstart](quickstart.md).
 2. Use the Level 1 random-source path to learn HPC submission and monitoring.
 3. Move to Level 2 when you need Native Qiskit and HPC in the same workflow.
 4. Use Level 3 only after the BitCount and HPC concepts are familiar.
 
-Until Level 0 exists, use the Level 1 random-source path only when you already
-have an HPC environment available. Use the Local Slurm workflow as a reference
-for local scheduler validation, not as the default first tutorial.
+Use the Level 1 random-source path only when you already have an HPC
+environment available. Use the Local Slurm workflow as a reference for local
+scheduler validation, not as the default first tutorial.
 
 ## Known cleanup items
 
@@ -116,5 +122,5 @@ for local scheduler validation, not as the default first tutorial.
   setup burden.
 - The Local Slurm workflow can stay as reference material until a hands-on
   Local Slurm tutorial is explicitly needed.
-- Do not treat the planned Level 0 and Level 2 tutorials as existing
-  documentation until they are added in separate PRs.
+- Do not treat the planned Level 2 tutorial as existing documentation until it
+  is added in a separate PR.
