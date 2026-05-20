@@ -43,6 +43,24 @@ HPC execution. IBM Quantum setup is optional and comes later.
 - Service CRN
 - `QiskitRuntimeConfig` block
 
+### Run the preflight check
+
+After you clone or copy `qcsc-prefect` on the MDX workflow client, run the
+preflight check from the repository root:
+
+<img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
+```bash
+cd /work/gz00/z12345/qcsc-prefect
+./scripts/check_miyabi_tutorial_prereqs.sh \
+  --profile mdx \
+  --project gz00 \
+  --work-dir /work/gz00/z12345/miyabi_tutorial
+```
+
+The preflight check does not submit HPC jobs, create Prefect blocks, configure
+IBM Quantum credentials, or start Prefect services. If it prints `WARN` or
+`FAIL`, use the targeted guidance below before continuing.
+
 ### Optional for IBM Quantum / real-device execution
 
 - Configure native Qiskit Runtime access with
