@@ -38,6 +38,23 @@ def _build_ghz_circuit(bitlen: int) -> Any:
     return qc_ghz
 
 
+def _load_real_device_dependencies() -> tuple[Any, Any]:
+    try:
+        from prefect_qiskit import QuantumRuntime
+    except ModuleNotFoundError as exc:
+        if exc.name == "prefect_qiskit":
+            raise ModuleNotFoundError(
+                "The BitCount real-device quantum source requires prefect-qiskit. "
+                "Install it before using --quantum-source real-device, or use "
+                "--quantum-source random for the lightweight tutorial path."
+            ) from exc
+        raise
+
+    from qiskit.transpiler import generate_preset_pass_manager
+
+    return QuantumRuntime, generate_preset_pass_manager
+
+
 async def sample_bitstrings(
     *,
     quantum_source: QuantumSource,
@@ -47,9 +64,6 @@ async def sample_bitstrings(
     default_shots: int,
     random_seed: int,
 ) -> list[str]:
-    from prefect_qiskit import QuantumRuntime
-    from qiskit.transpiler import generate_preset_pass_manager
-
     shots = resolve_shots(sampler_options=sampler_options, default_shots=default_shots)
     if quantum_source == "random":
         return generate_random_bitstrings(
@@ -58,6 +72,7 @@ async def sample_bitstrings(
             seed=random_seed,
         )
 
+    QuantumRuntime, generate_preset_pass_manager = _load_real_device_dependencies()
     runtime = await QuantumRuntime.load(runtime_block_name)
     target = await runtime.get_target()
     qc_ghz = _build_ghz_circuit(bitlen)
