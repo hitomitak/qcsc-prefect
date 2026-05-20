@@ -19,6 +19,48 @@ For the staged tutorial path, see the [Tutorial Roadmap](index.md).
 
 ---
 
+## Before you start
+
+The first successful run uses deterministic random quantum data plus Fugaku HPC
+execution. IBM Quantum setup is optional and comes later.
+
+### Required for the random-source path
+
+- A Fugaku account.
+- Access to the Fugaku Pre/Post Node.
+- A writable work directory, such as `/path/to/work/qcsc-prefect`.
+- One selected Prefect backend and profile, such as `cloud-fugaku` or an
+  organization-provided Prefect workspace.
+- Local SSH client and a modern browser.
+
+### Not required for the first run
+
+- IBM Quantum credentials
+- IBM Cloud API key
+- Service CRN
+- `QiskitRuntimeConfig` block
+
+### Optional for IBM Quantum / real-device execution
+
+- Configure native Qiskit Runtime access with
+  [Native Qiskit on Prefect](../howto/howto_use_native_qiskit_prefect.md).
+- Create or select a `QiskitRuntimeConfig` block such as `ibm-runner`.
+- Configure `SSL_CERT_FILE` on Fugaku when you switch to real-device execution.
+- Do this only after the random-source run succeeds.
+
+### If your environment is not ready yet
+
+- Use [Python Environment on Fugaku Pre/Post Node](../howto/howto_setup_python_env_fugaku.md)
+  only if your environment does not already provide Python or the bootstrap
+  step fails.
+- Prepare or select the Prefect profile before the `prefect profile use
+  cloud-fugaku` command in Step 3.
+
+![Prerequisites Flow](../images/img-prerequisites-fugaku.png)
+
+> [!IMPORTANT]
+> Replace `ra00000`, `u12345` and `vol0000x` with your actual group, account name and mount volume.
+
 ## Prefect Core Concepts (quick mapping with [Introduction to Prefect](./Prefect_tutorial_miyabi.pdf))
 
 You will see these terms:
@@ -34,34 +76,6 @@ You will see these terms:
   - Optional for real-device runs: `QiskitRuntimeConfig` block (`ibm-runner`)
 - **Variable**: server-side runtime parameters
   - `fugaku-bitcount-options`
-
-## What you need
-
-- **Accounts / IDs**:
-  - Required for the random-source path: Fugaku account and Prefect Web Portal account (API Key)
-  - Optional for IBM Quantum / real-device execution: IBM Cloud API key + Service CRN (Quantum)
-- **Local tools**: SSH client and a modern browser.
-
----
-
-## Prerequisites (One-time setup)
-
-The whole process image is :
-
-![Prerequisites Flow](../images/img-prerequisites-fugaku.png)
-
-Required for the random-source path:
-
-- You have completed [Step1 : How to Set Up Python Environment on Fugaku Pre/Post Node](../howto/howto_setup_python_env_fugaku.md).
-
-Optional for IBM Quantum / real-device execution:
-
-- Configure native Qiskit Runtime access with
-  [Native Qiskit on Prefect](../howto/howto_use_native_qiskit_prefect.md).
-- Configure the native Qiskit Runtime integration only before using `--quantum-source real-device`.
-
-> [!IMPORTANT]
-> Replace `ra00000`, `u12345` and `vol0000x` with your actual group, account name and mount volume.
 
 ---
 

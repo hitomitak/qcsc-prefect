@@ -20,6 +20,54 @@ For the staged tutorial path, see the [Tutorial Roadmap](index.md).
 ---
 
 
+## Before you start
+
+The first successful run uses deterministic random quantum data plus Miyabi-C
+HPC execution. IBM Quantum setup is optional and comes later.
+
+### Required for the random-source path
+
+- Access to the MDX workflow client.
+- A Miyabi-C account with SSH key and OTP access.
+- A writable work directory, such as `/work/gz00/z12345/qcsc-prefect`.
+- File sync or a shared source tree between MDX and Miyabi-C.
+- One selected Prefect backend, either your organization-hosted Prefect service
+  or Prefect Cloud. Use the same backend for the UI, block creation, variables,
+  and flow runs.
+- Local SSH client, an authenticator app for OTP, and a modern browser.
+
+### Not required for the first run
+
+- IBM Quantum credentials
+- IBM Cloud API key
+- Service CRN
+- `QiskitRuntimeConfig` block
+
+### Optional for IBM Quantum / real-device execution
+
+- Configure native Qiskit Runtime access with
+  [Native Qiskit on Prefect](../howto/howto_use_native_qiskit_prefect.md).
+- Create or select a `QiskitRuntimeConfig` block such as `ibm-runner`.
+- Do this only after the random-source run succeeds.
+
+### If your environment is not ready yet
+
+Use these detailed setup pages only for missing pieces:
+
+- [SSH Connection Setup for MDX and Miyabi-C with Git Configuration](../howto/howto_setup_ssh_keys_for_mdx_and_miyabi.md)
+- [File Sync Between MDX and Miyabi-C](../howto/howto_setup_file_sync.md)
+- [Connect to Prefect Web Portal on MDX](../howto/howto_connect_to_prefect_on_mdx.md)
+- [Python Environment on the MDX Workflow Client](../howto/howto_setup_python_env.md),
+  only if your environment does not already provide Python or the bootstrap
+  step fails.
+- See [Appendix: Prefect backend and identity checklist](#appendix-prefect-backend-and-identity-checklist)
+  for on-prem and enterprise identity details.
+
+> [!IMPORTANT]
+> Replace `gz00` and `z12345` with your actual group and account name.
+
+![Prerequisites Flow](../images/img-prerequisites.png)
+
 ## Prefect Core Concepts (quick mapping with [Introduction to Prefect](./Prefect_tutorial_miyabi.pdf))
 
 You will see these terms:
@@ -36,71 +84,6 @@ You will see these terms:
   - Optional for real-device runs: `QiskitRuntimeConfig` block (`ibm-runner`)
 - **Variable**: server-side runtime parameters
   - `miyabi-bitcount-options` (optimized flow)
-
-
-## What you need
-
-- **Accounts / IDs**:
-  - Required for the random-source path: MDX/Miyabi-C account (+ OTP) and the account used for your chosen Prefect backend
-  - Optional for IBM Quantum / real-device execution: IBM Cloud API key + Service CRN (Quantum)
-  - Prefect backend (choose one): On-Prem Prefect account (MDX) or Prefect Cloud account/workspace
-- **Local tools**: SSH client, an authenticator app (OTP), and a modern browser.
-
-## Choose your Prefect backend (On-Prem or Cloud)
-
-This tutorial supports both backends. Choose one backend first, then use the same backend consistently for:
-
-- opening the Web Portal
-- creating blocks/variables (`create_blocks.py`)
-- running the flow
-
-| Item | On-Prem Prefect (MDX) | Prefect Cloud |
-|---|---|---|
-| Web Portal | Your organization-hosted Prefect UI | `https://app.prefect.cloud` |
-| Authentication | SSO (often IBMid) | Prefect Cloud account + API key |
-| CLI setup | `prefect-auth login` | `prefect cloud login --key <PREFECT_API_KEY>` |
-| Scope of blocks/variables | Stored in on-prem workspace | Stored in selected cloud workspace |
-
-## Identity & authentication checklist
-
-Before the hands-on, confirm the identity mapping below. Mismatched emails are a common cause of access failures in enterprise/on-prem environments.
-
-| System | What you use to sign in | Must match other emails? (common policy) | Notes |
-|---|---|---|---|
-| Miyabi-C / HPC | HPC account + SSH key + OTP | No | Common for both backends |
-| MDX workflow client| SSH to `mdx-workflow-host` | No | Common for both backends |
-| Prefect (On-Prem) | SSO account (often IBMid) | Often YES (org policy) | Use your organization policy |
-| Prefect Cloud | Prefect Cloud user + API key | Not required | On free tier, metadata retention is 7 days|
-| IBM Quantum (IBM Cloud) | Service CRN + API key | No | Optional; only needed for `--quantum-source real-device` |
-
-> If you see SSO-related errors on the MDX Prefect console, first confirm that the email address used for SSO matches the Prefect user email required by your environment administrator.
-
-
-## Prerequisites (One-time setup)
-
-This section prepares stable access from your laptop to MDX and from MDX to Miyabi-C.
-The whole process image is :
-
-![Prerequisites Flow](../images/img-prerequisites.png)
-
-Required for the random-source path:
-
-- You have completed
-  - [Step1 : SSH Connection Setup for MDX and Miyabi-C with Git Configuration](../howto/howto_setup_ssh_keys_for_mdx_and_miyabi.md)
-  - [Step1 : How to Set Up Python Environment on the MDX Workflow Client](../howto/howto_setup_python_env.md).
-- You have completed [Step2 : How to Set Up File Sync Between MDX and Miyabi-C](../howto/howto_setup_file_sync.md).
-- You have completed [Step3 : How to Connect to Prefect Web Portal on MDX](../howto/howto_connect_to_prefect_on_mdx.md).
-
-Optional for IBM Quantum / real-device execution:
-
-- Configure native Qiskit Runtime access with
-  [Native Qiskit on Prefect](../howto/howto_use_native_qiskit_prefect.md).
-- Configure the native Qiskit Runtime integration only before using `--quantum-source real-device`.
-
-> [!IMPORTANT]
-> Replace `gz00` and `z12345` with your actual group and account name.
-
-
 
 ## Existing files used in this tutorial
 
@@ -542,3 +525,37 @@ from examples.prefect_bitcount_demo.get_counts_integration import BITLEN, BitCou
 ```
 
 ---
+
+## Appendix: Prefect backend and identity checklist
+
+Use this section when you are choosing a Prefect backend or debugging
+enterprise/on-prem authentication.
+
+This tutorial supports both backends. Choose one backend first, then use the
+same backend consistently for:
+
+- opening the Web Portal
+- creating blocks/variables (`create_blocks.py`)
+- running the flow
+
+| Item | On-Prem Prefect (MDX) | Prefect Cloud |
+|---|---|---|
+| Web Portal | Your organization-hosted Prefect UI | `https://app.prefect.cloud` |
+| Authentication | SSO (often IBMid) | Prefect Cloud account + API key |
+| CLI setup | `prefect-auth login` | `prefect cloud login --key <PREFECT_API_KEY>` |
+| Scope of blocks/variables | Stored in on-prem workspace | Stored in selected cloud workspace |
+
+Before the hands-on, confirm the identity mapping below. Mismatched emails are
+a common cause of access failures in enterprise/on-prem environments.
+
+| System | What you use to sign in | Must match other emails? (common policy) | Notes |
+|---|---|---|---|
+| Miyabi-C / HPC | HPC account + SSH key + OTP | No | Common for both backends |
+| MDX workflow client | SSH to `mdx-workflow-host` | No | Common for both backends |
+| Prefect (On-Prem) | SSO account (often IBMid) | Often YES (org policy) | Use your organization policy |
+| Prefect Cloud | Prefect Cloud user + API key | Not required | On free tier, metadata retention is 7 days |
+| IBM Quantum (IBM Cloud) | Service CRN + API key | No | Optional; only needed for `--quantum-source real-device` |
+
+If you see SSO-related errors on the MDX Prefect console, first confirm that
+the email address used for SSO matches the Prefect user email required by your
+environment administrator.
