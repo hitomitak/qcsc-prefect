@@ -33,7 +33,7 @@ You will see these terms:
   - `ExecutionProfileBlock`: `exec-bitcount-mpi`
   - `HPCProfileBlock`: `hpc-miyabi-bitcount`
   - `BitCounter` block: `miyabi-tutorial` (legacy-style facade, optional)
-  - Optional for real-device runs: `IBM Quantum Credentials` and `QuantumRuntime` block (`ibm-runner`)
+  - Optional for real-device runs: `QiskitRuntimeConfig` block (`ibm-runner`)
 - **Variable**: server-side runtime parameters
   - `miyabi-bitcount-options` (optimized flow)
 
@@ -93,8 +93,9 @@ Required for the random-source path:
 
 Optional for IBM Quantum / real-device execution:
 
-- Complete [Step4 : How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit.md).
-- Install and configure `prefect-qiskit` only before using `--quantum-source real-device`.
+- Configure native Qiskit Runtime access with
+  [Native Qiskit on Prefect](../howto/howto_use_native_qiskit_prefect.md).
+- Configure the native Qiskit Runtime integration only before using `--quantum-source real-device`.
 
 > [!IMPORTANT]
 > Replace `gz00` and `z12345` with your actual group and account name.
@@ -145,19 +146,24 @@ cp -r /large/tutorial/qcsc-prefect /work/gz00/z12345/
 
 After either method, continue with `/work/gz00/z12345/qcsc-prefect`.
 
-Activate your virtual environment for Prefect:
-
-<img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
-```bash
-source ~/venv/prefect/bin/activate
-```
-
-Install necessary packages:
+Create a virtual environment and install the released `qcsc-prefect` packages:
 
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 cd /work/gz00/z12345/qcsc-prefect
-uv pip install --no-deps \
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install "qcsc-prefect[qiskit]"
+```
+
+For released versions available from your package index, use `pip install` as
+shown above. If you are testing unreleased tutorial changes from this
+repository, use the development setup instead:
+
+<img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
+```bash
+python -m pip install \
   -e packages/qcsc-prefect-core \
   -e packages/qcsc-prefect-adapters \
   -e packages/qcsc-prefect-blocks \
@@ -168,18 +174,10 @@ Check installations:
 
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-uv pip list | grep prefect
+python -m pip list | grep -E "qcsc-prefect|prefect"
 ```
 
-You should see output like:
-
-```text
-qcsc-prefect-adapters      0.1.0
-qcsc-prefect-blocks        0.1.0
-qcsc-prefect-core          0.1.0
-qcsc-prefect-executor      0.1.0
-prefect                   3.6.17
-```
+You should see `qcsc-prefect` packages and `prefect` in the output.
 
 ## Step 3. Prepare for Execution
 
@@ -343,13 +341,14 @@ After the random-source run succeeds, you can run the same workflow against IBM
 Quantum Runtime.
 
 Before using `--quantum-source real-device`, complete
-[How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit.md)
-and install the Prefect Qiskit integration:
+[Native Qiskit on Prefect](../howto/howto_use_native_qiskit_prefect.md), then
+create or select a `QiskitRuntimeConfig` block named `ibm-runner`.
+The `qcsc-prefect[qiskit]` extra installs this native Qiskit Runtime
+integration.
 
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-uv pip install prefect-qiskit
-prefect block inspect quantum-runtime/ibm-runner
+prefect block inspect qiskit_runtime_config/ibm-runner
 ```
 
 Then run:
@@ -379,7 +378,7 @@ Execution sequence:
 1. **Task: `quantum-sampling-task`**
 2. Load sampler options (and optional `work_dir`) from a Prefect Variable (default: `miyabi-bitcount-options`).
 3. If `--quantum-source random`, generate deterministic pseudo-random bitstrings.
-4. If `--quantum-source real-device`, load the Prefect `QuantumRuntime` block, build a 10-qubit GHZ circuit, transpile it, and run `runtime.sampler(...)`.
+4. If `--quantum-source real-device`, load the `QiskitRuntimeConfig` block, build a 10-qubit GHZ circuit, transpile it, and run the native Qiskit Sampler through the `qcsc-prefect` Qiskit helper.
 5. Convert sampled bitstrings to `uint32` values and write `input.bin` in a per-run job directory.
 6. **Task: `hpc-bitcount-task`**
 7. Submit the HPC job via `run_job_from_blocks(...)` using:

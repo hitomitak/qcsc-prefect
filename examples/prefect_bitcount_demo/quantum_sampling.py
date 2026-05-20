@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import random
 from typing import Any, Literal
 
@@ -38,21 +39,28 @@ def _build_ghz_circuit(bitlen: int) -> Any:
     return qc_ghz
 
 
-def _load_real_device_dependencies() -> tuple[Any, Any]:
+async def _resolve_loaded_block(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+def _load_real_device_dependencies() -> tuple[Any, Any, Any]:
     try:
-        from prefect_qiskit import QuantumRuntime
+        from qcsc_prefect.integrations.qiskit import QiskitRuntimeConfig, run_sampler_task
     except ModuleNotFoundError as exc:
-        if exc.name == "prefect_qiskit":
+        if exc.name == "qcsc_prefect":
             raise ModuleNotFoundError(
-                "The BitCount real-device quantum source requires prefect-qiskit. "
-                "Install it before using --quantum-source real-device, or use "
-                "--quantum-source random for the lightweight tutorial path."
+                "The BitCount real-device quantum source requires qcsc-prefect-qiskit. "
+                'Install it with python -m pip install "qcsc-prefect[qiskit]" '
+                "before using --quantum-source real-device, or use --quantum-source "
+                "random for the lightweight tutorial path."
             ) from exc
         raise
 
     from qiskit.transpiler import generate_preset_pass_manager
 
-    return QuantumRuntime, generate_preset_pass_manager
+    return QiskitRuntimeConfig, run_sampler_task, generate_preset_pass_manager
 
 
 async def sample_bitstrings(
@@ -72,15 +80,24 @@ async def sample_bitstrings(
             seed=random_seed,
         )
 
-    QuantumRuntime, generate_preset_pass_manager = _load_real_device_dependencies()
-    runtime = await QuantumRuntime.load(runtime_block_name)
-    target = await runtime.get_target()
+    QiskitRuntimeConfig, run_sampler_task, generate_preset_pass_manager = (
+        _load_real_device_dependencies()
+    )
+    runtime_config = await _resolve_loaded_block(QiskitRuntimeConfig.load(runtime_block_name))
+    backend = runtime_config.get_backend()
     qc_ghz = _build_ghz_circuit(bitlen)
     pm = generate_preset_pass_manager(
         optimization_level=3,
-        target=target,
+        backend=backend,
         seed_transpiler=123,
     )
     isa = pm.run(qc_ghz)
-    results = await runtime.sampler([(isa,)], options=sampler_options)
+    output = await run_sampler_task.fn(
+        [(isa,)],
+        runtime_config=runtime_config,
+        shots=shots,
+        options=sampler_options,
+        artifact_key="bitcount-qiskit-sampler",
+    )
+    results = output["result"]
     return results[0].data.meas.get_bitstrings()

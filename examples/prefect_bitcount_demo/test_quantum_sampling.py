@@ -36,8 +36,10 @@ def test_sample_bitstrings_random_does_not_import_real_device_dependencies(monke
     original_import = builtins.__import__
 
     def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "prefect_qiskit" or name.startswith("prefect_qiskit."):
-            raise AssertionError("random mode must not import prefect_qiskit")
+        if name == "qcsc_prefect.integrations.qiskit" or name.startswith(
+            "qcsc_prefect.integrations.qiskit."
+        ):
+            raise AssertionError("random mode must not import qcsc-prefect-qiskit")
         if name == "qiskit" or name.startswith("qiskit."):
             raise AssertionError("random mode must not import qiskit")
         return original_import(name, globals, locals, fromlist, level)
@@ -59,20 +61,24 @@ def test_sample_bitstrings_random_does_not_import_real_device_dependencies(monke
     assert all(len(bits) == 4 for bits in bitstrings)
 
 
-def test_sample_bitstrings_real_device_missing_prefect_qiskit_has_clear_error(monkeypatch):
+def test_sample_bitstrings_real_device_missing_qcsc_prefect_qiskit_has_clear_error(
+    monkeypatch,
+):
     original_import = builtins.__import__
 
     def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "prefect_qiskit" or name.startswith("prefect_qiskit."):
+        if name == "qcsc_prefect.integrations.qiskit" or name.startswith(
+            "qcsc_prefect.integrations.qiskit."
+        ):
             raise ModuleNotFoundError(
-                "No module named 'prefect_qiskit'",
-                name="prefect_qiskit",
+                "No module named 'qcsc_prefect'",
+                name="qcsc_prefect",
             )
         return original_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", guarded_import)
 
-    with pytest.raises(ModuleNotFoundError, match="requires prefect-qiskit"):
+    with pytest.raises(ModuleNotFoundError, match="requires qcsc-prefect-qiskit"):
         asyncio.run(
             sample_bitstrings(
                 quantum_source="real-device",

@@ -42,13 +42,14 @@ Existing tutorials:
 - [Miyabi Workflow](create_qcsc_workflow_for_miyabi.md)
   - Current: BitCount on Miyabi
   - Recommended level: Level 1 / Level 2
-  - Note: random execution is possible, but the text is still strongly oriented
-    toward IBM Quantum and `prefect-qiskit`.
+  - Note: the first path uses random quantum data with Miyabi HPC execution;
+    IBM Quantum is an optional follow-up.
 - [Fugaku Workflow](create_qcsc_workflow_for_fugaku.md)
   - Current: BitCount on Fugaku
   - Recommended level: Level 1 / Level 2
-  - Note: random execution is possible, but Fugaku setup, SSL, IBM Quantum,
-    `prefect-qiskit`, and editable install steps make the setup heavy.
+  - Note: the first path uses random quantum data with Fugaku HPC execution;
+    SSL, IBM Quantum, and native Qiskit Runtime setup are optional real-device
+    follow-up concerns.
 
 Related local validation material:
 
@@ -57,7 +58,7 @@ Related local validation material:
   - Useful when you want to test Slurm submission locally without real HPC
     credentials.
   - This is not the primary beginner path because it includes Docker Slurm,
-    Prefect Cloud, manual block creation, and current `prefect-qiskit`
+    Prefect Cloud, manual block creation, and current quantum runtime
     installation assumptions.
   - If a hands-on Local Slurm tutorial is needed, it can be refined later as a
     Level 1 local scheduler variant.
@@ -111,8 +112,8 @@ for local scheduler validation, not as the default first tutorial.
 
 ## Known cleanup items
 
-- Beginner tutorials still need follow-up work to reduce `prefect-qiskit` and
-  editable install assumptions.
+- Beginner tutorials still need follow-up work to reduce remaining platform
+  setup burden.
 - The Local Slurm workflow can stay as reference material until a hands-on
   Local Slurm tutorial is explicitly needed.
 - Do not treat the planned Level 0 and Level 2 tutorials as existing

@@ -31,7 +31,7 @@ You will see these terms:
   - `CommandBlock`: `cmd-bitcount-hist`
   - `ExecutionProfileBlock`: `exec-bitcount-fugaku`
   - `HPCProfileBlock`: `hpc-fugaku-bitcount`
-  - Optional for real-device runs: `IBM Quantum Credentials` and `QuantumRuntime` block (`ibm-runner`)
+  - Optional for real-device runs: `QiskitRuntimeConfig` block (`ibm-runner`)
 - **Variable**: server-side runtime parameters
   - `fugaku-bitcount-options`
 
@@ -56,8 +56,9 @@ Required for the random-source path:
 
 Optional for IBM Quantum / real-device execution:
 
-- Complete [Step2 : How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit_fugaku.md).
-- Install and configure `prefect-qiskit` only before using `--quantum-source real-device`.
+- Configure native Qiskit Runtime access with
+  [Native Qiskit on Prefect](../howto/howto_use_native_qiskit_prefect.md).
+- Configure the native Qiskit Runtime integration only before using `--quantum-source real-device`.
 
 > [!IMPORTANT]
 > Replace `ra00000`, `u12345` and `vol0000x` with your actual group, account name and mount volume.
@@ -110,14 +111,39 @@ cd /path/to/work
 
 git clone git@github.com:qiskit-community/qcsc-prefect.git
 cd qcsc-prefect
+```
 
-source ~/venv/prefect/bin/activate
-uv pip install --no-deps \
+Create a virtual environment and install the released `qcsc-prefect` packages:
+
+<img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install "qcsc-prefect[qiskit]"
+```
+
+For released versions available from your package index, use `pip install` as
+shown above. If you are testing unreleased tutorial changes from this
+repository, use the development setup instead:
+
+<img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
+```bash
+python -m pip install \
   -e packages/qcsc-prefect-core \
   -e packages/qcsc-prefect-adapters \
   -e packages/qcsc-prefect-blocks \
   -e packages/qcsc-prefect-executor
 ```
+
+Check installations:
+
+<img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
+```bash
+python -m pip list | grep -E "qcsc-prefect|prefect"
+```
+
+You should see `qcsc-prefect` packages and `prefect` in the output.
 
 For the random-source path, no IBM Quantum Runtime block is required.
 
@@ -259,14 +285,15 @@ After the random-source run succeeds, you can run the same workflow against IBM
 Quantum Runtime.
 
 Before using `--quantum-source real-device`, complete
-[How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit_fugaku.md)
-and install the Prefect Qiskit integration:
+[Native Qiskit on Prefect](../howto/howto_use_native_qiskit_prefect.md), then
+create or select a `QiskitRuntimeConfig` block named `ibm-runner`.
+The `qcsc-prefect[qiskit]` extra installs this native Qiskit Runtime
+integration.
 
 <img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
-uv pip install prefect-qiskit
 export SSL_CERT_FILE=$(python -c 'import certifi; print(certifi.where())')
-prefect block inspect quantum-runtime/ibm-runner
+prefect block inspect qiskit_runtime_config/ibm-runner
 ```
 
 `SSL_CERT_FILE` is required on Fugaku for IBM Quantum access in this environment.
@@ -296,7 +323,7 @@ Execution sequence:
 1. `quantum-sampling-task`
 2. Load sampler options variable (`fugaku-bitcount-options`)
 3. If `--quantum-source random`, generate deterministic pseudo-random bitstrings.
-4. If `--quantum-source real-device`, load `QuantumRuntime` block (`ibm-runner`), then build and run GHZ sampling.
+4. If `--quantum-source real-device`, load `QiskitRuntimeConfig` block (`ibm-runner`), then build and run GHZ sampling through the native Qiskit Sampler.
 5. Write `input.bin` into a run-specific job directory
 6. `hpc-bitcount-task`
 7. Submit HPC job via `run_job_from_blocks(...)` using `CommandBlock`, `ExecutionProfileBlock`, and `HPCProfileBlock`
