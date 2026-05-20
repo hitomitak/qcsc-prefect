@@ -15,13 +15,23 @@ You do not need IBM Quantum credentials or real HPC credentials.
 ## Prerequisites
 
 - Python 3.10 or newer
-- A shell with `python` available
+- A shell with `python3` or `python` available
 - No IBM Quantum account
 - No Miyabi, Fugaku, or Slurm account
 
 ## Installation
 
-Create and activate a virtual environment, then install `qcsc-prefect`:
+From the repository root, create and activate a virtual environment with the
+tutorial bootstrap helper:
+
+```bash
+./scripts/bootstrap_tutorial_env.sh
+source .venv/bin/activate
+```
+
+The Level 0 quickstart does not need the `qiskit` extra.
+
+Manual setup is:
 
 ```bash
 python -m venv .venv
@@ -29,8 +39,6 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install qcsc-prefect
 ```
-
-The Level 0 quickstart does not need the `qiskit` extra.
 
 ## Minimal local workflow
 

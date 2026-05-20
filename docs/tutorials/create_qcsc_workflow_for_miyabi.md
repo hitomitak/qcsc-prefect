@@ -152,13 +152,16 @@ You can bootstrap the tutorial Python environment with the helper script:
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 cd /work/gz00/z12345/qcsc-prefect
-./scripts/bootstrap_bitcount_tutorial_env.sh
+./scripts/bootstrap_tutorial_env.sh --package "qcsc-prefect[qiskit]"
 source .venv/bin/activate
 ```
 
 The helper creates `.venv`, upgrades `pip`, and installs
 `qcsc-prefect[qiskit]`. It does not configure IBM Quantum credentials, start
 Prefect services, or submit HPC jobs.
+
+The older `./scripts/bootstrap_bitcount_tutorial_env.sh` command remains
+available as a BitCount-specific wrapper around the same bootstrap helper.
 
 Manual setup is:
 
