@@ -233,29 +233,28 @@ Differences:
 
 ---
 
-## Step 5. Prepare block configuration file (Pre/Post Node)
+## Step 5. Initialize block configuration file (Pre/Post Node)
 
 <img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
 cd /path/to/work/qcsc-prefect
-cp examples/prefect_bitcount_demo/bitcount_blocks.example.toml \
-   examples/prefect_bitcount_demo/bitcount_blocks.toml
-vim examples/prefect_bitcount_demo/bitcount_blocks.toml
+./scripts/init_bitcount_config.sh \
+  --target fugaku \
+  --group ra00000 \
+  --queue small \
+  --work-dir /vol0001/home/u12345/fugaku_tutorial \
+  --optimized-executable /vol0001/home/u12345/qcsc-prefect/examples/prefect_bitcount_demo/bin/get_counts_hist
 ```
 
-Set at least these keys for Fugaku:
+The script writes `examples/prefect_bitcount_demo/bitcount_blocks.toml` and
+prints the next command for creating Prefect blocks. Adjust `--group`,
+`--queue`, `--work-dir`, and `--optimized-executable` for your Fugaku account
+and build location.
 
-- `hpc_target = "fugaku"`
-- `group` (Fugaku group e.g. ra00000)
-- `queue` (Fugaku rscgrp, e.g. `small`)
-- `work_dir`
-- `optimized_executable` (absolute path to `get_counts_hist`)
-
-Optional Fugaku keys:
-
-- `fugaku_gfscache`
-- `fugaku_spack_modules`
-- `fugaku_mpi_options_for_pjm`
+Advanced users can edit the generated TOML directly, or use
+`examples/prefect_bitcount_demo/bitcount_blocks.example.toml` as a reference
+for optional Fugaku keys such as `fugaku_gfscache`,
+`fugaku_spack_modules`, and `fugaku_mpi_options_for_pjm`.
 
 ---
 

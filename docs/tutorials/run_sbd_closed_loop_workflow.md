@@ -212,13 +212,18 @@ Go back to the SSH shell of the MDX workflow server to proceed with the followin
 
 This approach uses automated block creation via script instead of manual UI editing.
 
-#### 4.1 Create a job working directory and copy config template
+#### 4.1 Create a job working directory and initialize config
 
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 cd /work/gz00/z12345/qcsc-prefect
 mkdir -p /work/gz00/z12345/sbd_jobs
-cp algorithms/sbd/sbd_blocks.example.toml algorithms/sbd/sbd_blocks.toml
+./scripts/init_sbd_config.sh \
+  --target miyabi \
+  --project gz00 \
+  --queue regular-c \
+  --work-dir /work/gz00/z12345/sbd_jobs \
+  --sbd-executable /work/gz00/z12345/qcsc-prefect/algorithms/sbd/native/diag
 ```
 
 Update your prefect token (Only On Prem) if your token is expired.
@@ -229,18 +234,25 @@ prefect-auth login
 /work/gz00/z12345/qcsc-prefect/scripts/prefect_sync_env_to_config.sh -p mdx
 ```
 
-#### 4.2 Edit the configuration file
+#### 4.2 Review the configuration file
 
-Edit `algorithms/sbd/sbd_blocks.toml` and set the following parameters.
+The init script writes `algorithms/sbd/sbd_blocks.toml` from
+`algorithms/sbd/sbd_blocks.example.toml`. Review the generated TOML and adjust
+solver parameters if needed. If you need to regenerate the file, rerun the
+init script with `--force`.
+
 ```bash
 vim algorithms/sbd/sbd_blocks.toml
 ```
 
-Set at least:
+The script fills:
+
 - project
 - queue
 - work_dir
 - sbd_executable
+
+Review these solver and execution parameters before creating blocks:
 
 | Parameter | Value / Example | Description |
 |---|---|---|

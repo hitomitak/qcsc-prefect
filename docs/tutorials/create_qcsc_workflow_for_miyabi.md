@@ -264,24 +264,26 @@ Differences:
 
 ---
 
-## Step 5. Prepare block configuration file
+## Step 5. Initialize block configuration file
 
-Back to MDX termial,
+Back to MDX terminal,
 
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 mkdir -p /work/gz00/z12345/miyabi_tutorial
-cp examples/prefect_bitcount_demo/bitcount_blocks.example.toml \
-   examples/prefect_bitcount_demo/bitcount_blocks.toml
-vim examples/prefect_bitcount_demo/bitcount_blocks.toml
+./scripts/init_bitcount_config.sh \
+  --target miyabi \
+  --project gz00 \
+  --queue regular-c \
+  --work-dir /work/gz00/z12345/miyabi_tutorial
 ```
 
-Set at least the following keys in `bitcount_blocks.toml`:
+The script writes `examples/prefect_bitcount_demo/bitcount_blocks.toml` and
+prints the next command for creating Prefect blocks.
 
-- `hpc_target = "miyabi"`
-- `project`
-- `queue`
-- `work_dir` (base directory where each run creates a `job_xxxx` directory)
+Advanced users can edit the generated TOML directly, or use
+`examples/prefect_bitcount_demo/bitcount_blocks.example.toml` as a reference
+for optional keys such as `optimized_executable`, `modules`, and `walltime`.
 
 ---
 

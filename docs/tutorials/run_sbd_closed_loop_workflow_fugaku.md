@@ -188,7 +188,7 @@ We will use this path in the next step.
 
 ### Step 4. Generate Prefect blocks by script (Pre/Post Node)
 
-#### 4.1 Create a job working directory and copy config template
+#### 4.1 Create a job working directory and initialize config
 
 <img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
@@ -207,14 +207,20 @@ Example output:
 We will use this path in the next step.
 
 <img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
-```
-cp algorithms/sbd/sbd_blocks.fugaku.example.toml algorithms/sbd/sbd_blocks.toml
-vim algorithms/sbd/sbd_blocks.toml
+```bash
+./scripts/init_sbd_config.sh \
+  --target fugaku \
+  --group raXXXXXX \
+  --queue small \
+  --work-dir /volxxxxx/mdt6/data/raxxxxx/uxxxxx/sbd_jobs \
+  --sbd-executable /volxxxxx/mdt6/data/raxxxxx/uxxxxx/qcsc-prefect/algorithms/sbd/native/diag
 ```
 
-#### 4.2 Edit the configuration file
+#### 4.2 Review the configuration file
 
-The copied example already contains the Fugaku tutorial baseline:
+The init script writes `algorithms/sbd/sbd_blocks.fugaku.toml` from
+`algorithms/sbd/sbd_blocks.fugaku.example.toml`. The generated file keeps the
+Fugaku tutorial baseline:
 
 - `hpc_target = "fugaku"`
 - `launcher = "mpiexec"`
@@ -224,12 +230,18 @@ The copied example already contains the Fugaku tutorial baseline:
 - `script_filename = "sbd_solver.pjm"`
 - `metrics_artifact_key = "fugaku-sbd-metrics"`
 
-Edit `algorithms/sbd/sbd_blocks.toml` and update at least:
+If you need to regenerate the file, rerun the init script with `--force`.
+
+Review `algorithms/sbd/sbd_blocks.fugaku.toml` and adjust site-specific values
+if needed. The script fills:
 
 - `group`
 - `queue`
 - `work_dir`
 - `sbd_executable`
+
+Review these values manually:
+
 - `fugaku_gfscache`
 
 | Parameter | Value / Example | Description |
@@ -252,7 +264,7 @@ Edit `algorithms/sbd/sbd_blocks.toml` and update at least:
 <img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
 python algorithms/sbd/create_blocks.py \
-  --config algorithms/sbd/sbd_blocks.toml \
+  --config algorithms/sbd/sbd_blocks.fugaku.toml \
   --hpc-target fugaku
 ```
 

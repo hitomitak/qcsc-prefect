@@ -67,16 +67,28 @@ cd /work/gz00/z12345/qcsc-prefect
 Miyabi:
 
 ```bash
-cp algorithms/sbd/sbd_blocks.example.toml algorithms/sbd/sbd_blocks.toml
-vim algorithms/sbd/sbd_blocks.toml
+./scripts/init_sbd_config.sh \
+  --target miyabi \
+  --project gz00 \
+  --queue regular-c \
+  --work-dir /work/gz00/z12345/sbd_jobs \
+  --sbd-executable /work/gz00/z12345/qcsc-prefect/algorithms/sbd/native/diag
 ```
 
 Fugaku:
 
 ```bash
-cp algorithms/sbd/sbd_blocks.fugaku.example.toml algorithms/sbd/sbd_blocks.toml
-vim algorithms/sbd/sbd_blocks.toml
+./scripts/init_sbd_config.sh \
+  --target fugaku \
+  --group ra000000 \
+  --queue small \
+  --work-dir /vol0000/mdt6/data/ra000000/u12345/sbd_jobs \
+  --sbd-executable /vol0000/mdt6/data/ra000000/u12345/qcsc-prefect/algorithms/sbd/native/diag
 ```
+
+The init script refuses to overwrite an existing config unless you pass
+`--force`. After generating the baseline config, review the TOML file and
+adjust solver parameters if needed.
 
 Run block generator:
 
@@ -89,7 +101,7 @@ python algorithms/sbd/create_blocks.py --config algorithms/sbd/sbd_blocks.toml -
 Fugaku:
 
 ```bash
-python algorithms/sbd/create_blocks.py --config algorithms/sbd/sbd_blocks.toml --hpc-target fugaku
+python algorithms/sbd/create_blocks.py --config algorithms/sbd/sbd_blocks.fugaku.toml --hpc-target fugaku
 ```
 
 `sbd_executable` should point to your built binary, for example:
