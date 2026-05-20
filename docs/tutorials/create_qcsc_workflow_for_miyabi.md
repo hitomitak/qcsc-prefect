@@ -146,7 +146,20 @@ cp -r /large/tutorial/qcsc-prefect /work/gz00/z12345/
 
 After either method, continue with `/work/gz00/z12345/qcsc-prefect`.
 
-Create a virtual environment and install the released `qcsc-prefect` packages:
+You can bootstrap the tutorial Python environment with the helper script:
+
+<img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
+```bash
+cd /work/gz00/z12345/qcsc-prefect
+./scripts/bootstrap_bitcount_tutorial_env.sh
+source .venv/bin/activate
+```
+
+The helper creates `.venv`, upgrades `pip`, and installs
+`qcsc-prefect[qiskit]`. It does not configure IBM Quantum credentials, start
+Prefect services, or submit HPC jobs.
+
+Manual setup is:
 
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
