@@ -103,14 +103,12 @@ if __name__ == "__main__":
 PY
 ```
 
-Run it with an isolated Prefect home so existing Prefect profiles do not affect
-the quickstart:
+Run it with Prefect server analytics disabled. This keeps the local quickstart
+focused on the flow run and avoids local SQLite lock errors seen on some
+systems:
 
 ```bash
-export PREFECT_HOME="$(pwd)/.prefect-level0"
-unset PREFECT_API_URL
-unset PREFECT_PROFILE
-python level0_quickstart.py
+PREFECT_SERVER_ANALYTICS_ENABLED=false python level0_quickstart.py
 ```
 
 Prefect may start a temporary local server for this run and stop it
