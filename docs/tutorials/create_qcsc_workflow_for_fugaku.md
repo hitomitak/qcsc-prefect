@@ -108,24 +108,18 @@ Execute the interact session for Pre/Post Node in the login node.
 ```bash
 srun -p mem2 -n 1 --mem 4G --time=60 --pty bash -i
 ```
-## Step 2. Create a Project Directory repository(Pre/Post Node)
+## Step 2. Clone this qcsc-prefect repository (Pre/Post Node)
 
-Create a project directory:
-
-<img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
-```bash
-mkdir fugaku_tutorial && cd fugaku_tutorial
-```
-
-## Step 3. Prepare Prefect environment (Pre/Post Node)
+Prepare a working copy of this repository under your Fugaku work directory:
 
 <img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
 cd /path/to/work
-
 git clone git@github.com:qiskit-community/qcsc-prefect.git
 cd qcsc-prefect
 ```
+
+## Step 3. Prepare Prefect environment (Pre/Post Node)
 
 You can bootstrap the tutorial Python environment with the helper script:
 

@@ -43,6 +43,25 @@ HPC execution. IBM Quantum setup is optional and comes later.
 - Service CRN
 - `QiskitRuntimeConfig` block
 
+### Clone this repository on MDX
+
+Prepare `qcsc-prefect` under `/work/gz00/z12345`. You can either clone this
+repository from GitHub, or copy the tutorial source tree already available on
+MDX at `/large/tutorial/qcsc-prefect`.
+
+<img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
+```bash
+cd /work/gz00/z12345
+git clone git@github.com:qiskit-community/qcsc-prefect.git
+```
+
+Or:
+
+<img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
+```bash
+cp -r /large/tutorial/qcsc-prefect /work/gz00/z12345/
+```
+
 ### Run the preflight check
 
 After you clone or copy `qcsc-prefect` on the MDX workflow client, run the
@@ -127,25 +146,9 @@ Connect to the MDX workflow client using SSH. This is where we will develop the 
 ssh -A z12345@mdx-workflow.example.org
 ```
 
-## Step 2. Clone qcsc-prefect repository
+## Step 2. Prepare the Python environment
 
-Prepare `qcsc-prefect` under `/work/gz00/z12345`.
-You can either clone the repository from GitHub, or copy the tutorial source tree already available on MDX at `/large/tutorial/qcsc-prefect`.
-
-<img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
-```bash
-cd /work/gz00/z12345
-git clone git@github.com:qiskit-community/qcsc-prefect.git
-```
-
-Or:
-
-<img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
-```bash
-cp -r /large/tutorial/qcsc-prefect /work/gz00/z12345/
-```
-
-After either method, continue with `/work/gz00/z12345/qcsc-prefect`.
+Continue from the repository root at `/work/gz00/z12345/qcsc-prefect`.
 
 You can bootstrap the tutorial Python environment with the helper script:
 
