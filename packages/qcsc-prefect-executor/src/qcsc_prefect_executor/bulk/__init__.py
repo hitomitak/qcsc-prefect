@@ -2,4 +2,23 @@
 
 from qcsc_prefect_core.queue import QueueAwareSubmitGate, QueueCapacity, QueueProbe
 
-__all__ = ["QueueAwareSubmitGate", "QueueCapacity", "QueueProbe"]
+from qcsc_prefect_executor.bulk.models import (
+    BulkJobRecord,
+    BulkJobSpec,
+    BulkJobStatus,
+    BulkRunResult,
+    SubmittedJob,
+)
+from qcsc_prefect_executor.bulk.registry import BulkJobRegistry
+
+__all__ = [
+    "BulkJobRecord",
+    "BulkJobRegistry",
+    "BulkJobSpec",
+    "BulkJobStatus",
+    "BulkRunResult",
+    "QueueAwareSubmitGate",
+    "QueueCapacity",
+    "QueueProbe",
+    "SubmittedJob",
+]
