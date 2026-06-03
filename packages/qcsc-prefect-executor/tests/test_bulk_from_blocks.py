@@ -407,6 +407,33 @@ def test_monitor_jobs_many_updates_registry_if_provided(tmp_path: Path, monkeypa
     assert job_2.status == BulkJobStatus.SUCCEEDED
 
 
+def test_monitor_jobs_many_updates_unknown_registry_record(tmp_path: Path, monkeypatch):
+    _patch_block_loading(monkeypatch)
+
+    async def fake_query_scheduler_statuses(*, hpc_target: str, scheduler_job_ids: list[str]):
+        return {"49075255": {"State": "COMPLETED"}}
+
+    monkeypatch.setattr(mod, "_query_scheduler_statuses", fake_query_scheduler_statuses)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    registry.upsert_jobs([BulkJobSpec(job_key="job-1", work_dir=tmp_path / "job-1")])
+    registry.mark_submitted("job-1", "49075255")
+    registry.mark_unknown("job-1", error="job was not found in scheduler output")
+
+    statuses = asyncio.run(
+        mod.monitor_jobs_many(
+            hpc_profile_block="hpc",
+            scheduler_job_ids=["49075255"],
+            registry=registry,
+        )
+    )
+
+    record = registry.get_job("job-1")
+    assert statuses["49075255"] == BulkJobStatus.SUCCEEDED
+    assert record is not None
+    assert record.status == BulkJobStatus.SUCCEEDED
+    assert registry.status_counts() == {BulkJobStatus.SUCCEEDED.value: 1}
+
+
 def test_disappeared_job_with_valid_expected_outputs_becomes_succeeded(
     tmp_path: Path, monkeypatch
 ):

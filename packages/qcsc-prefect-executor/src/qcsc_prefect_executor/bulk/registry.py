@@ -243,6 +243,21 @@ class BulkJobRegistry:
             "submitted_at IS NULL, submitted_at, created_at, job_key",
         )
 
+    def get_monitorable_jobs(self) -> list[BulkJobRecord]:
+        statuses = _status_values(
+            (
+                BulkJobStatus.SUBMITTED,
+                BulkJobStatus.QUEUED,
+                BulkJobStatus.RUNNING,
+                BulkJobStatus.UNKNOWN,
+            )
+        )
+        return self._fetch_records(
+            f"status IN ({self._placeholders(statuses)})",
+            statuses,
+            "submitted_at IS NULL, submitted_at, created_at, job_key",
+        )
+
     def get_submit_candidates(self, limit: int) -> list[BulkJobRecord]:
         if limit <= 0:
             return []

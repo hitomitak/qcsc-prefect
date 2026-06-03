@@ -178,6 +178,20 @@ def test_terminal_jobs_are_not_active(tmp_path: Path):
     assert registry.all_terminal() is True
 
 
+def test_unknown_job_with_scheduler_id_is_monitorable_but_not_active(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs([_spec(tmp_path, "job-1")])
+    registry.mark_submitted("job-1", "43607196")
+    registry.mark_unknown("job-1", error="missing from scheduler output")
+
+    assert registry.get_active_jobs() == []
+    monitorable = registry.get_monitorable_jobs()
+    assert len(monitorable) == 1
+    assert monitorable[0].job_key == "job-1"
+    assert monitorable[0].status == BulkJobStatus.UNKNOWN
+    assert monitorable[0].scheduler_job_id == "43607196"
+
+
 def test_refresh_completed_jobs_from_outputs_marks_succeeded(tmp_path: Path):
     registry = _registry(tmp_path)
     work_dir = tmp_path / "job-1"

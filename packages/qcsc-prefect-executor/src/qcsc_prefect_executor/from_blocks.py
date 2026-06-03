@@ -732,14 +732,14 @@ def _record_has_success_evidence(record) -> bool:
     return all(path.exists() for path in paths)
 
 
-def _active_records_by_scheduler_id(
+def _monitorable_records_by_scheduler_id(
     registry: BulkJobRegistry | None,
 ) -> dict[str, Any]:
     if registry is None:
         return {}
     return {
         str(record.scheduler_job_id): record
-        for record in registry.get_active_jobs()
+        for record in registry.get_monitorable_jobs()
         if record.scheduler_job_id
     }
 
@@ -802,7 +802,7 @@ async def monitor_jobs_many(
         scheduler_rows = {}
         query_error = _exception_text(exc)
 
-    records_by_scheduler_id = _active_records_by_scheduler_id(registry)
+    records_by_scheduler_id = _monitorable_records_by_scheduler_id(registry)
     results: dict[str, BulkJobStatus] = {}
 
     for scheduler_job_id in requested_ids:
