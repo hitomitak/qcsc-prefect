@@ -552,17 +552,21 @@ async def submit_job_from_blocks(
 
 
 def _parse_fugaku_pjstat_rows(stdout: str) -> dict[str, dict[str, Any]]:
-    rows: dict[str, dict[str, Any]] = {}
-    for line in stdout.splitlines():
-        text = line.strip()
-        if not text or text.startswith("JOB_ID") or text.startswith("===="):
+    return fugaku_runtime.parse_pjstat_rows(stdout)
+
+
+async def _query_fugaku_history_statuses() -> dict[str, dict[str, Any]]:
+    for args in [
+        ("pjstat", "-v", "-H"),
+        ("pjstat", "-H", "-v"),
+        ("pjstat", "-H"),
+    ]:
+        try:
+            stdout = await fugaku_runtime.run_command(*args)
+        except Exception:
             continue
-        columns = re.split(r"\s+", text)
-        row = dict(zip(fugaku_runtime.FugakuPJMRuntime.PJSTAT_KEYS, columns))
-        job_id = str(row.get("JOB_ID", "")).strip()
-        if job_id:
-            rows[job_id] = row
-    return rows
+        return _parse_fugaku_pjstat_rows(stdout)
+    return {}
 
 
 def _parse_slurm_sacct_rows(stdout: str) -> dict[str, dict[str, Any]]:
@@ -635,8 +639,7 @@ async def _query_scheduler_statuses(
         rows = _parse_fugaku_pjstat_rows(active_stdout)
         missing = requested - set(rows)
         if missing:
-            history_stdout = await fugaku_runtime.run_command("pjstat", "-H", "-v")
-            rows.update(_parse_fugaku_pjstat_rows(history_stdout))
+            rows.update(await _query_fugaku_history_statuses())
         return {job_id: row for job_id, row in rows.items() if job_id in requested}
 
     if hpc_target == "slurm":
@@ -671,6 +674,13 @@ def _bulk_status_from_scheduler_row(hpc_target: str, row: dict[str, Any]) -> Bul
         if state in {"RUN", "R"}:
             return BulkJobStatus.RUNNING
         if state == "EXT":
+            if "EC" not in row:
+                return BulkJobStatus.UNKNOWN
+            reason = str(row.get("REASON", "")).strip().upper()
+            if reason not in {"", "-"} and any(
+                marker in reason for marker in {"EXC", "FAIL", "ERROR", "TIMEOUT"}
+            ):
+                return BulkJobStatus.FAILED
             return BulkJobStatus.SUCCEEDED if exit_code in {"", "-", "0"} else BulkJobStatus.FAILED
         if state == "CCL":
             return BulkJobStatus.CANCELLED

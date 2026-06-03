@@ -128,14 +128,8 @@ class FugakuPJMRuntime:
     def _parse_pjstat(self, stdout: str) -> dict[str, Any] | None:
         """Parse a single ``pjstat -v`` row into a dictionary."""
 
-        for line in stdout.splitlines():
-            s = line.strip()
-            if not s or s.startswith("JOB_ID") or s.startswith("===="):
-                continue
-            cols = re.split(r"\s+", s)
-            row = dict(zip(self.PJSTAT_KEYS, cols))
-            if row.get("JOB_ID"):
-                return row
+        for row in parse_pjstat_rows(stdout).values():
+            return row
         return None
 
     async def wait_final_status(
@@ -148,7 +142,7 @@ class FugakuPJMRuntime:
         """Poll PJM status until a terminal state is reached.
 
         This method first checks the active job view with ``pjstat -v`` and
-        falls back to the historical view with ``pjstat -H -v`` when needed.
+        falls back to the historical view with ``pjstat -v -H`` when needed.
         The job is considered terminal when PJM reports ``EXT`` or ``CCL``.
 
         Args:
@@ -174,7 +168,7 @@ class FugakuPJMRuntime:
 
                 stdout = await run_command("pjstat", "-v", job_id)
                 if not stdout.strip():
-                    stdout = await run_command("pjstat", "-H", "-v", job_id)
+                    stdout = await run_command("pjstat", "-v", "-H", job_id)
 
                 row = self._parse_pjstat(stdout)
                 if row and row.get("ST") in {"EXT", "CCL"}:
@@ -200,3 +194,51 @@ class FugakuPJMRuntime:
             await run_command("pjdel", job_id)
         except Exception as e:
             raise CancelError(f"pjdel failed for job_id={job_id}") from e
+
+
+def _parse_fixed_width_pjstat_row(
+    line: str, columns: list[tuple[str, int]]
+) -> dict[str, str]:
+    row: dict[str, str] = {}
+    for index, (name, start) in enumerate(columns):
+        end = columns[index + 1][1] if index + 1 < len(columns) else None
+        row[name] = line[start:end].strip()
+    return row
+
+
+def _parse_split_pjstat_row(line: str) -> dict[str, str]:
+    cols = re.split(r"\s+", line.strip())
+    return dict(zip(FugakuPJMRuntime.PJSTAT_KEYS, cols))
+
+
+def parse_pjstat_rows(stdout: str) -> dict[str, dict[str, Any]]:
+    """Parse ``pjstat`` table output into rows keyed by PJM job id.
+
+    Fugaku's ``pjstat -v -H`` output is fixed-width. Date fields such as
+    ``START_DATE`` and ``ACCEPT`` contain an internal space, so a plain
+    whitespace split shifts later columns and can misread ``EC``.
+    """
+
+    rows: dict[str, dict[str, Any]] = {}
+    header_columns: list[tuple[str, int]] = []
+
+    for line in stdout.splitlines():
+        text = line.strip()
+        if not text or text.startswith("===="):
+            continue
+        if text.startswith("JOB_ID"):
+            header_columns = [
+                (match.group(0), match.start()) for match in re.finditer(r"\S+", line)
+            ]
+            continue
+
+        row = (
+            _parse_fixed_width_pjstat_row(line, header_columns)
+            if header_columns
+            else _parse_split_pjstat_row(line)
+        )
+        job_id = str(row.get("JOB_ID", "")).strip()
+        if job_id:
+            rows[job_id] = row
+
+    return rows

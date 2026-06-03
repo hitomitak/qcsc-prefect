@@ -44,7 +44,35 @@ def test_wait_final_status_with_pjstat_fallback(monkeypatch):
     assert status["JOB_ID"] == "43607196"
     assert status["ST"] == "EXT"
     assert status["EC"] == "0"
-    assert calls == [("pjstat", "-v", "43607196"), ("pjstat", "-H", "-v", "43607196")]
+    assert calls == [("pjstat", "-v", "43607196"), ("pjstat", "-v", "-H", "43607196")]
+
+
+def test_parse_pjstat_rows_handles_history_verbose_dates_and_exit_codes():
+    stdout = (
+        "JOB_ID     JOB_NAME   MD ST  USER     GROUP    START_DATE      "
+        "ELAPSE_TIM ELAPSE_LIM            NODE_REQUIRE    VNODE  CORE "
+        "V_MEM        V_POL E_POL RANK      LST EC  PC  SN PRI ACCEPT         "
+        "RSC_GRP  REASON\n"
+        "49047829   lucj-qpy-b NM EXT u13450   ra010014 06/01 15:03:44  "
+        "0000:08:27 0000:15:00            1               -      -    "
+        "-            -     -     bychip    RNO 0   0   0  127 "
+        "06/01 15:03:14 small    -\n"
+        "49047939   lucj-qpy-b NM EXT u13450   ra010014 06/01 15:22:46  "
+        "0000:15:02 0000:15:00            1               -      -    "
+        "-            -     -     bychip    RNO 0   11  24 127 "
+        "06/01 15:22:16 small    ELAPSE LIMIT EXC\n"
+    )
+
+    rows = runtime_mod.parse_pjstat_rows(stdout)
+
+    assert rows["49047829"]["ST"] == "EXT"
+    assert rows["49047829"]["START_DATE"] == "06/01 15:03:44"
+    assert rows["49047829"]["EC"] == "0"
+    assert rows["49047829"]["ACCEPT"] == "06/01 15:03:14"
+    assert rows["49047829"]["RSC_GRP"] == "small"
+    assert rows["49047939"]["EC"] == "0"
+    assert rows["49047939"]["PC"] == "11"
+    assert rows["49047939"]["REASON"] == "ELAPSE LIMIT EXC"
 
 
 def test_cancel_invokes_pjdel(monkeypatch):

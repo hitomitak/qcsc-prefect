@@ -13,6 +13,21 @@ from qcsc_prefect_executor.bulk.exceptions import (
 from qcsc_prefect_executor.bulk.models import BulkJobSpec, BulkJobStatus
 from qcsc_prefect_executor.bulk.registry import BulkJobRegistry
 
+FUGAKU_HISTORY_VERBOSE_OUTPUT = (
+    "JOB_ID     JOB_NAME   MD ST  USER     GROUP    START_DATE      "
+    "ELAPSE_TIM ELAPSE_LIM            NODE_REQUIRE    VNODE  CORE "
+    "V_MEM        V_POL E_POL RANK      LST EC  PC  SN PRI ACCEPT         "
+    "RSC_GRP  REASON\n"
+    "49047829   lucj-qpy-b NM EXT u13450   ra010014 06/01 15:03:44  "
+    "0000:08:27 0000:15:00            1               -      -    "
+    "-            -     -     bychip    RNO 0   0   0  127 "
+    "06/01 15:03:14 small    -\n"
+    "49047939   lucj-qpy-b NM EXT u13450   ra010014 06/01 15:22:46  "
+    "0000:15:02 0000:15:00            1               -      -    "
+    "-            -     -     bychip    RNO 0   11  24 127 "
+    "06/01 15:22:16 small    ELAPSE LIMIT EXC\n"
+)
+
 
 class _CommandBlockStub:
     command_name = "bulk-command"
@@ -281,6 +296,54 @@ def test_monitor_jobs_many_maps_scheduler_states(monkeypatch):
         "4": BulkJobStatus.FAILED,
         "5": BulkJobStatus.CANCELLED,
     }
+
+
+def test_fugaku_history_verbose_rows_map_completed_jobs():
+    rows = mod._parse_fugaku_pjstat_rows(FUGAKU_HISTORY_VERBOSE_OUTPUT)
+
+    assert rows["49047829"]["EC"] == "0"
+    assert rows["49047829"]["REASON"] == "-"
+    assert mod._bulk_status_from_scheduler_row(
+        "fugaku", rows["49047829"]
+    ) == BulkJobStatus.SUCCEEDED
+    assert rows["49047939"]["PC"] == "11"
+    assert rows["49047939"]["REASON"] == "ELAPSE LIMIT EXC"
+    assert mod._bulk_status_from_scheduler_row(
+        "fugaku", rows["49047939"]
+    ) == BulkJobStatus.FAILED
+
+
+def test_fugaku_ext_without_exit_code_is_unknown():
+    assert mod._bulk_status_from_scheduler_row(
+        "fugaku", {"JOB_ID": "49074516", "ST": "EXT"}
+    ) == BulkJobStatus.UNKNOWN
+
+
+def test_query_fugaku_scheduler_statuses_reads_history_for_missing_jobs(monkeypatch):
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_run_command(*args: str, cwd: Path | None = None) -> str:
+        calls.append(args)
+        if args == ("pjstat", "-v"):
+            return "JOB_ID     JOB_NAME   MD ST  USER     GROUP\n"
+        if args == ("pjstat", "-v", "-H"):
+            return FUGAKU_HISTORY_VERBOSE_OUTPUT
+        raise AssertionError(f"unexpected command: {args}")
+
+    monkeypatch.setattr(mod.fugaku_runtime, "run_command", fake_run_command)
+
+    rows = asyncio.run(
+        mod._query_scheduler_statuses(
+            hpc_target="fugaku",
+            scheduler_job_ids=["49047829", "49047939"],
+        )
+    )
+
+    assert calls == [("pjstat", "-v"), ("pjstat", "-v", "-H")]
+    assert set(rows) == {"49047829", "49047939"}
+    assert mod._bulk_status_from_scheduler_row(
+        "fugaku", rows["49047829"]
+    ) == BulkJobStatus.SUCCEEDED
 
 
 def test_monitor_jobs_many_updates_multiple_jobs_in_one_call(monkeypatch):
