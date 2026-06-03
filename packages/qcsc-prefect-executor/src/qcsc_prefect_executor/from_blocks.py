@@ -6,12 +6,28 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from qcsc_prefect_adapters.fugaku import builder as fugaku_builder
+from qcsc_prefect_adapters.fugaku import runtime as fugaku_runtime
 from qcsc_prefect_adapters.fugaku.builder import FugakuJobRequest
+from qcsc_prefect_adapters.fugaku.runtime import FugakuPJMRuntime
+from qcsc_prefect_adapters.miyabi import builder as miyabi_builder
+from qcsc_prefect_adapters.miyabi import runtime as miyabi_runtime
 from qcsc_prefect_adapters.miyabi.builder import MiyabiJobRequest
+from qcsc_prefect_adapters.miyabi.runtime import MiyabiPBSRuntime
+from qcsc_prefect_adapters.slurm import builder as slurm_builder
+from qcsc_prefect_adapters.slurm import runtime as slurm_runtime
 from qcsc_prefect_adapters.slurm.builder import SlurmJobRequest
+from qcsc_prefect_adapters.slurm.runtime import SlurmRuntime
 from qcsc_prefect_blocks.common.blocks import CommandBlock, ExecutionProfileBlock, HPCProfileBlock
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 
+from qcsc_prefect_executor.bulk.exceptions import (
+    QueueFullError,
+    SubmitError,
+    TemporarySubmitError,
+)
+from qcsc_prefect_executor.bulk.models import BulkJobSpec, BulkJobStatus, SubmittedJob
+from qcsc_prefect_executor.bulk.registry import BulkJobRegistry
 from qcsc_prefect_executor.fugaku.run import run_fugaku_job
 from qcsc_prefect_executor.miyabi.run import run_miyabi_job
 from qcsc_prefect_executor.slurm.run import run_slurm_job
@@ -52,6 +68,15 @@ class SubmissionTarget:
     hpc_target: str
     queue_name: str
     project: str
+
+
+@dataclass(frozen=True)
+class _PreparedBlockJob:
+    submission_target: SubmissionTarget
+    work_dir: Path
+    script_filename: str
+    exec_profile: ExecutionProfile
+    req: Any
 
 
 async def _resolve_loaded_block(value):
@@ -227,6 +252,574 @@ def _default_fugaku_job_name(command_name: str) -> str:
     return normalized[:63]
 
 
+def _command_args_to_user_args(command_args: dict[str, Any] | None) -> list[str] | None:
+    if not command_args:
+        return None
+
+    user_args: list[str] = []
+    for key, value in command_args.items():
+        option = str(key) if str(key).startswith("-") else "--" + str(key).replace("_", "-")
+        if value is None or value is False:
+            continue
+        if value is True:
+            user_args.append(option)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                user_args.extend([option, str(item)])
+        else:
+            user_args.extend([option, str(value)])
+    return user_args
+
+
+def _resolve_named_argument(
+    *,
+    preferred: str | None,
+    alias: str | None,
+    label: str,
+) -> str:
+    value = preferred or alias
+    if value is None:
+        raise ValueError(f"{label} is required.")
+    return value
+
+
+async def _prepare_job_from_blocks(
+    *,
+    command_block_name: str,
+    execution_profile_block_name: str,
+    hpc_profile_block_name: str,
+    work_dir: Path,
+    script_filename: str,
+    user_args: list[str] | None = None,
+    fugaku_job_name: str | None = None,
+    execution_profile_overrides: dict[str, Any] | None = None,
+) -> _PreparedBlockJob:
+    command_block = await _load_block(CommandBlock, command_block_name)
+    execution_profile_block = await _load_block(ExecutionProfileBlock, execution_profile_block_name)
+    hpc_block = await _load_block(HPCProfileBlock, hpc_profile_block_name)
+
+    if execution_profile_block.command_name != command_block.command_name:
+        raise ValueError(
+            f"ExecutionProfileBlock '{execution_profile_block_name}' is for command "
+            f"'{execution_profile_block.command_name}', but command block "
+            f"'{command_block_name}' is '{command_block.command_name}'."
+        )
+
+    executable = hpc_block.executable_map.get(command_block.executable_key)
+    if not executable:
+        raise KeyError(
+            f"Executable key '{command_block.executable_key}' was not found in "
+            f"HPCProfileBlock '{hpc_profile_block_name}'."
+        )
+
+    submission_target = _resolve_submission_target_from_loaded_blocks(
+        hpc_block, execution_profile_block.resource_class
+    )
+    resolved_script_filename = build_scheduler_script_filename(
+        script_filename,
+        submission_target.hpc_target,
+    )
+    if submission_target.hpc_target in {"miyabi", "fugaku"} and not submission_target.project:
+        raise ValueError("Project/Group is empty. Update HPCProfileBlock project_cpu/project_gpu.")
+
+    exec_profile = _build_execution_profile(
+        command_block=command_block,
+        execution_profile_block=execution_profile_block,
+        user_args=user_args,
+        execution_profile_overrides=execution_profile_overrides,
+    )
+    resolved_work_dir = Path(work_dir).expanduser().resolve()
+
+    if submission_target.hpc_target == "miyabi":
+        req = MiyabiJobRequest(
+            queue_name=submission_target.queue_name,
+            project=submission_target.project,
+            executable=executable,
+        )
+    elif submission_target.hpc_target == "fugaku":
+        req = FugakuJobRequest(
+            queue_name=submission_target.queue_name,
+            project=submission_target.project,
+            executable=executable,
+            job_name=fugaku_job_name or _default_fugaku_job_name(command_block.command_name),
+            gfscache=hpc_block.gfscache or "/vol0002",
+            spack_modules=list(hpc_block.spack_modules) if hpc_block.spack_modules else [],
+            mpi_options_for_pjm=list(hpc_block.mpi_options_for_pjm)
+            if hpc_block.mpi_options_for_pjm
+            else [],
+            pjm_resources=list(hpc_block.pjm_resources) if hpc_block.pjm_resources else [],
+        )
+    elif submission_target.hpc_target == "slurm":
+        req = SlurmJobRequest(
+            partition=submission_target.queue_name,
+            account=submission_target.project or None,
+            executable=executable,
+            qpu=hpc_block.slurm_qpu,
+        )
+    else:
+        raise NotImplementedError(
+            f"hpc_target='{submission_target.hpc_target}' is not supported yet by "
+            "run_job_from_blocks."
+        )
+
+    return _PreparedBlockJob(
+        submission_target=submission_target,
+        work_dir=resolved_work_dir,
+        script_filename=resolved_script_filename,
+        exec_profile=exec_profile,
+        req=req,
+    )
+
+
+def _write_script_for_prepared_job(prepared: _PreparedBlockJob) -> Path:
+    target = prepared.submission_target.hpc_target
+    if target == "miyabi":
+        script_text = miyabi_builder.render_script(
+            work_dir=prepared.work_dir,
+            exec_profile=prepared.exec_profile,
+            req=prepared.req,
+        )
+        return miyabi_builder.write_script_file(
+            work_dir=prepared.work_dir,
+            filename=prepared.script_filename,
+            text=script_text,
+        )
+
+    if target == "fugaku":
+        script_basename = Path(prepared.script_filename).name
+        script_text = fugaku_builder.render_script(
+            work_dir=prepared.work_dir,
+            exec_profile=prepared.exec_profile,
+            req=prepared.req,
+            script_basename=script_basename,
+        )
+        return fugaku_builder.write_script_file(
+            work_dir=prepared.work_dir,
+            filename=prepared.script_filename,
+            text=script_text,
+        )
+
+    if target == "slurm":
+        script_text = slurm_builder.render_script(
+            work_dir=prepared.work_dir,
+            exec_profile=prepared.exec_profile,
+            req=prepared.req,
+        )
+        return slurm_builder.write_script_file(
+            work_dir=prepared.work_dir,
+            filename=prepared.script_filename,
+            text=script_text,
+        )
+
+    raise NotImplementedError(f"Unsupported hpc_target for submit: {target}")
+
+
+def _exception_text(exc: BaseException) -> str:
+    parts: list[str] = []
+    current: BaseException | None = exc
+    while current is not None:
+        parts.append(str(current))
+        current = current.__cause__
+    return "\n".join(part for part in parts if part)
+
+
+def _classify_submit_exception(exc: BaseException) -> SubmitError:
+    if isinstance(exc, SubmitError):
+        return exc
+
+    message = _exception_text(exc).lower()
+    queue_full_patterns = {
+        "queue full",
+        "job limit",
+        "submit limit",
+        "accept limit",
+        "ru-accept",
+        "too many jobs",
+        "maximum number of jobs",
+        "exceed",
+        "exceeded",
+    }
+    temporary_patterns = {
+        "temporar",
+        "try again",
+        "unavailable",
+        "timeout",
+        "timed out",
+        "busy",
+        "connection",
+        "rate limit",
+    }
+
+    if any(pattern in message for pattern in queue_full_patterns):
+        return QueueFullError(_exception_text(exc))
+    if any(pattern in message for pattern in temporary_patterns):
+        return TemporarySubmitError(_exception_text(exc))
+    return SubmitError(_exception_text(exc))
+
+
+async def _submit_prepared_job(prepared: _PreparedBlockJob) -> str:
+    script_path = _write_script_for_prepared_job(prepared)
+    target = prepared.submission_target.hpc_target
+
+    if target == "miyabi":
+        submit = await MiyabiPBSRuntime().submit(script_path, cwd=prepared.work_dir)
+    elif target == "fugaku":
+        submit = await FugakuPJMRuntime().submit(script_path, cwd=prepared.work_dir)
+    elif target == "slurm":
+        submit = await SlurmRuntime().submit(script_path, cwd=prepared.work_dir)
+    else:
+        raise NotImplementedError(f"Unsupported hpc_target for submit: {target}")
+
+    return submit.job_id
+
+
+async def submit_job_from_blocks(
+    *,
+    work_dir: Path,
+    job_key: str,
+    command_block: str | None = None,
+    execution_profile_block: str | None = None,
+    hpc_profile_block: str | None = None,
+    command_args: dict[str, Any] | None = None,
+    registry: BulkJobRegistry | None = None,
+    command_block_name: str | None = None,
+    execution_profile_block_name: str | None = None,
+    hpc_profile_block_name: str | None = None,
+) -> SubmittedJob:
+    """Submit one block-defined HPC job without waiting for completion.
+
+    Queue-full and retryable scheduler failures are recorded as
+    ``SUBMIT_DEFERRED`` when a registry is provided, then raised so a future
+    refill loop can stop submitting more jobs in the current cycle.
+    """
+
+    resolved_command_block = _resolve_named_argument(
+        preferred=command_block,
+        alias=command_block_name,
+        label="command_block",
+    )
+    resolved_execution_profile_block = _resolve_named_argument(
+        preferred=execution_profile_block,
+        alias=execution_profile_block_name,
+        label="execution_profile_block",
+    )
+    resolved_hpc_profile_block = _resolve_named_argument(
+        preferred=hpc_profile_block,
+        alias=hpc_profile_block_name,
+        label="hpc_profile_block",
+    )
+
+    if registry is not None:
+        registry.upsert_jobs(
+            [
+                BulkJobSpec(
+                    job_key=job_key,
+                    work_dir=Path(work_dir),
+                    command_args=dict(command_args or {}),
+                )
+            ]
+        )
+
+    prepared = await _prepare_job_from_blocks(
+        command_block_name=resolved_command_block,
+        execution_profile_block_name=resolved_execution_profile_block,
+        hpc_profile_block_name=resolved_hpc_profile_block,
+        work_dir=work_dir,
+        script_filename=job_key,
+        user_args=_command_args_to_user_args(command_args),
+    )
+
+    try:
+        scheduler_job_id = await _submit_prepared_job(prepared)
+    except Exception as exc:
+        classified = _classify_submit_exception(exc)
+        if registry is not None:
+            if isinstance(classified, QueueFullError | TemporarySubmitError):
+                registry.mark_submit_deferred(job_key, error=str(classified))
+            else:
+                registry.mark_failed(job_key, error=str(classified))
+        raise classified from exc
+
+    if registry is not None:
+        registry.mark_submitted(job_key, scheduler_job_id)
+
+    return SubmittedJob(
+        job_key=job_key,
+        scheduler_job_id=scheduler_job_id,
+        status=BulkJobStatus.SUBMITTED,
+        work_dir=prepared.work_dir,
+    )
+
+
+def _parse_fugaku_pjstat_rows(stdout: str) -> dict[str, dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    for line in stdout.splitlines():
+        text = line.strip()
+        if not text or text.startswith("JOB_ID") or text.startswith("===="):
+            continue
+        columns = re.split(r"\s+", text)
+        row = dict(zip(fugaku_runtime.FugakuPJMRuntime.PJSTAT_KEYS, columns))
+        job_id = str(row.get("JOB_ID", "")).strip()
+        if job_id:
+            rows[job_id] = row
+    return rows
+
+
+def _parse_slurm_sacct_rows(stdout: str) -> dict[str, dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    for line in stdout.splitlines():
+        fields = line.split("|")
+        if len(fields) < 6:
+            continue
+        job_id = fields[0].strip()
+        if not job_id or "." in job_id:
+            continue
+        rows[job_id] = {
+            "JobID": job_id,
+            "State": fields[1].strip(),
+            "ExitCode": fields[2].strip(),
+            "Elapsed": fields[3].strip(),
+            "AllocCPUS": fields[4].strip(),
+            "NodeList": fields[5].strip(),
+        }
+    return rows
+
+
+def _parse_miyabi_qstat_rows(stdout: str) -> dict[str, dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    current_job_id: str | None = None
+    current_key = ""
+    current_row: dict[str, Any] = {}
+
+    def save_current() -> None:
+        if current_job_id:
+            rows[current_job_id] = dict(current_row)
+
+    for line in stdout.splitlines():
+        if line.startswith("Job Id:"):
+            save_current()
+            current_job_id = line.split(":", 1)[1].strip()
+            current_row = {"Job_Id": current_job_id}
+            current_key = ""
+            continue
+
+        if current_job_id is None or not line.strip():
+            continue
+
+        if line.startswith("\t") and current_key:
+            current_row[current_key] = str(current_row[current_key]) + line.strip()
+            continue
+
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        current_key = key.strip()
+        current_row[current_key] = value.strip()
+
+    save_current()
+    return rows
+
+
+async def _query_scheduler_statuses(
+    *,
+    hpc_target: str,
+    scheduler_job_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    if not scheduler_job_ids:
+        return {}
+
+    requested = set(scheduler_job_ids)
+    if hpc_target == "fugaku":
+        active_stdout = await fugaku_runtime.run_command("pjstat", "-v")
+        rows = _parse_fugaku_pjstat_rows(active_stdout)
+        missing = requested - set(rows)
+        if missing:
+            history_stdout = await fugaku_runtime.run_command("pjstat", "-H", "-v")
+            rows.update(_parse_fugaku_pjstat_rows(history_stdout))
+        return {job_id: row for job_id, row in rows.items() if job_id in requested}
+
+    if hpc_target == "slurm":
+        stdout = await slurm_runtime.run_command(
+            "sacct",
+            "-j",
+            ",".join(scheduler_job_ids),
+            "--format=JobID,State,ExitCode,Elapsed,AllocCPUS,NodeList",
+            "--parsable2",
+            "--noheader",
+        )
+        return {
+            job_id: row
+            for job_id, row in _parse_slurm_sacct_rows(stdout).items()
+            if job_id in requested
+        }
+
+    if hpc_target == "miyabi":
+        stdout = await miyabi_runtime.run_command("qstat", "-f", *scheduler_job_ids)
+        rows = _parse_miyabi_qstat_rows(stdout)
+        return {job_id: row for job_id, row in rows.items() if job_id in requested}
+
+    raise NotImplementedError(f"Unsupported hpc_target for monitor: {hpc_target}")
+
+
+def _bulk_status_from_scheduler_row(hpc_target: str, row: dict[str, Any]) -> BulkJobStatus:
+    if hpc_target == "fugaku":
+        state = str(row.get("ST", "")).strip().upper()
+        exit_code = str(row.get("EC", "")).strip()
+        if state in {"QUE", "Q", "HLD", "RNA"}:
+            return BulkJobStatus.QUEUED
+        if state in {"RUN", "R"}:
+            return BulkJobStatus.RUNNING
+        if state == "EXT":
+            return BulkJobStatus.SUCCEEDED if exit_code in {"", "-", "0"} else BulkJobStatus.FAILED
+        if state == "CCL":
+            return BulkJobStatus.CANCELLED
+        return BulkJobStatus.UNKNOWN
+
+    if hpc_target == "slurm":
+        state = str(row.get("State", "")).strip().upper().split()[0].rstrip("+")
+        if state in {"PENDING", "CONFIGURING"}:
+            return BulkJobStatus.QUEUED
+        if state in {"RUNNING", "COMPLETING", "SUSPENDED"}:
+            return BulkJobStatus.RUNNING
+        if state == "COMPLETED":
+            return BulkJobStatus.SUCCEEDED
+        if state == "CANCELLED":
+            return BulkJobStatus.CANCELLED
+        if state in {
+            "BOOT_FAIL",
+            "DEADLINE",
+            "FAILED",
+            "NODE_FAIL",
+            "OUT_OF_MEMORY",
+            "PREEMPTED",
+            "TIMEOUT",
+        }:
+            return BulkJobStatus.FAILED
+        return BulkJobStatus.UNKNOWN
+
+    if hpc_target == "miyabi":
+        state = str(row.get("job_state", row.get("state", ""))).strip().upper()
+        exit_status = str(row.get("Exit_status", "")).strip()
+        if state in {"Q", "H", "W", "T"}:
+            return BulkJobStatus.QUEUED
+        if state in {"R", "E"}:
+            return BulkJobStatus.RUNNING
+        if state in {"C", "F"} or exit_status:
+            return BulkJobStatus.SUCCEEDED if exit_status in {"", "0"} else BulkJobStatus.FAILED
+        return BulkJobStatus.UNKNOWN
+
+    return BulkJobStatus.UNKNOWN
+
+
+def _record_has_success_evidence(record) -> bool:
+    if not record.expected_outputs:
+        return False
+    paths = [
+        path if path.is_absolute() else record.work_dir / path
+        for path in record.expected_outputs
+    ]
+    return all(path.exists() for path in paths)
+
+
+def _active_records_by_scheduler_id(
+    registry: BulkJobRegistry | None,
+) -> dict[str, Any]:
+    if registry is None:
+        return {}
+    return {
+        str(record.scheduler_job_id): record
+        for record in registry.get_active_jobs()
+        if record.scheduler_job_id
+    }
+
+
+def _update_registry_for_monitor_status(
+    *,
+    registry: BulkJobRegistry,
+    job_key: str,
+    status: BulkJobStatus,
+    error: str | None = None,
+) -> None:
+    if status == BulkJobStatus.QUEUED:
+        registry.record_monitor_attempt(job_key)
+        registry.mark_queued(job_key)
+    elif status == BulkJobStatus.RUNNING:
+        registry.record_monitor_attempt(job_key)
+        registry.mark_running(job_key)
+    elif status == BulkJobStatus.SUCCEEDED:
+        registry.record_monitor_attempt(job_key)
+        registry.mark_succeeded(job_key)
+    elif status == BulkJobStatus.FAILED:
+        registry.record_monitor_attempt(job_key)
+        registry.mark_failed(job_key, error=error)
+    elif status == BulkJobStatus.CANCELLED:
+        registry.record_monitor_attempt(job_key)
+        registry.mark_cancelled(job_key, error=error)
+    elif status == BulkJobStatus.UNKNOWN:
+        registry.mark_unknown(job_key, error=error)
+    else:
+        registry.record_monitor_attempt(job_key)
+
+
+async def monitor_jobs_many(
+    *,
+    scheduler_job_ids: list[str],
+    hpc_profile_block: str | None = None,
+    registry: BulkJobRegistry | None = None,
+    hpc_profile_block_name: str | None = None,
+) -> dict[str, BulkJobStatus]:
+    """Monitor many scheduler jobs with one aggregated scheduler query per target."""
+
+    resolved_hpc_profile_block = _resolve_named_argument(
+        preferred=hpc_profile_block,
+        alias=hpc_profile_block_name,
+        label="hpc_profile_block",
+    )
+    hpc_target = await resolve_hpc_target(hpc_profile_block_name=resolved_hpc_profile_block)
+
+    requested_ids = list(dict.fromkeys(scheduler_job_ids))
+    if not requested_ids:
+        return {}
+
+    query_error: str | None = None
+    try:
+        scheduler_rows = await _query_scheduler_statuses(
+            hpc_target=hpc_target,
+            scheduler_job_ids=requested_ids,
+        )
+    except Exception as exc:
+        scheduler_rows = {}
+        query_error = _exception_text(exc)
+
+    records_by_scheduler_id = _active_records_by_scheduler_id(registry)
+    results: dict[str, BulkJobStatus] = {}
+
+    for scheduler_job_id in requested_ids:
+        row = scheduler_rows.get(scheduler_job_id)
+        record = records_by_scheduler_id.get(scheduler_job_id)
+        if row is not None:
+            status = _bulk_status_from_scheduler_row(hpc_target, row)
+            error = None if status != BulkJobStatus.UNKNOWN else "unknown scheduler state"
+        elif record is not None and _record_has_success_evidence(record):
+            status = BulkJobStatus.SUCCEEDED
+            error = None
+        else:
+            status = BulkJobStatus.UNKNOWN
+            error = query_error or "job was not found in scheduler output"
+
+        results[scheduler_job_id] = status
+        if registry is not None and record is not None:
+            _update_registry_for_monitor_status(
+                registry=registry,
+                job_key=record.job_key,
+                status=status,
+                error=error,
+            )
+
+    return results
+
+
 async def run_job_from_blocks(
     *,
     command_block_name: str,
@@ -280,98 +873,51 @@ async def run_job_from_blocks(
             profile's executable map.
         NotImplementedError: If the resolved ``hpc_target`` is unsupported.
     """
-    command_block = await _load_block(CommandBlock, command_block_name)
-    execution_profile_block = await _load_block(ExecutionProfileBlock, execution_profile_block_name)
-    hpc_block = await _load_block(HPCProfileBlock, hpc_profile_block_name)
-
-    if execution_profile_block.command_name != command_block.command_name:
-        raise ValueError(
-            f"ExecutionProfileBlock '{execution_profile_block_name}' is for command "
-            f"'{execution_profile_block.command_name}', but command block "
-            f"'{command_block_name}' is '{command_block.command_name}'."
-        )
-
-    executable = hpc_block.executable_map.get(command_block.executable_key)
-    if not executable:
-        raise KeyError(
-            f"Executable key '{command_block.executable_key}' was not found in "
-            f"HPCProfileBlock '{hpc_profile_block_name}'."
-        )
-
-    submission_target = _resolve_submission_target_from_loaded_blocks(
-        hpc_block, execution_profile_block.resource_class
-    )
-    resolved_script_filename = build_scheduler_script_filename(
-        script_filename,
-        submission_target.hpc_target,
-    )
-    if submission_target.hpc_target in {"miyabi", "fugaku"} and not submission_target.project:
-        raise ValueError("Project/Group is empty. Update HPCProfileBlock project_cpu/project_gpu.")
-
-    exec_profile = _build_execution_profile(
-        command_block=command_block,
-        execution_profile_block=execution_profile_block,
+    prepared = await _prepare_job_from_blocks(
+        command_block_name=command_block_name,
+        execution_profile_block_name=execution_profile_block_name,
+        hpc_profile_block_name=hpc_profile_block_name,
+        work_dir=work_dir,
+        script_filename=script_filename,
         user_args=user_args,
+        fugaku_job_name=fugaku_job_name,
         execution_profile_overrides=execution_profile_overrides,
     )
-    resolved_work_dir = Path(work_dir).expanduser().resolve()
 
-    if submission_target.hpc_target == "miyabi":
-        req = MiyabiJobRequest(
-            queue_name=submission_target.queue_name,
-            project=submission_target.project,
-            executable=executable,
-        )
+    if prepared.submission_target.hpc_target == "miyabi":
         return await run_miyabi_job(
-            work_dir=resolved_work_dir,
-            script_filename=resolved_script_filename,
-            exec_profile=exec_profile,
-            req=req,
+            work_dir=prepared.work_dir,
+            script_filename=prepared.script_filename,
+            exec_profile=prepared.exec_profile,
+            req=prepared.req,
             watch_poll_interval=watch_poll_interval,
             timeout_seconds=timeout_seconds,
             metrics_artifact_key=metrics_artifact_key,
         )
 
-    if submission_target.hpc_target == "fugaku":
-        req = FugakuJobRequest(
-            queue_name=submission_target.queue_name,
-            project=submission_target.project,
-            executable=executable,
-            job_name=fugaku_job_name or _default_fugaku_job_name(command_block.command_name),
-            gfscache=hpc_block.gfscache or "/vol0002",
-            spack_modules=list(hpc_block.spack_modules) if hpc_block.spack_modules else [],
-            mpi_options_for_pjm=list(hpc_block.mpi_options_for_pjm)
-            if hpc_block.mpi_options_for_pjm
-            else [],
-            pjm_resources=list(hpc_block.pjm_resources) if hpc_block.pjm_resources else [],
-        )
+    if prepared.submission_target.hpc_target == "fugaku":
         return await run_fugaku_job(
-            work_dir=resolved_work_dir,
-            script_filename=resolved_script_filename,
-            exec_profile=exec_profile,
-            req=req,
+            work_dir=prepared.work_dir,
+            script_filename=prepared.script_filename,
+            exec_profile=prepared.exec_profile,
+            req=prepared.req,
             watch_poll_interval=watch_poll_interval,
             timeout_seconds=timeout_seconds,
             metrics_artifact_key=metrics_artifact_key,
         )
 
-    if submission_target.hpc_target == "slurm":
-        req = SlurmJobRequest(
-            partition=submission_target.queue_name,
-            account=submission_target.project or None,
-            executable=executable,
-            qpu=hpc_block.slurm_qpu,
-        )
+    if prepared.submission_target.hpc_target == "slurm":
         return await run_slurm_job(
-            work_dir=resolved_work_dir,
-            script_filename=resolved_script_filename,
-            exec_profile=exec_profile,
-            req=req,
+            work_dir=prepared.work_dir,
+            script_filename=prepared.script_filename,
+            exec_profile=prepared.exec_profile,
+            req=prepared.req,
             watch_poll_interval=watch_poll_interval,
             timeout_seconds=timeout_seconds,
             metrics_artifact_key=metrics_artifact_key,
         )
 
     raise NotImplementedError(
-        f"hpc_target='{submission_target.hpc_target}' is not supported yet by run_job_from_blocks."
+        f"hpc_target='{prepared.submission_target.hpc_target}' is not supported yet by "
+        "run_job_from_blocks."
     )

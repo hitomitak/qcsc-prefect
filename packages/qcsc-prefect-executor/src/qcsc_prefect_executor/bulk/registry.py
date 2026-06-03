@@ -258,6 +258,12 @@ class BulkJobRegistry:
             "priority DESC, created_at, job_key LIMIT ?",
         )
 
+    def get_job(self, job_key: str) -> BulkJobRecord | None:
+        records = self._fetch_records("job_key = ?", [job_key], "job_key")
+        if not records:
+            return None
+        return records[0]
+
     def mark_submitted(self, job_key: str, scheduler_job_id: str) -> None:
         now = _utcnow_iso()
         with self._connect() as conn:
@@ -350,6 +356,40 @@ class BulkJobRegistry:
 
     def mark_cancelled(self, job_key: str, error: str | None = None) -> None:
         self._mark_terminal(job_key, BulkJobStatus.CANCELLED, error=error)
+
+    def mark_unknown(self, job_key: str, error: str | None = None) -> None:
+        now = _utcnow_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE bulk_jobs
+                SET
+                    status = ?,
+                    monitor_attempts = monitor_attempts + 1,
+                    updated_at = ?,
+                    last_error = ?
+                WHERE job_key = ? AND status != ?
+                """,
+                (
+                    BulkJobStatus.UNKNOWN.value,
+                    now,
+                    error,
+                    job_key,
+                    BulkJobStatus.SUCCEEDED.value,
+                ),
+            )
+
+    def record_monitor_attempt(self, job_key: str) -> None:
+        now = _utcnow_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE bulk_jobs
+                SET monitor_attempts = monitor_attempts + 1, updated_at = ?
+                WHERE job_key = ?
+                """,
+                (now, job_key),
+            )
 
     def all_terminal(self) -> bool:
         statuses = _status_values(tuple(TERMINAL_BULK_JOB_STATUSES))
