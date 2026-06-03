@@ -22,6 +22,7 @@ from qcsc_prefect_blocks.common.blocks import CommandBlock, ExecutionProfileBloc
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 
 from qcsc_prefect_executor.bulk.exceptions import (
+    DuplicateJobKeyError,
     QueueFullError,
     SubmitError,
     TemporarySubmitError,
@@ -283,6 +284,24 @@ def _resolve_named_argument(
     return value
 
 
+def _ensure_registry_can_submit(*, registry: BulkJobRegistry, job_key: str) -> None:
+    record = registry.get_job(job_key)
+    if record is None:
+        return
+    if record.status.is_submit_candidate:
+        return
+
+    scheduler_part = (
+        f", scheduler_job_id={record.scheduler_job_id}"
+        if record.scheduler_job_id
+        else ""
+    )
+    raise DuplicateJobKeyError(
+        f"Bulk job key {job_key!r} already has status {record.status.value}"
+        f"{scheduler_part}. Use a fresh job_key or registry for a new scheduler job."
+    )
+
+
 async def _prepare_job_from_blocks(
     *,
     command_block_name: str,
@@ -519,6 +538,7 @@ async def submit_job_from_blocks(
                 )
             ]
         )
+        _ensure_registry_can_submit(registry=registry, job_key=job_key)
 
     prepared = await _prepare_job_from_blocks(
         command_block_name=resolved_command_block,

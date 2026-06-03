@@ -6,6 +6,7 @@ from typing import Any
 
 from qcsc_prefect_executor import from_blocks as mod
 from qcsc_prefect_executor.bulk.exceptions import (
+    DuplicateJobKeyError,
     QueueFullError,
     SubmitError,
     TemporarySubmitError,
@@ -162,6 +163,98 @@ def test_submit_job_from_blocks_does_not_wait_for_completion(tmp_path: Path, mon
 
     assert len(runtime.submit_calls) == 1
     assert runtime.wait_calls == 0
+
+
+def test_submit_job_from_blocks_rejects_reused_succeeded_job_key(
+    tmp_path: Path, monkeypatch
+):
+    _patch_block_loading(monkeypatch)
+    runtime = _SubmitRuntimeStub(job_id="new-job-id")
+    _patch_slurm_runtime(monkeypatch, runtime)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    registry.upsert_jobs([BulkJobSpec(job_key="job-1", work_dir=tmp_path / "job-1")])
+    registry.mark_submitted("job-1", "old-job-id")
+    registry.mark_succeeded("job-1")
+
+    try:
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+            )
+        )
+    except DuplicateJobKeyError as exc:
+        assert "already has status SUCCEEDED" in str(exc)
+    else:
+        raise AssertionError("Expected DuplicateJobKeyError")
+
+    record = registry.get_job("job-1")
+    assert runtime.submit_calls == []
+    assert record is not None
+    assert record.status == BulkJobStatus.SUCCEEDED
+    assert record.scheduler_job_id == "old-job-id"
+
+
+def test_submit_job_from_blocks_rejects_reused_active_job_key(
+    tmp_path: Path, monkeypatch
+):
+    _patch_block_loading(monkeypatch)
+    runtime = _SubmitRuntimeStub(job_id="new-job-id")
+    _patch_slurm_runtime(monkeypatch, runtime)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    registry.upsert_jobs([BulkJobSpec(job_key="job-1", work_dir=tmp_path / "job-1")])
+    registry.mark_submitted("job-1", "old-job-id")
+
+    try:
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+            )
+        )
+    except DuplicateJobKeyError as exc:
+        assert "already has status SUBMITTED" in str(exc)
+    else:
+        raise AssertionError("Expected DuplicateJobKeyError")
+
+    assert runtime.submit_calls == []
+
+
+def test_submit_job_from_blocks_allows_submit_deferred_retry(
+    tmp_path: Path, monkeypatch
+):
+    _patch_block_loading(monkeypatch)
+    runtime = _SubmitRuntimeStub(job_id="new-job-id")
+    _patch_slurm_runtime(monkeypatch, runtime)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    registry.upsert_jobs([BulkJobSpec(job_key="job-1", work_dir=tmp_path / "job-1")])
+    registry.mark_submit_deferred("job-1", error="queue full")
+
+    result = asyncio.run(
+        mod.submit_job_from_blocks(
+            command_block="cmd",
+            execution_profile_block="exec",
+            hpc_profile_block="hpc",
+            work_dir=tmp_path / "job-1",
+            job_key="job-1",
+            registry=registry,
+        )
+    )
+
+    record = registry.get_job("job-1")
+    assert result.scheduler_job_id == "new-job-id"
+    assert len(runtime.submit_calls) == 1
+    assert record is not None
+    assert record.status == BulkJobStatus.SUBMITTED
+    assert record.scheduler_job_id == "new-job-id"
 
 
 def test_queue_full_is_recorded_as_submit_deferred_not_failed(tmp_path: Path, monkeypatch):

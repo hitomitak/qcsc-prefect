@@ -2,7 +2,12 @@
 
 from qcsc_prefect_core.queue import QueueAwareSubmitGate, QueueCapacity, QueueProbe
 
-from qcsc_prefect_executor.bulk.exceptions import QueueFullError, SubmitError, TemporarySubmitError
+from qcsc_prefect_executor.bulk.exceptions import (
+    DuplicateJobKeyError,
+    QueueFullError,
+    SubmitError,
+    TemporarySubmitError,
+)
 from qcsc_prefect_executor.bulk.models import (
     BulkJobRecord,
     BulkJobSpec,
@@ -18,6 +23,7 @@ __all__ = [
     "BulkJobSpec",
     "BulkJobStatus",
     "BulkRunResult",
+    "DuplicateJobKeyError",
     "QueueFullError",
     "QueueAwareSubmitGate",
     "QueueCapacity",
