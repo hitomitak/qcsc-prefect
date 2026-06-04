@@ -279,6 +279,9 @@ class BulkJobRegistry:
             return None
         return records[0]
 
+    def get_all_jobs(self) -> list[BulkJobRecord]:
+        return self._fetch_records("1 = 1", [], "created_at, job_key")
+
     def mark_submitted(self, job_key: str, scheduler_job_id: str) -> None:
         now = _utcnow_iso()
         with self._connect() as conn:

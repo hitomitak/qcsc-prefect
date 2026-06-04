@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import re
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from qcsc_prefect_adapters.slurm.builder import SlurmJobRequest
 from qcsc_prefect_adapters.slurm.runtime import SlurmRuntime
 from qcsc_prefect_blocks.common.blocks import CommandBlock, ExecutionProfileBlock, HPCProfileBlock
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
+from qcsc_prefect_core.queue import QueueAwareSubmitGate, QueueProbe
 
 from qcsc_prefect_executor.bulk.exceptions import (
     DuplicateJobKeyError,
@@ -27,7 +29,12 @@ from qcsc_prefect_executor.bulk.exceptions import (
     SubmitError,
     TemporarySubmitError,
 )
-from qcsc_prefect_executor.bulk.models import BulkJobSpec, BulkJobStatus, SubmittedJob
+from qcsc_prefect_executor.bulk.models import (
+    BulkJobSpec,
+    BulkJobStatus,
+    BulkRunResult,
+    SubmittedJob,
+)
 from qcsc_prefect_executor.bulk.registry import BulkJobRegistry
 from qcsc_prefect_executor.fugaku.run import run_fugaku_job
 from qcsc_prefect_executor.miyabi.run import run_miyabi_job
@@ -300,6 +307,89 @@ def _ensure_registry_can_submit(*, registry: BulkJobRegistry, job_key: str) -> N
         f"Bulk job key {job_key!r} already has status {record.status.value}"
         f"{scheduler_part}. Use a fresh job_key or registry for a new scheduler job."
     )
+
+
+async def _resolve_default_bulk_queue_probe(
+    *,
+    hpc_profile_block: str,
+    execution_profile_block: str,
+    max_active_jobs: int,
+    safety_margin: int,
+) -> QueueProbe:
+    submission_target = await resolve_submission_target(
+        hpc_profile_block_name=hpc_profile_block,
+        execution_profile_block_name=execution_profile_block,
+    )
+    if submission_target.hpc_target == "fugaku":
+        from qcsc_prefect_adapters.fugaku.queue import FugakuQueueProbe
+
+        return FugakuQueueProbe(
+            max_active_jobs=max_active_jobs,
+            safety_margin=safety_margin,
+            project=submission_target.project,
+            queue=submission_target.queue_name,
+        )
+
+    raise ValueError(
+        "queue_probe is required for bulk execution when hpc_target is "
+        f"{submission_target.hpc_target!r}. Pass a scheduler-specific QueueProbe."
+    )
+
+
+def _build_bulk_run_result(
+    *,
+    registry: BulkJobRegistry,
+    total_jobs: int,
+) -> BulkRunResult:
+    counts = registry.status_counts()
+    failed_jobs = [
+        record.job_key
+        for record in registry.get_all_jobs()
+        if record.status == BulkJobStatus.FAILED
+    ]
+    return BulkRunResult(
+        total_jobs=total_jobs,
+        status_counts=counts,
+        succeeded=counts.get(BulkJobStatus.SUCCEEDED.value, 0),
+        failed=counts.get(BulkJobStatus.FAILED.value, 0),
+        cancelled=counts.get(BulkJobStatus.CANCELLED.value, 0),
+        submit_deferred=counts.get(BulkJobStatus.SUBMIT_DEFERRED.value, 0),
+        unknown=counts.get(BulkJobStatus.UNKNOWN.value, 0),
+        registry_path=registry.path,
+        failed_jobs=failed_jobs,
+    )
+
+
+def _has_failed_jobs(registry: BulkJobRegistry) -> bool:
+    return registry.status_counts().get(BulkJobStatus.FAILED.value, 0) > 0
+
+
+def _mark_deferred_if_needed(
+    *,
+    registry: BulkJobRegistry,
+    job_key: str,
+    error: str | None,
+) -> None:
+    record = registry.get_job(job_key)
+    if record is not None and record.status == BulkJobStatus.SUBMIT_DEFERRED:
+        return
+    registry.mark_submit_deferred(job_key, error=error)
+
+
+def _mark_failed_if_needed(
+    *,
+    registry: BulkJobRegistry,
+    job_key: str,
+    error: str | None,
+) -> None:
+    record = registry.get_job(job_key)
+    if record is not None and record.status in {
+        BulkJobStatus.FAILED,
+        BulkJobStatus.SUCCEEDED,
+        BulkJobStatus.CANCELLED,
+    }:
+        return
+    registry.mark_failed(job_key, error=error)
 
 
 async def _prepare_job_from_blocks(
@@ -848,6 +938,125 @@ async def monitor_jobs_many(
             )
 
     return results
+
+
+async def run_jobs_from_blocks_bulk(
+    *,
+    jobs: list[BulkJobSpec],
+    command_block: str,
+    execution_profile_block: str,
+    hpc_profile_block: str,
+    registry_path: Path,
+    queue_probe: QueueProbe | None = None,
+    max_active_jobs: int = 1000,
+    safety_margin: int = 20,
+    max_submit_per_refill: int = 100,
+    poll_interval_seconds: int = 60,
+    refill_interval_seconds: int = 60,
+    stop_on_first_failure: bool = False,
+) -> BulkRunResult:
+    """Run many block-defined HPC jobs through one queue-aware bulk loop.
+
+    This API submits and monitors scheduler jobs from a shared pending pool. It
+    does not create one Prefect task per scheduler job, and wave identifiers on
+    ``BulkJobSpec`` remain registry metadata for downstream workflow readiness
+    checks rather than submit units.
+    """
+
+    registry = BulkJobRegistry(registry_path)
+    registry.upsert_jobs(jobs)
+    registry.refresh_completed_jobs_from_outputs()
+    total_jobs = len({job.job_key for job in jobs})
+
+    if registry.all_terminal() or (stop_on_first_failure and _has_failed_jobs(registry)):
+        return _build_bulk_run_result(registry=registry, total_jobs=total_jobs)
+
+    resolved_queue_probe = queue_probe or await _resolve_default_bulk_queue_probe(
+        hpc_profile_block=hpc_profile_block,
+        execution_profile_block=execution_profile_block,
+        max_active_jobs=max_active_jobs,
+        safety_margin=safety_margin,
+    )
+    submit_gate = QueueAwareSubmitGate(
+        queue_probe=resolved_queue_probe,
+        max_active_jobs=max_active_jobs,
+        safety_margin=safety_margin,
+        max_submit_per_refill=max_submit_per_refill,
+    )
+
+    loop = asyncio.get_running_loop()
+    next_refill_at = 0.0
+
+    while not registry.all_terminal():
+        monitorable_jobs = [
+            job for job in registry.get_monitorable_jobs() if job.scheduler_job_id
+        ]
+        if monitorable_jobs:
+            await monitor_jobs_many(
+                hpc_profile_block=hpc_profile_block,
+                scheduler_job_ids=[
+                    str(job.scheduler_job_id) for job in monitorable_jobs
+                ],
+                registry=registry,
+            )
+
+        registry.refresh_completed_jobs_from_outputs()
+
+        if stop_on_first_failure and _has_failed_jobs(registry):
+            break
+
+        now = loop.time()
+        if now >= next_refill_at:
+            pre_candidates = registry.get_submit_candidates(limit=max_submit_per_refill)
+            if pre_candidates:
+                submit_count = submit_gate.allowed_submit_count()
+                for job in pre_candidates[:submit_count]:
+                    try:
+                        await submit_job_from_blocks(
+                            command_block=command_block,
+                            execution_profile_block=execution_profile_block,
+                            hpc_profile_block=hpc_profile_block,
+                            work_dir=job.work_dir,
+                            job_key=job.job_key,
+                            command_args=job.command_args,
+                            registry=registry,
+                        )
+                    except QueueFullError as exc:
+                        _mark_deferred_if_needed(
+                            registry=registry,
+                            job_key=job.job_key,
+                            error=str(exc),
+                        )
+                        break
+                    except TemporarySubmitError as exc:
+                        _mark_deferred_if_needed(
+                            registry=registry,
+                            job_key=job.job_key,
+                            error=str(exc),
+                        )
+                        break
+                    except Exception as exc:
+                        _mark_failed_if_needed(
+                            registry=registry,
+                            job_key=job.job_key,
+                            error=_exception_text(exc),
+                        )
+                        if stop_on_first_failure:
+                            break
+
+            next_refill_at = now + max(0.0, float(refill_interval_seconds))
+
+        if stop_on_first_failure and _has_failed_jobs(registry):
+            break
+        if registry.all_terminal():
+            break
+
+        sleep_seconds = max(0.0, float(poll_interval_seconds))
+        if sleep_seconds == 0 and next_refill_at > loop.time():
+            sleep_seconds = max(0.0, next_refill_at - loop.time())
+        await asyncio.sleep(sleep_seconds)
+
+    return _build_bulk_run_result(registry=registry, total_jobs=total_jobs)
 
 
 async def run_job_from_blocks(

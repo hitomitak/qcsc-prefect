@@ -50,6 +50,64 @@ packages. Native Qiskit primitives are documented separately in
     options:
       show_source: false
 
+## Bulk HPC Execution
+
+::: qcsc_prefect_executor.bulk.BulkJobStatus
+    options:
+      show_source: false
+
+::: qcsc_prefect_executor.bulk.BulkJobSpec
+    options:
+      show_source: false
+
+::: qcsc_prefect_executor.bulk.BulkJobRecord
+    options:
+      show_source: false
+
+::: qcsc_prefect_executor.bulk.SubmittedJob
+    options:
+      show_source: false
+
+::: qcsc_prefect_executor.bulk.BulkRunResult
+    options:
+      show_source: false
+
+::: qcsc_prefect_executor.bulk.BulkJobRegistry
+    options:
+      show_source: false
+
+::: qcsc_prefect_core.queue.QueueCapacity
+    options:
+      show_source: false
+
+::: qcsc_prefect_core.queue.QueueAwareSubmitGate
+    options:
+      show_source: false
+
+::: qcsc_prefect_executor.bulk.QueueFullError
+    options:
+      show_source: false
+
+::: qcsc_prefect_executor.bulk.TemporarySubmitError
+    options:
+      show_source: false
+
+::: qcsc_prefect_executor.bulk.DuplicateJobKeyError
+    options:
+      show_source: false
+
+::: qcsc_prefect_executor.from_blocks.submit_job_from_blocks
+    options:
+      show_source: false
+
+::: qcsc_prefect_executor.from_blocks.monitor_jobs_many
+    options:
+      show_source: false
+
+::: qcsc_prefect_executor.from_blocks.run_jobs_from_blocks_bulk
+    options:
+      show_source: false
+
 ## Miyabi API
 
 ::: qcsc_prefect_adapters.miyabi.builder.MiyabiJobRequest
