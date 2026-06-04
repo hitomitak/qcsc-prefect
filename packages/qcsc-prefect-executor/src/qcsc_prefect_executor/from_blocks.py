@@ -779,9 +779,9 @@ def _bulk_status_from_scheduler_row(hpc_target: str, row: dict[str, Any]) -> Bul
     if hpc_target == "fugaku":
         state = str(row.get("ST", "")).strip().upper()
         exit_code = str(row.get("EC", "")).strip()
-        if state in {"QUE", "Q", "HLD", "RNA"}:
+        if state in {"ACC", "QUE", "Q", "HLD", "RNA"}:
             return BulkJobStatus.QUEUED
-        if state in {"RUN", "R"}:
+        if state in {"RUN", "R", "RNE", "RNO", "RNP", "RSM", "SPD", "SPP"}:
             return BulkJobStatus.RUNNING
         if state == "EXT":
             if "EC" not in row:
@@ -794,6 +794,8 @@ def _bulk_status_from_scheduler_row(hpc_target: str, row: dict[str, Any]) -> Bul
             return BulkJobStatus.SUCCEEDED if exit_code in {"", "-", "0"} else BulkJobStatus.FAILED
         if state == "CCL":
             return BulkJobStatus.CANCELLED
+        if state in {"ERR", "RJT"}:
+            return BulkJobStatus.FAILED
         return BulkJobStatus.UNKNOWN
 
     if hpc_target == "slurm":

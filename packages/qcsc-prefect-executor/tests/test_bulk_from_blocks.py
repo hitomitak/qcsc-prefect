@@ -406,6 +406,30 @@ def test_fugaku_history_verbose_rows_map_completed_jobs():
     ) == BulkJobStatus.FAILED
 
 
+def test_fugaku_scheduler_states_map_to_bulk_statuses():
+    expected = {
+        "ACC": BulkJobStatus.QUEUED,
+        "QUE": BulkJobStatus.QUEUED,
+        "Q": BulkJobStatus.QUEUED,
+        "HLD": BulkJobStatus.QUEUED,
+        "RNA": BulkJobStatus.QUEUED,
+        "RUN": BulkJobStatus.RUNNING,
+        "R": BulkJobStatus.RUNNING,
+        "RNE": BulkJobStatus.RUNNING,
+        "RNO": BulkJobStatus.RUNNING,
+        "RNP": BulkJobStatus.RUNNING,
+        "RSM": BulkJobStatus.RUNNING,
+        "SPD": BulkJobStatus.RUNNING,
+        "SPP": BulkJobStatus.RUNNING,
+        "CCL": BulkJobStatus.CANCELLED,
+        "ERR": BulkJobStatus.FAILED,
+        "RJT": BulkJobStatus.FAILED,
+    }
+
+    for state, status in expected.items():
+        assert mod._bulk_status_from_scheduler_row("fugaku", {"ST": state}) == status
+
+
 def test_fugaku_ext_without_exit_code_is_unknown():
     assert mod._bulk_status_from_scheduler_row(
         "fugaku", {"JOB_ID": "49074516", "ST": "EXT"}
