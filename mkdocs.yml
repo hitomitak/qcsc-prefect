@@ -78,6 +78,7 @@ nav:
       - Shutdown Workflow: howto/howto_shutdown_workflow.md
       - MPI Locally: howto/howto_use_mpi_locally.md
       - Slurm Docker Cluster: howto/howto_test_slurm_with_docker_cluster.md
+      - Queue-Aware Bulk HPC Jobs: howto/howto_use_bulk_hpc_jobs.md
   - Reference:
       - PyPI Release Guide: release.md
       - QCSC Prefect API: reference/qcsc_prefect_api.md

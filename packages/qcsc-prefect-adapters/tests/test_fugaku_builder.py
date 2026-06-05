@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from qcsc_prefect_adapters.fugaku.builder import FugakuJobRequest, render_script
+from qcsc_prefect_adapters.fugaku.builder import (
+    FugakuJobRequest,
+    render_manifest_bulk_script,
+    render_script,
+)
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 
 
@@ -49,3 +53,47 @@ def test_render_fugaku_script_with_modules_env_and_extra_resources(tmp_path: Pat
     assert 'QCSC_PREFECT_EXECUTABLE="/path/to/gb-demo"' in text
     assert "QCSC Prefect preflight failed: executable '${QCSC_PREFECT_EXECUTABLE}'" in text
     assert 'mpirun -n 4 "${QCSC_PREFECT_EXECUTABLE}" --foo bar' in text
+
+
+def test_render_manifest_bulk_script_selects_manifest_with_pjm_bulknum(
+    tmp_path: Path,
+):
+    profile = ExecutionProfile(
+        command_key="manifest-command",
+        num_nodes=1,
+        mpiprocs=1,
+        walltime="00:05:00",
+        launcher="single",
+        arguments=[
+            "-m",
+            "example_app.qpy_batch",
+            "--manifest",
+            '"$QCSC_BULK_MANIFEST"',
+        ],
+    )
+    req = FugakuJobRequest(
+        queue_name="small",
+        project="ra010014",
+        executable="python",
+        job_name="manifest-bulk",
+    )
+
+    text = render_manifest_bulk_script(
+        work_dir=tmp_path / "bulk-group-0001",
+        bulk_manifest_dir=tmp_path / "bulk-group-0001" / "manifests",
+        exec_profile=profile,
+        req=req,
+    )
+
+    assert 'export QCSC_BULK_MANIFEST_DIR="' in text
+    assert 'MANIFEST="${QCSC_BULK_MANIFEST_DIR}/${PJM_BULKNUM}.json"' in text
+    assert 'export QCSC_BULK_MANIFEST="${MANIFEST}"' in text
+    assert 'export QCSC_BULK_NUM="${PJM_BULKNUM}"' in text
+    assert '[ ! -r "${QCSC_BULK_MANIFEST}" ]' in text
+    assert (
+        '"${QCSC_PREFECT_EXECUTABLE}" -m example_app.qpy_batch --manifest "$QCSC_BULK_MANIFEST"'
+    ) in text
+    assert "gb_demo" not in text
+    assert "TrimSQD" not in text
+    assert "/${PJM_BULKNUM}/" not in text
+    assert "input_dir" not in text

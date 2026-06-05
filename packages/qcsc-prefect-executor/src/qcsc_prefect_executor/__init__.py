@@ -16,4 +16,11 @@ async def run_job_from_blocks(*args: Any, **kwargs: Any):
     return await _run_job_from_blocks(*args, **kwargs)
 
 
-__all__ = ["run_job_from_blocks"]
+async def run_jobs_from_blocks_bulk(*args: Any, **kwargs: Any):
+    # Lazy import prevents circular initialization across package __init__.py files.
+    from .from_blocks import run_jobs_from_blocks_bulk as _run_jobs_from_blocks_bulk
+
+    return await _run_jobs_from_blocks_bulk(*args, **kwargs)
+
+
+__all__ = ["run_job_from_blocks", "run_jobs_from_blocks_bulk"]
