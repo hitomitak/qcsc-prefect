@@ -9,6 +9,11 @@ from qcsc_prefect_core.queue import QueueCapacity
 _SECTION_RE = re.compile(r"^\s*(USER|GROUP|ALL)(?::\s*(\S+)?)?\s*$")
 _LIMIT_ROW_RE = re.compile(r"^\s*(ru-\S+)\s+(\S+)\s+(\d+)\s*$")
 _QUEUE_LIMIT_NAME = "ru-accept"
+_NATIVE_BULK_LIMIT_NAMES = (
+    "ru-accept-bulksubjob",
+    "ru-accept-allsubjob",
+    _QUEUE_LIMIT_NAME,
+)
 
 
 @dataclass(frozen=True)
@@ -56,9 +61,7 @@ def parse_pjstat_limit_records(
         if section_match:
             section_kind = section_match.group(1)
             section_value = section_match.group(2)
-            in_target_group = section_kind == "GROUP" and (
-                group is None or section_value == group
-            )
+            in_target_group = section_kind == "GROUP" and (group is None or section_value == group)
             if in_target_group:
                 found_group = True
             elif found_group:
@@ -86,18 +89,65 @@ def parse_pjstat_limit_records(
     return records
 
 
+def _limit_names_for_capacity_mode(
+    *,
+    capacity_mode: str,
+    limit_name: str | None,
+) -> tuple[str, ...]:
+    if limit_name:
+        return (limit_name,)
+
+    normalized_mode = capacity_mode.strip().lower().replace("-", "_")
+    if normalized_mode == "native_bulk":
+        return _NATIVE_BULK_LIMIT_NAMES
+    if normalized_mode == "single":
+        return (_QUEUE_LIMIT_NAME,)
+    raise ValueError(
+        f"Unsupported Fugaku capacity_mode {capacity_mode!r}; expected 'single' or 'native_bulk'."
+    )
+
+
+def _select_limit_record(
+    records: dict[str, FugakuLimitRecord],
+    *,
+    capacity_mode: str,
+    limit_name: str | None,
+) -> FugakuLimitRecord | None:
+    for candidate_name in _limit_names_for_capacity_mode(
+        capacity_mode=capacity_mode,
+        limit_name=limit_name,
+    ):
+        record = records.get(candidate_name)
+        if record is not None:
+            return record
+    return None
+
+
 def estimate_capacity_from_pjstat_limit(
     stdout: str,
     *,
     max_active_jobs: int,
     group: str | None = None,
+    capacity_mode: str = "single",
+    limit_name: str | None = None,
 ) -> QueueCapacity:
     """Estimate group-wide queue capacity from ``pjstat --limit`` output."""
 
     records = parse_pjstat_limit_records(stdout, group=group)
-    record = records.get(_QUEUE_LIMIT_NAME)
+    record = _select_limit_record(
+        records,
+        capacity_mode=capacity_mode,
+        limit_name=limit_name,
+    )
     if record is None:
-        raise ValueError(f"pjstat --limit output did not contain {_QUEUE_LIMIT_NAME!r}")
+        expected_names = ", ".join(
+            repr(name)
+            for name in _limit_names_for_capacity_mode(
+                capacity_mode=capacity_mode,
+                limit_name=limit_name,
+            )
+        )
+        raise ValueError(f"pjstat --limit output did not contain any of {expected_names}")
 
     limit = int(max_active_jobs) if record.limit is None else record.limit
     available_slots = max(0, limit - record.alloc)
@@ -137,6 +187,8 @@ class FugakuQueueProbe:
     project: str | None = None
     user: str | None = None
     queue: str | None = None
+    capacity_mode: str = "single"
+    limit_name: str | None = None
 
     def get_capacity(self) -> QueueCapacity:
         """Return a conservative capacity estimate from ``pjstat --limit``."""
@@ -161,9 +213,11 @@ class FugakuQueueProbe:
                 stdout,
                 max_active_jobs=self.max_active_jobs,
                 group=self.project,
+                capacity_mode=self.capacity_mode,
+                limit_name=self.limit_name,
             )
-        except Exception as exc:
-            return self._zero_capacity(raw_output=f"{stdout}\n{exc}".strip())
+        except Exception:
+            return self._zero_capacity(raw_output=stdout)
 
     def _zero_capacity(self, *, raw_output: str | None) -> QueueCapacity:
         return QueueCapacity(
