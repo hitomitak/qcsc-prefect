@@ -573,9 +573,12 @@ class BulkJobRegistry:
 
     def reset_jobs_for_rerun(
         self,
-        statuses: Sequence[BulkJobStatus | str] | None = None,
         *,
+        job_keys: Sequence[str] | None = None,
+        statuses: Sequence[BulkJobStatus | str] | None = None,
         to_status: BulkJobStatus | str = BulkJobStatus.PENDING,
+        clear_scheduler_ids: bool = True,
+        clear_error: bool = False,
     ) -> int:
         target_status = _coerce_status(to_status)
         source_statuses = _coerce_statuses(
@@ -586,30 +589,51 @@ class BulkJobRegistry:
         if not source_statuses:
             return 0
 
+        reset_job_keys = None if job_keys is None else [str(job_key) for job_key in job_keys]
+        if reset_job_keys is not None and not reset_job_keys:
+            return 0
+
         now = _utcnow_iso()
         source_status_values = _status_values(tuple(source_statuses))
+        set_clauses = [
+            "status = ?",
+            "submit_attempts = 0",
+            "monitor_attempts = 0",
+            "updated_at = ?",
+        ]
+        params: list[Any] = [target_status.value, now]
+
+        if clear_scheduler_ids:
+            set_clauses.extend(
+                [
+                    "scheduler_job_id = NULL",
+                    "submitted_at = NULL",
+                    "started_at = NULL",
+                    "finished_at = NULL",
+                    "submit_mode = 'single'",
+                    "bulk_group_key = NULL",
+                    "bulk_parent_job_id = NULL",
+                    "bulk_index = NULL",
+                    "scheduler_subjob_id = NULL",
+                ]
+            )
+        if clear_error:
+            set_clauses.append("last_error = NULL")
+
+        where_clauses = [f"status IN ({self._placeholders(source_status_values)})"]
+        params.extend(source_status_values)
+        if reset_job_keys is not None:
+            where_clauses.append(f"job_key IN ({self._placeholders(reset_job_keys)})")
+            params.extend(reset_job_keys)
+
         with self._connect() as conn:
             cursor = conn.execute(
                 f"""
                 UPDATE bulk_jobs
-                SET
-                    status = ?,
-                    scheduler_job_id = NULL,
-                    submit_attempts = 0,
-                    monitor_attempts = 0,
-                    submitted_at = NULL,
-                    started_at = NULL,
-                    finished_at = NULL,
-                    last_error = NULL,
-                    submit_mode = 'single',
-                    bulk_group_key = NULL,
-                    bulk_parent_job_id = NULL,
-                    bulk_index = NULL,
-                    scheduler_subjob_id = NULL,
-                    updated_at = ?
-                WHERE status IN ({self._placeholders(source_status_values)})
+                SET {", ".join(set_clauses)}
+                WHERE {" AND ".join(where_clauses)}
                 """,
-                [target_status.value, now, *source_status_values],
+                params,
             )
         return int(cursor.rowcount)
 

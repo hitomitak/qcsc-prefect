@@ -835,15 +835,16 @@ async def submit_job_from_blocks(
     )
 
     if registry is not None:
-        registry.upsert_jobs(
-            [
-                BulkJobSpec(
-                    job_key=job_key,
-                    work_dir=Path(work_dir),
-                    command_args=dict(command_args or {}),
-                )
-            ]
-        )
+        if registry.get_job(job_key) is None:
+            registry.upsert_jobs(
+                [
+                    BulkJobSpec(
+                        job_key=job_key,
+                        work_dir=Path(work_dir),
+                        command_args=dict(command_args or {}),
+                    )
+                ]
+            )
         _ensure_registry_can_submit(registry=registry, job_key=job_key)
 
     prepared = await _prepare_job_from_blocks(
@@ -1333,7 +1334,9 @@ async def run_jobs_from_blocks_bulk(
     This API submits and monitors scheduler jobs from a shared pending pool. It
     does not create one Prefect task per scheduler job, and wave identifiers on
     ``BulkJobSpec`` remain registry metadata for downstream workflow readiness
-    checks rather than submit units.
+    checks rather than submit units. The default ``submit_mode="single"`` keeps
+    using one scheduler submit per logical job. Fugaku native bulk submission is
+    an explicit opt-in path via ``submit_mode="native_bulk"``.
     """
 
     registry = BulkJobRegistry(registry_path)

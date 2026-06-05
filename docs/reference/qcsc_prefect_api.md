@@ -72,7 +72,15 @@ packages. Native Qiskit primitives are documented separately in
     options:
       show_source: false
 
+::: qcsc_prefect_executor.bulk.BulkTickResult
+    options:
+      show_source: false
+
 ::: qcsc_prefect_executor.bulk.BulkJobRegistry
+    options:
+      show_source: false
+
+::: qcsc_prefect_executor.bulk.GlobalFugakuBulkRunner
     options:
       show_source: false
 
