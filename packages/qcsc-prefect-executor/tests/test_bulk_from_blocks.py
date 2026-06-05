@@ -405,6 +405,18 @@ def test_monitor_jobs_many_maps_scheduler_states(monkeypatch):
     }
 
 
+def test_bulk_public_api_exports_from_blocks_helpers():
+    from qcsc_prefect_executor.bulk import (
+        monitor_jobs_many,
+        run_jobs_from_blocks_bulk,
+        submit_job_from_blocks,
+    )
+
+    assert callable(monitor_jobs_many)
+    assert callable(run_jobs_from_blocks_bulk)
+    assert callable(submit_job_from_blocks)
+
+
 def test_fugaku_history_verbose_rows_parse_ext_jobs_without_success_evidence():
     rows = mod._parse_fugaku_pjstat_rows(FUGAKU_HISTORY_VERBOSE_OUTPUT)
 
