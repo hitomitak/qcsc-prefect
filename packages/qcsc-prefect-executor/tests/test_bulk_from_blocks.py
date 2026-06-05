@@ -598,6 +598,71 @@ def test_monitor_jobs_many_updates_unknown_registry_record(tmp_path: Path, monke
     assert registry.status_counts() == {BulkJobStatus.SUCCEEDED.value: 1}
 
 
+def test_monitor_jobs_many_keeps_succeeded_registry_record_succeeded(tmp_path: Path, monkeypatch):
+    _patch_block_loading(monkeypatch, hpc_target="fugaku")
+
+    async def fake_query_scheduler_statuses(*, hpc_target: str, scheduler_job_ids: list[str]):
+        return {"12345[0]": {"JOB_ID": "12345[0]", "ST": "EXT"}}
+
+    monkeypatch.setattr(mod, "_query_scheduler_statuses", fake_query_scheduler_statuses)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    registry.upsert_jobs([BulkJobSpec(job_key="job-1", work_dir=tmp_path / "job-1")])
+    scheduler_subjob_id = _mark_native_subjob_submitted(registry, "job-1")
+    registry.mark_succeeded("job-1")
+
+    statuses = asyncio.run(
+        mod.monitor_jobs_many(
+            hpc_profile_block="hpc",
+            scheduler_job_ids=[scheduler_subjob_id],
+            registry=registry,
+        )
+    )
+
+    record = registry.get_job("job-1")
+    assert statuses[scheduler_subjob_id] == BulkJobStatus.SUCCEEDED
+    assert record is not None
+    assert record.status == BulkJobStatus.SUCCEEDED
+
+
+def test_monitor_jobs_many_recovers_failed_record_when_expected_output_appears(
+    tmp_path: Path, monkeypatch
+):
+    _patch_block_loading(monkeypatch, hpc_target="fugaku")
+
+    async def fake_query_scheduler_statuses(*, hpc_target: str, scheduler_job_ids: list[str]):
+        return {"12345[0]": {"JOB_ID": "12345[0]", "ST": "EXT"}}
+
+    monkeypatch.setattr(mod, "_query_scheduler_statuses", fake_query_scheduler_statuses)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    work_dir = tmp_path / "job-1"
+    registry.upsert_jobs(
+        [
+            BulkJobSpec(
+                job_key="job-1",
+                work_dir=work_dir,
+                expected_outputs=[Path("done.txt")],
+            )
+        ]
+    )
+    scheduler_subjob_id = _mark_native_subjob_submitted(registry, "job-1")
+    registry.mark_failed("job-1", error="previous missing output")
+    work_dir.mkdir()
+    (work_dir / "done.txt").write_text("ok")
+
+    statuses = asyncio.run(
+        mod.monitor_jobs_many(
+            hpc_profile_block="hpc",
+            scheduler_job_ids=[scheduler_subjob_id],
+            registry=registry,
+        )
+    )
+
+    record = registry.get_job("job-1")
+    assert statuses[scheduler_subjob_id] == BulkJobStatus.SUCCEEDED
+    assert record is not None
+    assert record.status == BulkJobStatus.SUCCEEDED
+
+
 def test_monitor_jobs_many_updates_registry_by_scheduler_subjob_id(tmp_path: Path, monkeypatch):
     _patch_block_loading(monkeypatch, hpc_target="fugaku")
 

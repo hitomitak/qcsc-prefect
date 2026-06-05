@@ -986,13 +986,13 @@ def _monitor_status_from_scheduler_row(
     return status, error
 
 
-def _monitorable_records_by_scheduler_id(
+def _records_by_scheduler_id(
     registry: BulkJobRegistry | None,
 ) -> dict[str, Any]:
     if registry is None:
         return {}
     records_by_scheduler_id: dict[str, Any] = {}
-    for record in registry.get_monitorable_jobs():
+    for record in registry.get_all_jobs():
         scheduler_id = record.effective_scheduler_job_id
         if scheduler_id:
             records_by_scheduler_id[str(scheduler_id)] = record
@@ -1057,13 +1057,16 @@ async def monitor_jobs_many(
         scheduler_rows = {}
         query_error = _exception_text(exc)
 
-    records_by_scheduler_id = _monitorable_records_by_scheduler_id(registry)
+    records_by_scheduler_id = _records_by_scheduler_id(registry)
     results: dict[str, BulkJobStatus] = {}
 
     for scheduler_job_id in requested_ids:
         row = scheduler_rows.get(scheduler_job_id)
         record = records_by_scheduler_id.get(scheduler_job_id)
-        if row is not None:
+        if record is not None and record.status == BulkJobStatus.SUCCEEDED:
+            status = BulkJobStatus.SUCCEEDED
+            error = None
+        elif row is not None:
             status, error = _monitor_status_from_scheduler_row(
                 hpc_target=hpc_target,
                 row=row,
@@ -1136,11 +1139,13 @@ async def run_jobs_from_blocks_bulk(
     next_refill_at = 0.0
 
     while not registry.all_terminal():
-        monitorable_jobs = [job for job in registry.get_monitorable_jobs() if job.scheduler_job_id]
+        monitorable_jobs = [
+            job for job in registry.get_monitorable_jobs() if job.effective_scheduler_job_id
+        ]
         if monitorable_jobs:
             await monitor_jobs_many(
                 hpc_profile_block=hpc_profile_block,
-                scheduler_job_ids=[str(job.scheduler_job_id) for job in monitorable_jobs],
+                scheduler_job_ids=[str(job.effective_scheduler_job_id) for job in monitorable_jobs],
                 registry=registry,
             )
 

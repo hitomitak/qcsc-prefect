@@ -170,9 +170,7 @@ def _run_bulk(
     )
 
 
-def test_run_jobs_from_blocks_bulk_submits_only_up_to_queue_capacity(
-    tmp_path: Path, monkeypatch
-):
+def test_run_jobs_from_blocks_bulk_submits_only_up_to_queue_capacity(tmp_path: Path, monkeypatch):
     registry_path = tmp_path / "bulk.sqlite"
     submitted: list[str] = []
     active_counts: list[int] = []
@@ -193,9 +191,7 @@ def test_run_jobs_from_blocks_bulk_submits_only_up_to_queue_capacity(
     assert result.succeeded == 3
 
 
-def test_run_jobs_from_blocks_bulk_respects_max_submit_per_refill(
-    tmp_path: Path, monkeypatch
-):
+def test_run_jobs_from_blocks_bulk_respects_max_submit_per_refill(tmp_path: Path, monkeypatch):
     registry_path = tmp_path / "bulk.sqlite"
     submitted: list[str] = []
     monitor_calls: list[list[str]] = []
@@ -217,9 +213,7 @@ def test_run_jobs_from_blocks_bulk_respects_max_submit_per_refill(
     assert result.succeeded == 3
 
 
-def test_queue_full_marks_submit_deferred_and_retries_later(
-    tmp_path: Path, monkeypatch
-):
+def test_queue_full_marks_submit_deferred_and_retries_later(tmp_path: Path, monkeypatch):
     registry_path = tmp_path / "bulk.sqlite"
     submitted: list[str] = []
     _install_fake_submit_and_monitor(
@@ -278,9 +272,7 @@ def test_completed_jobs_are_not_resubmitted_after_restart(tmp_path: Path, monkey
     assert result.succeeded == 2
 
 
-def test_active_jobs_are_monitored_after_restart_not_resubmitted(
-    tmp_path: Path, monkeypatch
-):
+def test_active_jobs_are_monitored_after_restart_not_resubmitted(tmp_path: Path, monkeypatch):
     registry_path = tmp_path / "bulk.sqlite"
     registry = BulkJobRegistry(registry_path)
     registry.upsert_jobs([_spec(tmp_path, "job-1")])
@@ -359,9 +351,54 @@ def test_active_jobs_are_passed_to_monitor_many_in_batches(tmp_path: Path, monke
     assert result.succeeded == 2
 
 
-def test_all_jobs_eventually_succeeded_returns_bulk_run_result(
-    tmp_path: Path, monkeypatch
-):
+def test_native_bulk_jobs_are_monitored_by_scheduler_subjob_id(tmp_path: Path, monkeypatch):
+    registry_path = tmp_path / "bulk.sqlite"
+    registry = BulkJobRegistry(registry_path)
+    registry.upsert_jobs([_spec(tmp_path, "job-0"), _spec(tmp_path, "job-1")])
+    for index in range(2):
+        registry.mark_submitted(
+            f"job-{index}",
+            "12345",
+            submit_mode="native_bulk",
+            bulk_group_key="group-1",
+            bulk_parent_job_id="12345",
+            bulk_index=index,
+            scheduler_subjob_id=f"12345[{index}]",
+        )
+
+    submitted: list[str] = []
+    monitor_calls: list[list[str]] = []
+
+    async def fake_submit_job_from_blocks(**_kwargs):
+        raise AssertionError("active native bulk jobs must not be resubmitted")
+
+    async def fake_monitor_jobs_many(
+        *,
+        hpc_profile_block: str,
+        scheduler_job_ids: list[str],
+        registry: BulkJobRegistry | None = None,
+    ) -> dict[str, BulkJobStatus]:
+        monitor_calls.append(list(scheduler_job_ids))
+        assert registry is not None
+        for job_key in ["job-0", "job-1"]:
+            registry.mark_succeeded(job_key)
+        return {scheduler_job_id: BulkJobStatus.SUCCEEDED for scheduler_job_id in scheduler_job_ids}
+
+    monkeypatch.setattr(mod, "submit_job_from_blocks", fake_submit_job_from_blocks)
+    monkeypatch.setattr(mod, "monitor_jobs_many", fake_monitor_jobs_many)
+
+    result = _run_bulk(
+        tmp_path=tmp_path,
+        jobs=[_spec(tmp_path, "job-0"), _spec(tmp_path, "job-1")],
+        queue_probe=_RegistryCapacityProbe(registry_path, max_active_jobs=2),
+    )
+
+    assert submitted == []
+    assert monitor_calls == [["12345[0]", "12345[1]"]]
+    assert result.succeeded == 2
+
+
+def test_all_jobs_eventually_succeeded_returns_bulk_run_result(tmp_path: Path, monkeypatch):
     registry_path = tmp_path / "bulk.sqlite"
     submitted: list[str] = []
     _install_fake_submit_and_monitor(monkeypatch, submitted=submitted)
