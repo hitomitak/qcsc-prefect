@@ -299,9 +299,7 @@ def _ensure_registry_can_submit(*, registry: BulkJobRegistry, job_key: str) -> N
         return
 
     scheduler_part = (
-        f", scheduler_job_id={record.scheduler_job_id}"
-        if record.scheduler_job_id
-        else ""
+        f", scheduler_job_id={record.scheduler_job_id}" if record.scheduler_job_id else ""
     )
     raise DuplicateJobKeyError(
         f"Bulk job key {job_key!r} already has status {record.status.value}"
@@ -665,14 +663,123 @@ def _parse_fugaku_pjstat_rows(stdout: str) -> dict[str, dict[str, Any]]:
     return fugaku_runtime.parse_pjstat_rows(stdout)
 
 
-async def _query_fugaku_history_statuses() -> dict[str, dict[str, Any]]:
+_FUGAKU_SUBJOB_ID_RE = re.compile(r"^(\d+)\[(\d+)\]$")
+_FUGAKU_SUBJOB_RANGE_RE = re.compile(r"^(\d+)\[(\d+)-(\d+)\]$")
+_PARENT_FALLBACK_JOB_ID_KEY = "_qcsc_parent_fallback_job_id"
+
+
+def _parse_fugaku_subjob_id(job_id: str) -> tuple[str, int] | None:
+    match = _FUGAKU_SUBJOB_ID_RE.match(str(job_id).strip())
+    if match is None:
+        return None
+    return match.group(1), int(match.group(2))
+
+
+def _parse_fugaku_subjob_range(job_id: str) -> tuple[str, int, int] | None:
+    match = _FUGAKU_SUBJOB_RANGE_RE.match(str(job_id).strip())
+    if match is None:
+        return None
+    start = int(match.group(2))
+    end = int(match.group(3))
+    if end < start:
+        return None
+    return match.group(1), start, end
+
+
+def _format_fugaku_subjob_ranges(parent_job_id: str, indices: list[int]) -> list[str]:
+    if not indices:
+        return []
+
+    formatted: list[str] = []
+    sorted_indices = sorted(set(indices))
+    range_start = sorted_indices[0]
+    previous = range_start
+    for index in sorted_indices[1:]:
+        if index == previous + 1:
+            previous = index
+            continue
+
+        formatted.append(
+            f"{parent_job_id}[{range_start}]"
+            if range_start == previous
+            else f"{parent_job_id}[{range_start}-{previous}]"
+        )
+        range_start = previous = index
+
+    formatted.append(
+        f"{parent_job_id}[{range_start}]"
+        if range_start == previous
+        else f"{parent_job_id}[{range_start}-{previous}]"
+    )
+    return formatted
+
+
+def _fugaku_pjstat_query_ids(scheduler_job_ids: list[str]) -> list[str]:
+    parent_indices: dict[str, list[int]] = {}
+    passthrough: list[str] = []
+
+    for scheduler_job_id in dict.fromkeys(str(job_id).strip() for job_id in scheduler_job_ids):
+        if not scheduler_job_id:
+            continue
+        parsed_subjob = _parse_fugaku_subjob_id(scheduler_job_id)
+        if parsed_subjob is not None:
+            parent_job_id, bulk_index = parsed_subjob
+            parent_indices.setdefault(parent_job_id, []).append(bulk_index)
+            continue
+
+        parsed_range = _parse_fugaku_subjob_range(scheduler_job_id)
+        if parsed_range is not None:
+            parent_job_id, start, end = parsed_range
+            passthrough.append(f"{parent_job_id}[{start}-{end}]")
+            continue
+
+        passthrough.append(scheduler_job_id)
+
+    query_ids = list(passthrough)
+    for parent_job_id, indices in parent_indices.items():
+        query_ids.extend(_format_fugaku_subjob_ranges(parent_job_id, indices))
+    return query_ids
+
+
+def _select_fugaku_rows_for_requested_ids(
+    *,
+    requested_ids: list[str],
+    rows: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    selected: dict[str, dict[str, Any]] = {}
+    for scheduler_job_id in requested_ids:
+        if scheduler_job_id in rows:
+            selected[scheduler_job_id] = rows[scheduler_job_id]
+            continue
+
+        parsed_subjob = _parse_fugaku_subjob_id(scheduler_job_id)
+        if parsed_subjob is None:
+            continue
+
+        parent_job_id, _bulk_index = parsed_subjob
+        parent_row = rows.get(parent_job_id)
+        if parent_row is None:
+            continue
+
+        fallback_row = dict(parent_row)
+        fallback_row["JOB_ID"] = scheduler_job_id
+        fallback_row[_PARENT_FALLBACK_JOB_ID_KEY] = parent_job_id
+        selected[scheduler_job_id] = fallback_row
+
+    return selected
+
+
+async def _query_fugaku_history_statuses(
+    query_ids: list[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    suffix = tuple(query_ids or [])
     for args in [
         ("pjstat", "-v", "-H"),
         ("pjstat", "-H", "-v"),
         ("pjstat", "-H"),
     ]:
         try:
-            stdout = await fugaku_runtime.run_command(*args)
+            stdout = await fugaku_runtime.run_command(*args, *suffix)
         except Exception:
             continue
         return _parse_fugaku_pjstat_rows(stdout)
@@ -745,12 +852,16 @@ async def _query_scheduler_statuses(
 
     requested = set(scheduler_job_ids)
     if hpc_target == "fugaku":
-        active_stdout = await fugaku_runtime.run_command("pjstat", "-v")
+        query_ids = _fugaku_pjstat_query_ids(scheduler_job_ids)
+        active_stdout = await fugaku_runtime.run_command("pjstat", "-v", *query_ids)
         rows = _parse_fugaku_pjstat_rows(active_stdout)
-        missing = requested - set(rows)
+        missing = sorted(requested - set(rows))
         if missing:
-            rows.update(await _query_fugaku_history_statuses())
-        return {job_id: row for job_id, row in rows.items() if job_id in requested}
+            rows.update(await _query_fugaku_history_statuses(_fugaku_pjstat_query_ids(missing)))
+        return _select_fugaku_rows_for_requested_ids(
+            requested_ids=scheduler_job_ids,
+            rows=rows,
+        )
 
     if hpc_target == "slurm":
         stdout = await slurm_runtime.run_command(
@@ -778,20 +889,14 @@ async def _query_scheduler_statuses(
 def _bulk_status_from_scheduler_row(hpc_target: str, row: dict[str, Any]) -> BulkJobStatus:
     if hpc_target == "fugaku":
         state = str(row.get("ST", "")).strip().upper()
-        exit_code = str(row.get("EC", "")).strip()
-        if state in {"ACC", "QUE", "Q", "HLD", "RNA"}:
+        if state == "ACC":
+            return BulkJobStatus.SUBMITTED
+        if state in {"QUE", "Q", "HLD"}:
             return BulkJobStatus.QUEUED
-        if state in {"RUN", "R", "RNE", "RNO", "RNP", "RSM", "SPD", "SPP"}:
+        if state in {"RUN", "R", "RNA", "RNE", "RNO", "RNP", "RSM", "SPD", "SPP"}:
             return BulkJobStatus.RUNNING
         if state == "EXT":
-            if "EC" not in row:
-                return BulkJobStatus.UNKNOWN
-            reason = str(row.get("REASON", "")).strip().upper()
-            if reason not in {"", "-"} and any(
-                marker in reason for marker in {"EXC", "FAIL", "ERROR", "TIMEOUT"}
-            ):
-                return BulkJobStatus.FAILED
-            return BulkJobStatus.SUCCEEDED if exit_code in {"", "-", "0"} else BulkJobStatus.FAILED
+            return BulkJobStatus.UNKNOWN
         if state == "CCL":
             return BulkJobStatus.CANCELLED
         if state in {"ERR", "RJT"}:
@@ -838,10 +943,47 @@ def _record_has_success_evidence(record) -> bool:
     if not record.expected_outputs:
         return False
     paths = [
-        path if path.is_absolute() else record.work_dir / path
-        for path in record.expected_outputs
+        path if path.is_absolute() else record.work_dir / path for path in record.expected_outputs
     ]
     return all(path.exists() for path in paths)
+
+
+def _monitor_status_from_scheduler_row(
+    *,
+    hpc_target: str,
+    row: dict[str, Any],
+    record: Any | None,
+) -> tuple[BulkJobStatus, str | None]:
+    status = _bulk_status_from_scheduler_row(hpc_target, row)
+    if hpc_target != "fugaku":
+        error = None if status != BulkJobStatus.UNKNOWN else "unknown scheduler state"
+        return status, error
+
+    state = str(row.get("ST", "")).strip().upper()
+    parent_fallback_job_id = row.get(_PARENT_FALLBACK_JOB_ID_KEY)
+    if parent_fallback_job_id is not None:
+        if record is not None and _record_has_success_evidence(record):
+            return BulkJobStatus.SUCCEEDED, None
+        return (
+            BulkJobStatus.UNKNOWN,
+            f"subjob row was not found; parent job {parent_fallback_job_id} is weak evidence only",
+        )
+
+    if state == "EXT":
+        if record is not None and record.expected_outputs:
+            if _record_has_success_evidence(record):
+                return BulkJobStatus.SUCCEEDED, None
+            return (
+                BulkJobStatus.FAILED,
+                "PJM reported EXT but expected outputs are missing",
+            )
+        return (
+            BulkJobStatus.UNKNOWN,
+            "PJM reported EXT without expected_outputs evidence",
+        )
+
+    error = None if status != BulkJobStatus.UNKNOWN else "unknown scheduler state"
+    return status, error
 
 
 def _monitorable_records_by_scheduler_id(
@@ -849,11 +991,12 @@ def _monitorable_records_by_scheduler_id(
 ) -> dict[str, Any]:
     if registry is None:
         return {}
-    return {
-        str(record.scheduler_job_id): record
-        for record in registry.get_monitorable_jobs()
-        if record.scheduler_job_id
-    }
+    records_by_scheduler_id: dict[str, Any] = {}
+    for record in registry.get_monitorable_jobs():
+        scheduler_id = record.effective_scheduler_job_id
+        if scheduler_id:
+            records_by_scheduler_id[str(scheduler_id)] = record
+    return records_by_scheduler_id
 
 
 def _update_registry_for_monitor_status(
@@ -921,8 +1064,11 @@ async def monitor_jobs_many(
         row = scheduler_rows.get(scheduler_job_id)
         record = records_by_scheduler_id.get(scheduler_job_id)
         if row is not None:
-            status = _bulk_status_from_scheduler_row(hpc_target, row)
-            error = None if status != BulkJobStatus.UNKNOWN else "unknown scheduler state"
+            status, error = _monitor_status_from_scheduler_row(
+                hpc_target=hpc_target,
+                row=row,
+                record=record,
+            )
         elif record is not None and _record_has_success_evidence(record):
             status = BulkJobStatus.SUCCEEDED
             error = None
@@ -990,15 +1136,11 @@ async def run_jobs_from_blocks_bulk(
     next_refill_at = 0.0
 
     while not registry.all_terminal():
-        monitorable_jobs = [
-            job for job in registry.get_monitorable_jobs() if job.scheduler_job_id
-        ]
+        monitorable_jobs = [job for job in registry.get_monitorable_jobs() if job.scheduler_job_id]
         if monitorable_jobs:
             await monitor_jobs_many(
                 hpc_profile_block=hpc_profile_block,
-                scheduler_job_ids=[
-                    str(job.scheduler_job_id) for job in monitorable_jobs
-                ],
+                scheduler_job_ids=[str(job.scheduler_job_id) for job in monitorable_jobs],
                 registry=registry,
             )
 

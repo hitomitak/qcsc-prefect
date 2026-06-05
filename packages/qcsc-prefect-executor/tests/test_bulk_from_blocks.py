@@ -90,6 +90,26 @@ def _patch_block_loading(monkeypatch, *, hpc_target: str = "slurm") -> None:
     monkeypatch.setattr(mod, "HPCProfileBlock", _HpcAPI)
 
 
+def _mark_native_subjob_submitted(
+    registry: BulkJobRegistry,
+    job_key: str,
+    *,
+    parent_job_id: str = "12345",
+    bulk_index: int = 0,
+) -> str:
+    scheduler_subjob_id = f"{parent_job_id}[{bulk_index}]"
+    registry.mark_submitted(
+        job_key,
+        parent_job_id,
+        submit_mode="native_bulk",
+        bulk_group_key=f"{parent_job_id}-group",
+        bulk_parent_job_id=parent_job_id,
+        bulk_index=bulk_index,
+        scheduler_subjob_id=scheduler_subjob_id,
+    )
+    return scheduler_subjob_id
+
+
 class _SubmitRuntimeStub:
     def __init__(self, *, job_id: str = "12345", error: Exception | None = None) -> None:
         self.job_id = job_id
@@ -165,9 +185,7 @@ def test_submit_job_from_blocks_does_not_wait_for_completion(tmp_path: Path, mon
     assert runtime.wait_calls == 0
 
 
-def test_submit_job_from_blocks_rejects_reused_succeeded_job_key(
-    tmp_path: Path, monkeypatch
-):
+def test_submit_job_from_blocks_rejects_reused_succeeded_job_key(tmp_path: Path, monkeypatch):
     _patch_block_loading(monkeypatch)
     runtime = _SubmitRuntimeStub(job_id="new-job-id")
     _patch_slurm_runtime(monkeypatch, runtime)
@@ -199,9 +217,7 @@ def test_submit_job_from_blocks_rejects_reused_succeeded_job_key(
     assert record.scheduler_job_id == "old-job-id"
 
 
-def test_submit_job_from_blocks_rejects_reused_active_job_key(
-    tmp_path: Path, monkeypatch
-):
+def test_submit_job_from_blocks_rejects_reused_active_job_key(tmp_path: Path, monkeypatch):
     _patch_block_loading(monkeypatch)
     runtime = _SubmitRuntimeStub(job_id="new-job-id")
     _patch_slurm_runtime(monkeypatch, runtime)
@@ -228,9 +244,7 @@ def test_submit_job_from_blocks_rejects_reused_active_job_key(
     assert runtime.submit_calls == []
 
 
-def test_submit_job_from_blocks_allows_submit_deferred_retry(
-    tmp_path: Path, monkeypatch
-):
+def test_submit_job_from_blocks_allows_submit_deferred_retry(tmp_path: Path, monkeypatch):
     _patch_block_loading(monkeypatch)
     runtime = _SubmitRuntimeStub(job_id="new-job-id")
     _patch_slurm_runtime(monkeypatch, runtime)
@@ -391,28 +405,24 @@ def test_monitor_jobs_many_maps_scheduler_states(monkeypatch):
     }
 
 
-def test_fugaku_history_verbose_rows_map_completed_jobs():
+def test_fugaku_history_verbose_rows_parse_ext_jobs_without_success_evidence():
     rows = mod._parse_fugaku_pjstat_rows(FUGAKU_HISTORY_VERBOSE_OUTPUT)
 
     assert rows["49047829"]["EC"] == "0"
     assert rows["49047829"]["REASON"] == "-"
-    assert mod._bulk_status_from_scheduler_row(
-        "fugaku", rows["49047829"]
-    ) == BulkJobStatus.SUCCEEDED
+    assert mod._bulk_status_from_scheduler_row("fugaku", rows["49047829"]) == BulkJobStatus.UNKNOWN
     assert rows["49047939"]["PC"] == "11"
     assert rows["49047939"]["REASON"] == "ELAPSE LIMIT EXC"
-    assert mod._bulk_status_from_scheduler_row(
-        "fugaku", rows["49047939"]
-    ) == BulkJobStatus.FAILED
+    assert mod._bulk_status_from_scheduler_row("fugaku", rows["49047939"]) == BulkJobStatus.UNKNOWN
 
 
 def test_fugaku_scheduler_states_map_to_bulk_statuses():
     expected = {
-        "ACC": BulkJobStatus.QUEUED,
+        "ACC": BulkJobStatus.SUBMITTED,
         "QUE": BulkJobStatus.QUEUED,
         "Q": BulkJobStatus.QUEUED,
         "HLD": BulkJobStatus.QUEUED,
-        "RNA": BulkJobStatus.QUEUED,
+        "RNA": BulkJobStatus.RUNNING,
         "RUN": BulkJobStatus.RUNNING,
         "R": BulkJobStatus.RUNNING,
         "RNE": BulkJobStatus.RUNNING,
@@ -431,9 +441,10 @@ def test_fugaku_scheduler_states_map_to_bulk_statuses():
 
 
 def test_fugaku_ext_without_exit_code_is_unknown():
-    assert mod._bulk_status_from_scheduler_row(
-        "fugaku", {"JOB_ID": "49074516", "ST": "EXT"}
-    ) == BulkJobStatus.UNKNOWN
+    assert (
+        mod._bulk_status_from_scheduler_row("fugaku", {"JOB_ID": "49074516", "ST": "EXT"})
+        == BulkJobStatus.UNKNOWN
+    )
 
 
 def test_query_fugaku_scheduler_statuses_reads_history_for_missing_jobs(monkeypatch):
@@ -441,9 +452,9 @@ def test_query_fugaku_scheduler_statuses_reads_history_for_missing_jobs(monkeypa
 
     async def fake_run_command(*args: str, cwd: Path | None = None) -> str:
         calls.append(args)
-        if args == ("pjstat", "-v"):
+        if args == ("pjstat", "-v", "49047829", "49047939"):
             return "JOB_ID     JOB_NAME   MD ST  USER     GROUP\n"
-        if args == ("pjstat", "-v", "-H"):
+        if args == ("pjstat", "-v", "-H", "49047829", "49047939"):
             return FUGAKU_HISTORY_VERBOSE_OUTPUT
         raise AssertionError(f"unexpected command: {args}")
 
@@ -456,11 +467,35 @@ def test_query_fugaku_scheduler_statuses_reads_history_for_missing_jobs(monkeypa
         )
     )
 
-    assert calls == [("pjstat", "-v"), ("pjstat", "-v", "-H")]
+    assert calls == [
+        ("pjstat", "-v", "49047829", "49047939"),
+        ("pjstat", "-v", "-H", "49047829", "49047939"),
+    ]
     assert set(rows) == {"49047829", "49047939"}
-    assert mod._bulk_status_from_scheduler_row(
-        "fugaku", rows["49047829"]
-    ) == BulkJobStatus.SUCCEEDED
+    assert mod._bulk_status_from_scheduler_row("fugaku", rows["49047829"]) == BulkJobStatus.UNKNOWN
+
+
+def test_query_fugaku_scheduler_statuses_queries_subjob_range(monkeypatch):
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_run_command(*args: str, cwd: Path | None = None) -> str:
+        calls.append(args)
+        if args == ("pjstat", "-v", "12345[0-1]"):
+            return "12345[0] bulk NM RUN user group\n12345[1] bulk NM QUE user group\n"
+        raise AssertionError(f"unexpected command: {args}")
+
+    monkeypatch.setattr(mod.fugaku_runtime, "run_command", fake_run_command)
+
+    rows = asyncio.run(
+        mod._query_scheduler_statuses(
+            hpc_target="fugaku",
+            scheduler_job_ids=["12345[0]", "12345[1]"],
+        )
+    )
+
+    assert calls == [("pjstat", "-v", "12345[0-1]")]
+    assert rows["12345[0]"]["ST"] == "RUN"
+    assert rows["12345[1]"]["ST"] == "QUE"
 
 
 def test_monitor_jobs_many_updates_multiple_jobs_in_one_call(monkeypatch):
@@ -551,9 +586,139 @@ def test_monitor_jobs_many_updates_unknown_registry_record(tmp_path: Path, monke
     assert registry.status_counts() == {BulkJobStatus.SUCCEEDED.value: 1}
 
 
-def test_disappeared_job_with_valid_expected_outputs_becomes_succeeded(
-    tmp_path: Path, monkeypatch
-):
+def test_monitor_jobs_many_updates_registry_by_scheduler_subjob_id(tmp_path: Path, monkeypatch):
+    _patch_block_loading(monkeypatch, hpc_target="fugaku")
+
+    async def fake_query_scheduler_statuses(*, hpc_target: str, scheduler_job_ids: list[str]):
+        assert hpc_target == "fugaku"
+        assert scheduler_job_ids == ["12345[0]"]
+        return {"12345[0]": {"JOB_ID": "12345[0]", "ST": "RUN"}}
+
+    monkeypatch.setattr(mod, "_query_scheduler_statuses", fake_query_scheduler_statuses)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    registry.upsert_jobs([BulkJobSpec(job_key="job-1", work_dir=tmp_path / "job-1")])
+    scheduler_subjob_id = _mark_native_subjob_submitted(registry, "job-1")
+
+    statuses = asyncio.run(
+        mod.monitor_jobs_many(
+            hpc_profile_block="hpc",
+            scheduler_job_ids=[scheduler_subjob_id],
+            registry=registry,
+        )
+    )
+
+    record = registry.get_job("job-1")
+    assert statuses[scheduler_subjob_id] == BulkJobStatus.RUNNING
+    assert record is not None
+    assert record.status == BulkJobStatus.RUNNING
+
+
+def test_fugaku_ext_with_expected_output_becomes_succeeded(tmp_path: Path, monkeypatch):
+    _patch_block_loading(monkeypatch, hpc_target="fugaku")
+
+    async def fake_query_scheduler_statuses(*, hpc_target: str, scheduler_job_ids: list[str]):
+        return {"12345[0]": {"JOB_ID": "12345[0]", "ST": "EXT"}}
+
+    monkeypatch.setattr(mod, "_query_scheduler_statuses", fake_query_scheduler_statuses)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    work_dir = tmp_path / "job-1"
+    registry.upsert_jobs(
+        [
+            BulkJobSpec(
+                job_key="job-1",
+                work_dir=work_dir,
+                expected_outputs=[Path("done.txt")],
+            )
+        ]
+    )
+    scheduler_subjob_id = _mark_native_subjob_submitted(registry, "job-1")
+    work_dir.mkdir()
+    (work_dir / "done.txt").write_text("ok")
+
+    statuses = asyncio.run(
+        mod.monitor_jobs_many(
+            hpc_profile_block="hpc",
+            scheduler_job_ids=[scheduler_subjob_id],
+            registry=registry,
+        )
+    )
+
+    record = registry.get_job("job-1")
+    assert statuses[scheduler_subjob_id] == BulkJobStatus.SUCCEEDED
+    assert record is not None
+    assert record.status == BulkJobStatus.SUCCEEDED
+
+
+def test_fugaku_ext_with_missing_expected_output_becomes_failed(tmp_path: Path, monkeypatch):
+    _patch_block_loading(monkeypatch, hpc_target="fugaku")
+
+    async def fake_query_scheduler_statuses(*, hpc_target: str, scheduler_job_ids: list[str]):
+        return {"12345[0]": {"JOB_ID": "12345[0]", "ST": "EXT"}}
+
+    monkeypatch.setattr(mod, "_query_scheduler_statuses", fake_query_scheduler_statuses)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    registry.upsert_jobs(
+        [
+            BulkJobSpec(
+                job_key="job-1",
+                work_dir=tmp_path / "job-1",
+                expected_outputs=[Path("done.txt")],
+            )
+        ]
+    )
+    scheduler_subjob_id = _mark_native_subjob_submitted(registry, "job-1")
+
+    statuses = asyncio.run(
+        mod.monitor_jobs_many(
+            hpc_profile_block="hpc",
+            scheduler_job_ids=[scheduler_subjob_id],
+            registry=registry,
+        )
+    )
+
+    record = registry.get_job("job-1")
+    assert statuses[scheduler_subjob_id] == BulkJobStatus.FAILED
+    assert record is not None
+    assert record.status == BulkJobStatus.FAILED
+    assert record.last_error == "PJM reported EXT but expected outputs are missing"
+
+
+def test_fugaku_parent_only_fallback_does_not_mark_subjob_succeeded(tmp_path: Path, monkeypatch):
+    _patch_block_loading(monkeypatch, hpc_target="fugaku")
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_run_command(*args: str, cwd: Path | None = None) -> str:
+        calls.append(args)
+        if args == ("pjstat", "-v", "12345[0]"):
+            return "12345 bulk NM EXT user group\n"
+        if args == ("pjstat", "-v", "-H", "12345[0]"):
+            return ""
+        raise AssertionError(f"unexpected command: {args}")
+
+    monkeypatch.setattr(mod.fugaku_runtime, "run_command", fake_run_command)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    registry.upsert_jobs([BulkJobSpec(job_key="job-1", work_dir=tmp_path / "job-1")])
+    scheduler_subjob_id = _mark_native_subjob_submitted(registry, "job-1")
+
+    statuses = asyncio.run(
+        mod.monitor_jobs_many(
+            hpc_profile_block="hpc",
+            scheduler_job_ids=[scheduler_subjob_id],
+            registry=registry,
+        )
+    )
+
+    record = registry.get_job("job-1")
+    assert calls == [
+        ("pjstat", "-v", "12345[0]"),
+        ("pjstat", "-v", "-H", "12345[0]"),
+    ]
+    assert statuses[scheduler_subjob_id] == BulkJobStatus.UNKNOWN
+    assert record is not None
+    assert record.status == BulkJobStatus.UNKNOWN
+
+
+def test_disappeared_job_with_valid_expected_outputs_becomes_succeeded(tmp_path: Path, monkeypatch):
     _patch_block_loading(monkeypatch)
 
     async def fake_query_scheduler_statuses(*, hpc_target: str, scheduler_job_ids: list[str]):
@@ -589,9 +754,7 @@ def test_disappeared_job_with_valid_expected_outputs_becomes_succeeded(
     assert record.status == BulkJobStatus.SUCCEEDED
 
 
-def test_disappeared_job_without_success_evidence_becomes_unknown(
-    tmp_path: Path, monkeypatch
-):
+def test_disappeared_job_without_success_evidence_becomes_unknown(tmp_path: Path, monkeypatch):
     _patch_block_loading(monkeypatch)
 
     async def fake_query_scheduler_statuses(*, hpc_target: str, scheduler_job_ids: list[str]):
