@@ -15,6 +15,10 @@ from qcsc_prefect_executor.bulk.models import (
     BulkRunResult,
     SubmittedJob,
 )
+from qcsc_prefect_executor.bulk.native_manifest import (
+    NativeBulkManifestGroup,
+    create_native_bulk_group_manifests,
+)
 from qcsc_prefect_executor.bulk.registry import BulkJobRegistry
 
 __all__ = [
@@ -24,6 +28,7 @@ __all__ = [
     "BulkJobStatus",
     "BulkRunResult",
     "DuplicateJobKeyError",
+    "NativeBulkManifestGroup",
     "QueueFullError",
     "QueueAwareSubmitGate",
     "QueueCapacity",
@@ -31,4 +36,5 @@ __all__ = [
     "SubmittedJob",
     "SubmitError",
     "TemporarySubmitError",
+    "create_native_bulk_group_manifests",
 ]

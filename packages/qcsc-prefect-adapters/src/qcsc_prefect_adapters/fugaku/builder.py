@@ -8,6 +8,7 @@ from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 
 _ENV = make_env("qcsc_prefect_adapters.fugaku")
 _TEMPLATE = "batch.pjm.j2"
+_BULK_MANIFEST_TEMPLATE = "batch_bulk_manifest.pjm.j2"
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,47 @@ def render_script(
     template = _ENV.get_template(_TEMPLATE)
     kwargs = to_fugaku_template_kwargs(
         work_dir=work_dir,
+        exec_profile=exec_profile,
+        req=req,
+        script_basename=script_basename,
+    )
+    return template.render(**kwargs)
+
+
+def to_fugaku_manifest_bulk_template_kwargs(
+    *,
+    work_dir: Path,
+    bulk_manifest_dir: Path,
+    exec_profile: ExecutionProfile,
+    req: FugakuJobRequest,
+    script_basename: str = "batch_bulk.pjm",
+) -> dict:
+    """Build template variables for a manifest-driven Fugaku native bulk script."""
+
+    kwargs = to_fugaku_template_kwargs(
+        work_dir=work_dir,
+        exec_profile=exec_profile,
+        req=req,
+        script_basename=script_basename,
+    )
+    kwargs["bulk_manifest_dir"] = str(Path(bulk_manifest_dir).expanduser())
+    return kwargs
+
+
+def render_manifest_bulk_script(
+    *,
+    work_dir: Path,
+    bulk_manifest_dir: Path,
+    exec_profile: ExecutionProfile,
+    req: FugakuJobRequest,
+    script_basename: str = "batch_bulk.pjm",
+) -> str:
+    """Render a Fugaku native bulk script that selects a per-subjob manifest."""
+
+    template = _ENV.get_template(_BULK_MANIFEST_TEMPLATE)
+    kwargs = to_fugaku_manifest_bulk_template_kwargs(
+        work_dir=work_dir,
+        bulk_manifest_dir=bulk_manifest_dir,
         exec_profile=exec_profile,
         req=req,
         script_basename=script_basename,
