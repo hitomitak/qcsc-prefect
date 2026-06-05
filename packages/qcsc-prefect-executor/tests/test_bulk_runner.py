@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
+from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 from qcsc_prefect_core.queue import QueueCapacity
 from qcsc_prefect_executor import from_blocks as mod
 from qcsc_prefect_executor.bulk.exceptions import QueueFullError, TemporarySubmitError
@@ -44,14 +46,18 @@ def _spec(
     job_key: str,
     *,
     wave_id: str | None = None,
+    stage_id: str | None = None,
     priority: int = 0,
+    command_args: dict[str, Any] | None = None,
     expected_outputs: list[Path] | None = None,
 ) -> BulkJobSpec:
     return BulkJobSpec(
         job_key=job_key,
         work_dir=tmp_path / job_key,
         wave_id=wave_id,
+        stage_id=stage_id,
         priority=priority,
+        command_args=command_args or {},
         expected_outputs=expected_outputs or [],
     )
 
@@ -168,6 +174,153 @@ def _run_bulk(
             stop_on_first_failure=stop_on_first_failure,
         )
     )
+
+
+class _FixedCapacityProbe:
+    def __init__(self, available_slots: int) -> None:
+        self.available_slots = available_slots
+        self.calls = 0
+
+    def get_capacity(self) -> QueueCapacity:
+        self.calls += 1
+        return QueueCapacity(
+            max_active_jobs=self.available_slots,
+            current_active_jobs=0,
+            available_slots=self.available_slots,
+            raw_output="fixed capacity",
+        )
+
+
+class _NativeBulkSubmitRuntime:
+    def __init__(
+        self,
+        *,
+        parent_job_ids: list[str] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.parent_job_ids = parent_job_ids or ["9000", "9001", "9002", "9003"]
+        self.error = error
+        self.calls: list[dict[str, Any]] = []
+
+    async def submit_bulk(
+        self,
+        script_path: Path,
+        bulk_count: int,
+        *,
+        cwd: Path | None = None,
+    ) -> str:
+        self.calls.append(
+            {
+                "script_path": script_path,
+                "bulk_count": bulk_count,
+                "cwd": cwd,
+            }
+        )
+        if self.error is not None:
+            raise self.error
+        return self.parent_job_ids[len(self.calls) - 1]
+
+
+def _native_bulk_specs(tmp_path: Path, count: int) -> list[BulkJobSpec]:
+    return [
+        _spec(
+            tmp_path,
+            f"job-{index}",
+            stage_id="stage-a",
+            command_args={"index": index},
+            expected_outputs=[Path("done.marker")],
+        )
+        for index in range(count)
+    ]
+
+
+def _manifest_job_keys(call: dict[str, Any]) -> list[str]:
+    manifest_dir = Path(call["cwd"]) / "manifests"
+    return [
+        json.loads((manifest_dir / f"{index}.json").read_text())["job_key"]
+        for index in range(int(call["bulk_count"]))
+    ]
+
+
+def _install_native_bulk_fakes(
+    monkeypatch,
+    runtime: _NativeBulkSubmitRuntime,
+    *,
+    mark_pending_succeeded_after_monitor: bool = True,
+) -> None:
+    async def fake_resolve_submission_target(
+        *,
+        hpc_profile_block_name: str,
+        execution_profile_block_name: str,
+    ) -> mod.SubmissionTarget:
+        return mod.SubmissionTarget(
+            hpc_target="fugaku",
+            queue_name="small",
+            project="ra010014",
+        )
+
+    async def fake_prepare_job_from_blocks(
+        *,
+        command_block_name: str,
+        execution_profile_block_name: str,
+        hpc_profile_block_name: str,
+        work_dir: Path,
+        script_filename: str,
+        user_args: list[str] | None = None,
+        fugaku_job_name: str | None = None,
+        execution_profile_overrides: dict[str, Any] | None = None,
+    ) -> mod._PreparedBlockJob:
+        profile = ExecutionProfile(
+            command_key="native-bulk-command",
+            num_nodes=1,
+            mpiprocs=1,
+            walltime="00:05:00",
+            launcher="single",
+            arguments=["--manifest", '"$QCSC_BULK_MANIFEST"'],
+        )
+        req = mod.FugakuJobRequest(
+            queue_name="small",
+            project="ra010014",
+            executable="python",
+            job_name=fugaku_job_name or "native-bulk",
+        )
+        return mod._PreparedBlockJob(
+            submission_target=mod.SubmissionTarget(
+                hpc_target="fugaku",
+                queue_name="small",
+                project="ra010014",
+            ),
+            work_dir=Path(work_dir).expanduser().resolve(),
+            script_filename=mod.build_scheduler_script_filename(script_filename, "fugaku"),
+            exec_profile=profile,
+            req=req,
+        )
+
+    async def fake_monitor_jobs_many(
+        *,
+        hpc_profile_block: str,
+        scheduler_job_ids: list[str],
+        registry: BulkJobRegistry | None = None,
+    ) -> dict[str, BulkJobStatus]:
+        assert registry is not None
+        records_by_scheduler_id = {
+            record.effective_scheduler_job_id: record
+            for record in registry.get_all_jobs()
+            if record.effective_scheduler_job_id
+        }
+        for scheduler_job_id in scheduler_job_ids:
+            record = records_by_scheduler_id[scheduler_job_id]
+            registry.mark_succeeded(record.job_key)
+        if mark_pending_succeeded_after_monitor:
+            for record in registry.get_all_jobs():
+                if record.status.is_submit_candidate:
+                    registry.mark_succeeded(record.job_key)
+        return {scheduler_job_id: BulkJobStatus.SUCCEEDED for scheduler_job_id in scheduler_job_ids}
+
+    monkeypatch.setattr(mod, "resolve_submission_target", fake_resolve_submission_target)
+    monkeypatch.setattr(mod, "_prepare_job_from_blocks", fake_prepare_job_from_blocks)
+    monkeypatch.setattr(mod, "FugakuPJMRuntime", lambda: runtime)
+    monkeypatch.setattr(mod, "monitor_jobs_many", fake_monitor_jobs_many)
 
 
 def test_run_jobs_from_blocks_bulk_submits_only_up_to_queue_capacity(tmp_path: Path, monkeypatch):
@@ -396,6 +549,208 @@ def test_native_bulk_jobs_are_monitored_by_scheduler_subjob_id(tmp_path: Path, m
     assert submitted == []
     assert monitor_calls == [["12345[0]", "12345[1]"]]
     assert result.succeeded == 2
+
+
+def test_native_bulk_initial_submit_splits_fifo_groups_and_records_subjobs(
+    tmp_path: Path,
+    monkeypatch,
+):
+    registry_path = tmp_path / "bulk.sqlite"
+    runtime = _NativeBulkSubmitRuntime(parent_job_ids=["9000", "9001"])
+    _install_native_bulk_fakes(monkeypatch, runtime)
+
+    result = asyncio.run(
+        mod.run_jobs_from_blocks_bulk(
+            jobs=_native_bulk_specs(tmp_path, 5),
+            command_block="cmd",
+            execution_profile_block="exec",
+            hpc_profile_block="hpc",
+            registry_path=registry_path,
+            queue_probe=_FixedCapacityProbe(10),
+            submit_mode="native_bulk",
+            initial_submit_count=4,
+            max_submit_per_refill=1,
+            max_bulk_group_size=2,
+            poll_interval_seconds=0,
+            refill_interval_seconds=0,
+        )
+    )
+
+    assert [call["bulk_count"] for call in runtime.calls] == [2, 2]
+    assert [_manifest_job_keys(call) for call in runtime.calls] == [
+        ["job-0", "job-1"],
+        ["job-2", "job-3"],
+    ]
+
+    registry = BulkJobRegistry(registry_path)
+    job_0 = registry.get_job("job-0")
+    job_1 = registry.get_job("job-1")
+    job_2 = registry.get_job("job-2")
+    job_3 = registry.get_job("job-3")
+    assert job_0 is not None
+    assert job_1 is not None
+    assert job_2 is not None
+    assert job_3 is not None
+    assert job_0.scheduler_subjob_id == "9000[0]"
+    assert job_0.scheduler_job_id == "9000[0]"
+    assert job_1.scheduler_subjob_id == "9000[1]"
+    assert job_2.scheduler_subjob_id == "9001[0]"
+    assert job_3.scheduler_subjob_id == "9001[1]"
+    assert result.succeeded == 5
+
+
+def test_native_bulk_queue_full_marks_group_deferred(tmp_path: Path, monkeypatch):
+    registry_path = tmp_path / "bulk.sqlite"
+    runtime = _NativeBulkSubmitRuntime(error=RuntimeError("ru-accept job limit exceeded"))
+    _install_native_bulk_fakes(monkeypatch, runtime)
+
+    result = asyncio.run(
+        mod.run_jobs_from_blocks_bulk(
+            jobs=_native_bulk_specs(tmp_path, 2),
+            command_block="cmd",
+            execution_profile_block="exec",
+            hpc_profile_block="hpc",
+            registry_path=registry_path,
+            queue_probe=_FixedCapacityProbe(10),
+            submit_mode="native_bulk",
+            initial_submit_count=2,
+            max_bulk_group_size=2,
+            poll_interval_seconds=0,
+            refill_interval_seconds=0,
+        )
+    )
+
+    registry = BulkJobRegistry(registry_path)
+    assert [call["bulk_count"] for call in runtime.calls] == [2]
+    assert result.submit_deferred == 2
+    assert result.failed == 0
+    assert registry.status_counts() == {BulkJobStatus.SUBMIT_DEFERRED.value: 2}
+
+
+def test_native_bulk_skips_succeeded_and_existing_expected_outputs(
+    tmp_path: Path,
+    monkeypatch,
+):
+    registry_path = tmp_path / "bulk.sqlite"
+    output_dir = tmp_path / "job-0"
+    output_dir.mkdir()
+    (output_dir / "done.marker").write_text("ok")
+    runtime = _NativeBulkSubmitRuntime(parent_job_ids=["9000"])
+    _install_native_bulk_fakes(monkeypatch, runtime)
+
+    result = asyncio.run(
+        mod.run_jobs_from_blocks_bulk(
+            jobs=_native_bulk_specs(tmp_path, 3),
+            command_block="cmd",
+            execution_profile_block="exec",
+            hpc_profile_block="hpc",
+            registry_path=registry_path,
+            queue_probe=_FixedCapacityProbe(10),
+            submit_mode="native_bulk",
+            initial_submit_count=3,
+            max_bulk_group_size=3,
+            poll_interval_seconds=0,
+            refill_interval_seconds=0,
+        )
+    )
+
+    assert [call["bulk_count"] for call in runtime.calls] == [2]
+    assert _manifest_job_keys(runtime.calls[0]) == ["job-1", "job-2"]
+    assert result.succeeded == 3
+
+
+def test_native_bulk_bootstrap_is_not_repeated_after_restart(tmp_path: Path, monkeypatch):
+    registry_path = tmp_path / "bulk.sqlite"
+    registry = BulkJobRegistry(registry_path)
+    registry.upsert_jobs(_native_bulk_specs(tmp_path, 3))
+    registry.mark_submitted(
+        "job-0",
+        "8000[0]",
+        submit_mode="native_bulk",
+        bulk_group_key="old-group",
+        bulk_parent_job_id="8000",
+        bulk_index=0,
+        scheduler_subjob_id="8000[0]",
+    )
+    runtime = _NativeBulkSubmitRuntime(parent_job_ids=["9000", "9001"])
+    _install_native_bulk_fakes(
+        monkeypatch,
+        runtime,
+        mark_pending_succeeded_after_monitor=False,
+    )
+
+    result = asyncio.run(
+        mod.run_jobs_from_blocks_bulk(
+            jobs=_native_bulk_specs(tmp_path, 3),
+            command_block="cmd",
+            execution_profile_block="exec",
+            hpc_profile_block="hpc",
+            registry_path=registry_path,
+            queue_probe=_FixedCapacityProbe(10),
+            submit_mode="native_bulk",
+            initial_submit_count=4,
+            max_submit_per_refill=1,
+            max_bulk_group_size=4,
+            poll_interval_seconds=0,
+            refill_interval_seconds=0,
+        )
+    )
+
+    assert [call["bulk_count"] for call in runtime.calls] == [1, 1]
+    assert result.succeeded == 3
+
+
+def test_native_bulk_group_size_does_not_increase_queue_allowance(
+    tmp_path: Path,
+    monkeypatch,
+):
+    registry_path = tmp_path / "bulk.sqlite"
+    runtime = _NativeBulkSubmitRuntime(parent_job_ids=["9000"])
+    _install_native_bulk_fakes(monkeypatch, runtime)
+
+    result = asyncio.run(
+        mod.run_jobs_from_blocks_bulk(
+            jobs=_native_bulk_specs(tmp_path, 6),
+            command_block="cmd",
+            execution_profile_block="exec",
+            hpc_profile_block="hpc",
+            registry_path=registry_path,
+            queue_probe=_FixedCapacityProbe(3),
+            submit_mode="native_bulk",
+            initial_submit_count=10,
+            max_bulk_group_size=10,
+            poll_interval_seconds=0,
+            refill_interval_seconds=0,
+        )
+    )
+
+    assert [call["bulk_count"] for call in runtime.calls] == [3]
+    assert _manifest_job_keys(runtime.calls[0]) == ["job-0", "job-1", "job-2"]
+    assert result.succeeded == 6
+
+
+def test_native_bulk_submit_count_respects_target_active_jobs(tmp_path: Path):
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    registry.upsert_jobs(_native_bulk_specs(tmp_path, 5))
+    for index in range(2):
+        registry.mark_submitted(
+            f"job-{index}",
+            f"8000[{index}]",
+            submit_mode="native_bulk",
+            bulk_group_key="old-group",
+            bulk_parent_job_id="8000",
+            bulk_index=index,
+            scheduler_subjob_id=f"8000[{index}]",
+        )
+
+    submit_count = mod._native_bulk_submit_count(
+        registry=registry,
+        queue_probe=_FixedCapacityProbe(10),
+        submit_limit=10,
+        target_active_jobs=3,
+    )
+
+    assert submit_count == 1
 
 
 def test_all_jobs_eventually_succeeded_returns_bulk_run_result(tmp_path: Path, monkeypatch):

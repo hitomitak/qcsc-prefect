@@ -5,7 +5,7 @@ import inspect
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from qcsc_prefect_adapters.fugaku import builder as fugaku_builder
 from qcsc_prefect_adapters.fugaku import runtime as fugaku_runtime
@@ -30,11 +30,13 @@ from qcsc_prefect_executor.bulk.exceptions import (
     TemporarySubmitError,
 )
 from qcsc_prefect_executor.bulk.models import (
+    BulkJobRecord,
     BulkJobSpec,
     BulkJobStatus,
     BulkRunResult,
     SubmittedJob,
 )
+from qcsc_prefect_executor.bulk.native_manifest import create_native_bulk_group_manifests
 from qcsc_prefect_executor.bulk.registry import BulkJobRegistry
 from qcsc_prefect_executor.fugaku.run import run_fugaku_job
 from qcsc_prefect_executor.miyabi.run import run_miyabi_job
@@ -313,6 +315,7 @@ async def _resolve_default_bulk_queue_probe(
     execution_profile_block: str,
     max_active_jobs: int,
     safety_margin: int,
+    submit_mode: Literal["single", "native_bulk"] = "single",
 ) -> QueueProbe:
     submission_target = await resolve_submission_target(
         hpc_profile_block_name=hpc_profile_block,
@@ -326,6 +329,7 @@ async def _resolve_default_bulk_queue_probe(
             safety_margin=safety_margin,
             project=submission_target.project,
             queue=submission_target.queue_name,
+            capacity_mode="native_bulk" if submit_mode == "native_bulk" else "single",
         )
 
     raise ValueError(
@@ -360,6 +364,91 @@ def _build_bulk_run_result(
 
 def _has_failed_jobs(registry: BulkJobRegistry) -> bool:
     return registry.status_counts().get(BulkJobStatus.FAILED.value, 0) > 0
+
+
+def _safe_bulk_group_key(value: str) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9_.=-]+", "-", value).strip("-")
+    return safe or "bulk-group"
+
+
+def _bulk_group_key_for_jobs(jobs: list[BulkJobRecord]) -> str:
+    first = _safe_bulk_group_key(jobs[0].job_key)
+    last = _safe_bulk_group_key(jobs[-1].job_key)
+    stage = _safe_bulk_group_key(str(jobs[0].stage_id or "stage"))
+    return f"native-bulk-{stage}-{first}-{last}-{len(jobs)}"[:180]
+
+
+def _chunk_records(
+    records: list[BulkJobRecord],
+    *,
+    chunk_size: int,
+) -> list[list[BulkJobRecord]]:
+    if chunk_size <= 0:
+        raise ValueError("max_bulk_group_size must be positive.")
+    return [records[index : index + chunk_size] for index in range(0, len(records), chunk_size)]
+
+
+def _submit_limit_for_cycle(
+    *,
+    registry: BulkJobRegistry,
+    initial_submit_count: int | None,
+    max_submit_per_refill: int,
+) -> int:
+    if registry.bootstrap_done():
+        return max(0, int(max_submit_per_refill))
+    if initial_submit_count is None:
+        return max(0, int(max_submit_per_refill))
+    return max(0, int(initial_submit_count))
+
+
+def _queue_available_slots(queue_probe: QueueProbe) -> int:
+    try:
+        capacity = queue_probe.get_capacity()
+    except Exception:
+        return 0
+    return max(0, int(capacity.available_slots))
+
+
+def _target_active_slots(
+    *,
+    registry: BulkJobRegistry,
+    target_active_jobs: int | None,
+) -> int | None:
+    if target_active_jobs is None:
+        return None
+    return max(0, int(target_active_jobs) - registry.count_active_jobs())
+
+
+def _native_bulk_submit_count(
+    *,
+    registry: BulkJobRegistry,
+    queue_probe: QueueProbe,
+    submit_limit: int,
+    target_active_jobs: int | None,
+) -> int:
+    limits = [
+        max(0, int(submit_limit)),
+        _queue_available_slots(queue_probe),
+        registry.count_submit_candidates(),
+    ]
+    target_slots = _target_active_slots(
+        registry=registry,
+        target_active_jobs=target_active_jobs,
+    )
+    if target_slots is not None:
+        limits.append(target_slots)
+    return max(0, min(limits))
+
+
+def _validate_native_bulk_candidates(jobs: list[BulkJobRecord]) -> None:
+    missing_stage = [
+        job.job_key for job in jobs if not job.stage_id or not str(job.stage_id).strip()
+    ]
+    if missing_stage:
+        raise ValueError(
+            "submit_mode='native_bulk' requires stage_id for every selected job: "
+            + ", ".join(missing_stage)
+        )
 
 
 def _mark_deferred_if_needed(
@@ -578,6 +667,135 @@ async def _submit_prepared_job(prepared: _PreparedBlockJob) -> str:
         raise NotImplementedError(f"Unsupported hpc_target for submit: {target}")
 
     return submit.job_id
+
+
+def _write_fugaku_native_bulk_script(
+    *,
+    prepared: _PreparedBlockJob,
+    bulk_manifest_dir: Path,
+) -> Path:
+    if prepared.submission_target.hpc_target != "fugaku":
+        raise ValueError("submit_mode='native_bulk' is only supported for Fugaku/PJM.")
+
+    script_basename = Path(prepared.script_filename).name
+    script_text = fugaku_builder.render_manifest_bulk_script(
+        work_dir=prepared.work_dir,
+        bulk_manifest_dir=bulk_manifest_dir,
+        exec_profile=prepared.exec_profile,
+        req=prepared.req,
+        script_basename=script_basename,
+    )
+    return fugaku_builder.write_script_file(
+        work_dir=prepared.work_dir,
+        filename=prepared.script_filename,
+        text=script_text,
+    )
+
+
+async def _submit_native_bulk_group_from_blocks(
+    *,
+    registry: BulkJobRegistry,
+    jobs: list[BulkJobRecord],
+    command_block: str,
+    execution_profile_block: str,
+    hpc_profile_block: str,
+) -> str:
+    bulk_group_key = _bulk_group_key_for_jobs(jobs)
+    bulk_group_dir = registry.path.parent / "native-bulk" / bulk_group_key
+    manifest_group = create_native_bulk_group_manifests(
+        bulk_group_dir=bulk_group_dir,
+        jobs=jobs,
+    )
+    prepared = await _prepare_job_from_blocks(
+        command_block_name=command_block,
+        execution_profile_block_name=execution_profile_block,
+        hpc_profile_block_name=hpc_profile_block,
+        work_dir=manifest_group.bulk_group_dir,
+        script_filename=bulk_group_key,
+        user_args=None,
+        fugaku_job_name=bulk_group_key[:63],
+    )
+    script_path = _write_fugaku_native_bulk_script(
+        prepared=prepared,
+        bulk_manifest_dir=manifest_group.manifest_dir,
+    )
+    parent_job_id = await FugakuPJMRuntime().submit_bulk(
+        script_path,
+        manifest_group.bulk_count,
+        cwd=manifest_group.bulk_group_dir,
+    )
+
+    for bulk_index, job in enumerate(jobs):
+        scheduler_subjob_id = f"{parent_job_id}[{bulk_index}]"
+        registry.mark_submitted(
+            job.job_key,
+            scheduler_subjob_id,
+            submit_mode="native_bulk",
+            bulk_group_key=bulk_group_key,
+            bulk_parent_job_id=parent_job_id,
+            bulk_index=bulk_index,
+            scheduler_subjob_id=scheduler_subjob_id,
+        )
+
+    return parent_job_id
+
+
+async def _submit_native_bulk_cycle_from_blocks(
+    *,
+    registry: BulkJobRegistry,
+    command_block: str,
+    execution_profile_block: str,
+    hpc_profile_block: str,
+    queue_probe: QueueProbe,
+    submit_limit: int,
+    max_bulk_group_size: int,
+    target_active_jobs: int | None,
+    stop_on_first_failure: bool,
+) -> bool:
+    submit_count = _native_bulk_submit_count(
+        registry=registry,
+        queue_probe=queue_probe,
+        submit_limit=submit_limit,
+        target_active_jobs=target_active_jobs,
+    )
+    if submit_count <= 0:
+        return False
+
+    selected_jobs = registry.get_submit_candidates_fifo(limit=submit_count)
+    if not selected_jobs:
+        return False
+
+    _validate_native_bulk_candidates(selected_jobs)
+    for chunk in _chunk_records(selected_jobs, chunk_size=max_bulk_group_size):
+        try:
+            await _submit_native_bulk_group_from_blocks(
+                registry=registry,
+                jobs=chunk,
+                command_block=command_block,
+                execution_profile_block=execution_profile_block,
+                hpc_profile_block=hpc_profile_block,
+            )
+        except Exception as exc:
+            classified = _classify_submit_exception(exc)
+            if isinstance(classified, QueueFullError | TemporarySubmitError):
+                for job in chunk:
+                    _mark_deferred_if_needed(
+                        registry=registry,
+                        job_key=job.job_key,
+                        error=str(classified),
+                    )
+                return True
+
+            for job in chunk:
+                _mark_failed_if_needed(
+                    registry=registry,
+                    job_key=job.job_key,
+                    error=str(classified),
+                )
+            if stop_on_first_failure:
+                return False
+
+    return False
 
 
 async def submit_job_from_blocks(
@@ -1102,6 +1320,10 @@ async def run_jobs_from_blocks_bulk(
     max_active_jobs: int = 1000,
     safety_margin: int = 20,
     max_submit_per_refill: int = 100,
+    submit_mode: Literal["single", "native_bulk"] = "single",
+    initial_submit_count: int | None = None,
+    max_bulk_group_size: int = 100,
+    target_active_jobs: int | None = None,
     poll_interval_seconds: int = 60,
     refill_interval_seconds: int = 60,
     stop_on_first_failure: bool = False,
@@ -1119,18 +1341,32 @@ async def run_jobs_from_blocks_bulk(
     registry.refresh_completed_jobs_from_outputs()
     total_jobs = len({job.job_key for job in jobs})
 
+    if submit_mode not in {"single", "native_bulk"}:
+        raise ValueError("submit_mode must be 'single' or 'native_bulk'.")
+
     if registry.all_terminal() or (stop_on_first_failure and _has_failed_jobs(registry)):
         return _build_bulk_run_result(registry=registry, total_jobs=total_jobs)
+
+    if submit_mode == "native_bulk":
+        submission_target = await resolve_submission_target(
+            hpc_profile_block_name=hpc_profile_block,
+            execution_profile_block_name=execution_profile_block,
+        )
+        if submission_target.hpc_target != "fugaku":
+            raise ValueError("submit_mode='native_bulk' is only supported for Fugaku/PJM.")
+        if max_bulk_group_size <= 0:
+            raise ValueError("max_bulk_group_size must be positive.")
 
     resolved_queue_probe = queue_probe or await _resolve_default_bulk_queue_probe(
         hpc_profile_block=hpc_profile_block,
         execution_profile_block=execution_profile_block,
         max_active_jobs=max_active_jobs,
         safety_margin=safety_margin,
+        submit_mode=submit_mode,
     )
     submit_gate = QueueAwareSubmitGate(
         queue_probe=resolved_queue_probe,
-        max_active_jobs=max_active_jobs,
+        max_active_jobs=target_active_jobs if target_active_jobs is not None else max_active_jobs,
         safety_margin=safety_margin,
         max_submit_per_refill=max_submit_per_refill,
     )
@@ -1156,42 +1392,68 @@ async def run_jobs_from_blocks_bulk(
 
         now = loop.time()
         if now >= next_refill_at:
-            pre_candidates = registry.get_submit_candidates(limit=max_submit_per_refill)
-            if pre_candidates:
-                submit_count = submit_gate.allowed_submit_count()
-                for job in pre_candidates[:submit_count]:
-                    try:
-                        await submit_job_from_blocks(
-                            command_block=command_block,
-                            execution_profile_block=execution_profile_block,
-                            hpc_profile_block=hpc_profile_block,
-                            work_dir=job.work_dir,
-                            job_key=job.job_key,
-                            command_args=job.command_args,
-                            registry=registry,
-                        )
-                    except QueueFullError as exc:
-                        _mark_deferred_if_needed(
-                            registry=registry,
-                            job_key=job.job_key,
-                            error=str(exc),
-                        )
-                        break
-                    except TemporarySubmitError as exc:
-                        _mark_deferred_if_needed(
-                            registry=registry,
-                            job_key=job.job_key,
-                            error=str(exc),
-                        )
-                        break
-                    except Exception as exc:
-                        _mark_failed_if_needed(
-                            registry=registry,
-                            job_key=job.job_key,
-                            error=_exception_text(exc),
-                        )
-                        if stop_on_first_failure:
+            submit_limit = _submit_limit_for_cycle(
+                registry=registry,
+                initial_submit_count=initial_submit_count,
+                max_submit_per_refill=max_submit_per_refill,
+            )
+            stop_after_deferred_submit = False
+            if submit_mode == "native_bulk":
+                stop_after_deferred_submit = await _submit_native_bulk_cycle_from_blocks(
+                    registry=registry,
+                    command_block=command_block,
+                    execution_profile_block=execution_profile_block,
+                    hpc_profile_block=hpc_profile_block,
+                    queue_probe=resolved_queue_probe,
+                    submit_limit=submit_limit,
+                    max_bulk_group_size=max_bulk_group_size,
+                    target_active_jobs=target_active_jobs,
+                    stop_on_first_failure=stop_on_first_failure,
+                )
+            else:
+                pre_candidates = registry.get_submit_candidates(limit=submit_limit)
+                if pre_candidates:
+                    submit_gate.max_submit_per_refill = submit_limit
+                    submit_count = min(
+                        submit_gate.allowed_submit_count(),
+                        len(pre_candidates),
+                    )
+                    for job in pre_candidates[:submit_count]:
+                        try:
+                            await submit_job_from_blocks(
+                                command_block=command_block,
+                                execution_profile_block=execution_profile_block,
+                                hpc_profile_block=hpc_profile_block,
+                                work_dir=job.work_dir,
+                                job_key=job.job_key,
+                                command_args=job.command_args,
+                                registry=registry,
+                            )
+                        except QueueFullError as exc:
+                            _mark_deferred_if_needed(
+                                registry=registry,
+                                job_key=job.job_key,
+                                error=str(exc),
+                            )
                             break
+                        except TemporarySubmitError as exc:
+                            _mark_deferred_if_needed(
+                                registry=registry,
+                                job_key=job.job_key,
+                                error=str(exc),
+                            )
+                            break
+                        except Exception as exc:
+                            _mark_failed_if_needed(
+                                registry=registry,
+                                job_key=job.job_key,
+                                error=_exception_text(exc),
+                            )
+                            if stop_on_first_failure:
+                                break
+
+            if stop_after_deferred_submit:
+                break
 
             next_refill_at = now + max(0.0, float(refill_interval_seconds))
 
@@ -1199,6 +1461,12 @@ async def run_jobs_from_blocks_bulk(
             break
         if registry.all_terminal():
             break
+
+        if submit_mode == "native_bulk":
+            active_jobs = registry.count_active_jobs()
+            submit_candidates = registry.count_submit_candidates()
+            if active_jobs == 0 and submit_candidates == 0:
+                break
 
         sleep_seconds = max(0.0, float(poll_interval_seconds))
         if sleep_seconds == 0 and next_refill_at > loop.time():
