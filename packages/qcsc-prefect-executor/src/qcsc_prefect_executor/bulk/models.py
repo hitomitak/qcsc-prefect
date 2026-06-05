@@ -7,7 +7,7 @@ from typing import Any
 
 
 class BulkJobStatus(str, Enum):
-    """Normalized lifecycle status for one bulk scheduler job."""
+    """Normalized lifecycle status for one logical bulk job."""
 
     PENDING = "PENDING"
     SUBMIT_DEFERRED = "SUBMIT_DEFERRED"
@@ -73,6 +73,7 @@ class BulkJobSpec:
     command_args: dict[str, Any] = field(default_factory=dict)
     wave_id: str | None = None
     target_id: str | None = None
+    stage_id: str | None = None
     priority: int = 0
     expected_outputs: list[Path] = field(default_factory=list)
     max_submit_attempts: int = 5
@@ -81,6 +82,11 @@ class BulkJobSpec:
         if not self.job_key.strip():
             raise ValueError("BulkJobSpec.job_key must be non-empty.")
         object.__setattr__(self, "work_dir", Path(self.work_dir))
+        object.__setattr__(
+            self,
+            "stage_id",
+            None if self.stage_id is None else str(self.stage_id),
+        )
         object.__setattr__(
             self,
             "expected_outputs",
@@ -92,7 +98,7 @@ class BulkJobSpec:
 
 @dataclass(frozen=True)
 class BulkJobRecord:
-    """Persisted state for one bulk scheduler job."""
+    """Persisted state for one logical bulk job."""
 
     job_key: str
     wave_id: str | None
@@ -112,6 +118,12 @@ class BulkJobRecord:
     last_error: str | None
     priority: int = 0
     max_submit_attempts: int = 5
+    stage_id: str | None = None
+    submit_mode: str = "single"
+    bulk_group_key: str | None = None
+    bulk_parent_job_id: str | None = None
+    bulk_index: int | None = None
+    scheduler_subjob_id: str | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -124,6 +136,10 @@ class BulkJobRecord:
     @property
     def is_submit_candidate(self) -> bool:
         return self.status.is_submit_candidate
+
+    @property
+    def effective_scheduler_job_id(self) -> str | None:
+        return self.scheduler_subjob_id or self.scheduler_job_id
 
 
 @dataclass(frozen=True)

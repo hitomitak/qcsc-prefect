@@ -19,6 +19,7 @@ def _spec(
     target_id: str | None = "target-a",
     command_args: dict[str, object] | None = None,
     expected_outputs: list[Path] | None = None,
+    stage_id: str | None = None,
     priority: int = 0,
     max_submit_attempts: int = 5,
 ) -> BulkJobSpec:
@@ -26,6 +27,7 @@ def _spec(
         job_key=job_key,
         wave_id=wave_id,
         target_id=target_id,
+        stage_id=stage_id,
         work_dir=tmp_path / job_key,
         command_args=command_args or {"index": job_key},
         expected_outputs=expected_outputs or [],
@@ -40,6 +42,79 @@ def _only_job(registry: BulkJobRegistry, wave_id: str = "wave-a"):
     return jobs[0]
 
 
+def _create_old_schema_registry(db_path: Path) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE bulk_jobs (
+                job_key TEXT PRIMARY KEY,
+                wave_id TEXT,
+                target_id TEXT,
+                status TEXT NOT NULL,
+                work_dir TEXT NOT NULL,
+                scheduler_job_id TEXT,
+                submit_attempts INTEGER NOT NULL DEFAULT 0,
+                monitor_attempts INTEGER NOT NULL DEFAULT 0,
+                command_args_json TEXT,
+                expected_outputs_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                submitted_at TEXT,
+                started_at TEXT,
+                finished_at TEXT,
+                last_error TEXT,
+                priority INTEGER NOT NULL DEFAULT 0,
+                max_submit_attempts INTEGER NOT NULL DEFAULT 5
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO bulk_jobs (
+                job_key,
+                wave_id,
+                target_id,
+                status,
+                work_dir,
+                scheduler_job_id,
+                submit_attempts,
+                monitor_attempts,
+                command_args_json,
+                expected_outputs_json,
+                created_at,
+                updated_at,
+                submitted_at,
+                started_at,
+                finished_at,
+                last_error,
+                priority,
+                max_submit_attempts
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "old-job",
+                "wave-old",
+                "target-old",
+                BulkJobStatus.SUBMITTED.value,
+                str(db_path.parent / "old-job"),
+                "43607196",
+                1,
+                0,
+                '{"index": "old-job"}',
+                "[]",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                None,
+                None,
+                None,
+                0,
+                5,
+            ),
+        )
+
+
 def test_registry_creates_sqlite_file_and_table(tmp_path: Path):
     db_path = tmp_path / "bulk.sqlite"
     BulkJobRegistry(db_path)
@@ -52,6 +127,43 @@ def test_registry_creates_sqlite_file_and_table(tmp_path: Path):
     assert row == ("bulk_jobs",)
 
 
+def test_registry_migrates_old_schema_with_native_bulk_columns(tmp_path: Path):
+    db_path = tmp_path / "bulk.sqlite"
+    _create_old_schema_registry(db_path)
+
+    registry = BulkJobRegistry(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(bulk_jobs)").fetchall()}
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(bulk_jobs)").fetchall()}
+
+    assert {
+        "stage_id",
+        "submit_mode",
+        "bulk_group_key",
+        "bulk_parent_job_id",
+        "bulk_index",
+        "scheduler_subjob_id",
+    } <= columns
+    assert {
+        "idx_bulk_jobs_status",
+        "idx_bulk_jobs_status_created_at",
+        "idx_bulk_jobs_stage_wave_status",
+        "idx_bulk_jobs_bulk_parent_job_id",
+        "idx_bulk_jobs_scheduler_subjob_id",
+    } <= indexes
+
+    record = registry.get_job("old-job")
+    assert record is not None
+    assert record.stage_id is None
+    assert record.submit_mode == "single"
+    assert record.bulk_group_key is None
+    assert record.bulk_parent_job_id is None
+    assert record.bulk_index is None
+    assert record.scheduler_subjob_id is None
+    assert record.effective_scheduler_job_id == "43607196"
+
+
 def test_upsert_jobs_inserts_new_jobs(tmp_path: Path):
     registry = _registry(tmp_path)
 
@@ -59,6 +171,47 @@ def test_upsert_jobs_inserts_new_jobs(tmp_path: Path):
 
     assert registry.status_counts() == {BulkJobStatus.PENDING.value: 2}
     assert [job.job_key for job in registry.jobs_for_wave("wave-a")] == ["job-1", "job-2"]
+
+
+def test_stage_and_native_bulk_fields_round_trip(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs(
+        [
+            _spec(
+                tmp_path,
+                "job-1",
+                stage_id="stage-a",
+                wave_id="wave-a",
+            )
+        ]
+    )
+
+    pending = _only_job(registry)
+    assert pending.stage_id == "stage-a"
+    assert pending.submit_mode == "single"
+    assert pending.bulk_group_key is None
+    assert pending.effective_scheduler_job_id is None
+
+    registry.mark_submitted(
+        "job-1",
+        "12345",
+        submit_mode="native_bulk",
+        bulk_group_key="bulk-stage-a-0001",
+        bulk_parent_job_id="12345",
+        bulk_index=7,
+        scheduler_subjob_id="12345[7]",
+    )
+
+    submitted = _only_job(registry)
+    assert submitted.status == BulkJobStatus.SUBMITTED
+    assert submitted.scheduler_job_id == "12345"
+    assert submitted.stage_id == "stage-a"
+    assert submitted.submit_mode == "native_bulk"
+    assert submitted.bulk_group_key == "bulk-stage-a-0001"
+    assert submitted.bulk_parent_job_id == "12345"
+    assert submitted.bulk_index == 7
+    assert submitted.scheduler_subjob_id == "12345[7]"
+    assert submitted.effective_scheduler_job_id == "12345[7]"
 
 
 def test_upsert_jobs_is_idempotent(tmp_path: Path):
@@ -138,6 +291,55 @@ def test_submit_deferred_jobs_are_submit_candidates(tmp_path: Path):
     assert BulkJobStatus.SUBMIT_DEFERRED in {job.status for job in candidates}
 
 
+def test_get_submit_candidates_fifo_uses_insert_order_not_priority(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs(
+        [
+            _spec(tmp_path, "first", priority=0),
+            _spec(tmp_path, "second", priority=100),
+            _spec(tmp_path, "third", priority=50),
+            _spec(tmp_path, "active"),
+        ]
+    )
+    registry.mark_submit_deferred("third", error="queue full")
+    registry.mark_submitted("active", "scheduler-active")
+
+    candidates = registry.get_submit_candidates_fifo(limit=10)
+
+    assert [job.job_key for job in candidates] == ["first", "second", "third"]
+    assert [job.status for job in candidates] == [
+        BulkJobStatus.PENDING,
+        BulkJobStatus.PENDING,
+        BulkJobStatus.SUBMIT_DEFERRED,
+    ]
+    assert registry.get_submit_candidates_fifo(limit=2)[-1].job_key == "second"
+
+
+def test_count_helpers_and_bootstrap_done(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs(
+        [
+            _spec(tmp_path, "pending"),
+            _spec(tmp_path, "deferred"),
+            _spec(tmp_path, "submitted"),
+            _spec(tmp_path, "queued"),
+            _spec(tmp_path, "running"),
+            _spec(tmp_path, "succeeded"),
+        ]
+    )
+    assert registry.bootstrap_done() is False
+
+    registry.mark_submit_deferred("deferred", error="queue full")
+    registry.mark_submitted("submitted", "1")
+    registry.mark_queued("queued")
+    registry.mark_running("running")
+    registry.mark_succeeded("succeeded")
+
+    assert registry.count_submit_candidates() == 2
+    assert registry.count_active_jobs() == 3
+    assert registry.bootstrap_done() is True
+
+
 def test_submitted_queued_and_running_jobs_are_active(tmp_path: Path):
     registry = _registry(tmp_path)
     registry.upsert_jobs(
@@ -176,6 +378,60 @@ def test_terminal_jobs_are_not_active(tmp_path: Path):
 
     assert registry.get_active_jobs() == []
     assert registry.all_terminal() is True
+
+
+def test_reset_jobs_for_rerun_resets_failed_unknown_and_clears_scheduler_fields(
+    tmp_path: Path,
+):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs(
+        [
+            _spec(tmp_path, "failed"),
+            _spec(tmp_path, "unknown"),
+            _spec(tmp_path, "succeeded"),
+        ]
+    )
+    for index, job_key in enumerate(["failed", "unknown", "succeeded"]):
+        registry.mark_submitted(
+            job_key,
+            "12345",
+            submit_mode="native_bulk",
+            bulk_group_key="bulk-group",
+            bulk_parent_job_id="12345",
+            bulk_index=index,
+            scheduler_subjob_id=f"12345[{index}]",
+        )
+    registry.mark_failed("failed", error="exit 1")
+    registry.mark_unknown("unknown", error="missing")
+    registry.mark_succeeded("succeeded")
+
+    reset_count = registry.reset_jobs_for_rerun()
+
+    assert reset_count == 2
+    for job_key in ["failed", "unknown"]:
+        record = registry.get_job(job_key)
+        assert record is not None
+        assert record.status == BulkJobStatus.PENDING
+        assert record.scheduler_job_id is None
+        assert record.submit_attempts == 0
+        assert record.monitor_attempts == 0
+        assert record.submitted_at is None
+        assert record.started_at is None
+        assert record.finished_at is None
+        assert record.last_error is None
+        assert record.submit_mode == "single"
+        assert record.bulk_group_key is None
+        assert record.bulk_parent_job_id is None
+        assert record.bulk_index is None
+        assert record.scheduler_subjob_id is None
+        assert record.effective_scheduler_job_id is None
+
+    succeeded = registry.get_job("succeeded")
+    assert succeeded is not None
+    assert succeeded.status == BulkJobStatus.SUCCEEDED
+    assert succeeded.scheduler_job_id == "12345"
+    assert succeeded.scheduler_subjob_id == "12345[2]"
+    assert succeeded.submit_mode == "native_bulk"
 
 
 def test_unknown_job_with_scheduler_id_is_monitorable_but_not_active(tmp_path: Path):

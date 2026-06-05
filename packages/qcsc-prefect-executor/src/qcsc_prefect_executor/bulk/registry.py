@@ -25,6 +25,14 @@ def _status_values(statuses: Sequence[BulkJobStatus]) -> list[str]:
     return [status.value for status in statuses]
 
 
+def _coerce_status(status: BulkJobStatus | str) -> BulkJobStatus:
+    return status if isinstance(status, BulkJobStatus) else BulkJobStatus(str(status))
+
+
+def _coerce_statuses(statuses: Sequence[BulkJobStatus | str]) -> list[BulkJobStatus]:
+    return [_coerce_status(status) for status in statuses]
+
+
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, default=str)
 
@@ -80,6 +88,7 @@ class BulkJobRegistry:
                     job_key TEXT PRIMARY KEY,
                     wave_id TEXT,
                     target_id TEXT,
+                    stage_id TEXT,
                     status TEXT NOT NULL,
                     work_dir TEXT NOT NULL,
                     scheduler_job_id TEXT,
@@ -94,16 +103,59 @@ class BulkJobRegistry:
                     finished_at TEXT,
                     last_error TEXT,
                     priority INTEGER NOT NULL DEFAULT 0,
-                    max_submit_attempts INTEGER NOT NULL DEFAULT 5
+                    max_submit_attempts INTEGER NOT NULL DEFAULT 5,
+                    submit_mode TEXT NOT NULL DEFAULT 'single',
+                    bulk_group_key TEXT,
+                    bulk_parent_job_id TEXT,
+                    bulk_index INTEGER,
+                    scheduler_subjob_id TEXT
                 )
                 """
             )
+            self._migrate_schema(conn)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_bulk_jobs_status ON bulk_jobs(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_bulk_jobs_wave_id ON bulk_jobs(wave_id)")
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_bulk_jobs_status ON bulk_jobs(status)"
+                """
+                CREATE INDEX IF NOT EXISTS idx_bulk_jobs_status_created_at
+                ON bulk_jobs(status, created_at)
+                """
             )
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_bulk_jobs_wave_id ON bulk_jobs(wave_id)"
+                """
+                CREATE INDEX IF NOT EXISTS idx_bulk_jobs_stage_wave_status
+                ON bulk_jobs(stage_id, wave_id, status)
+                """
             )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_bulk_jobs_bulk_parent_job_id
+                ON bulk_jobs(bulk_parent_job_id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_bulk_jobs_scheduler_subjob_id
+                ON bulk_jobs(scheduler_subjob_id)
+                """
+            )
+
+    @staticmethod
+    def _migrate_schema(conn: sqlite3.Connection) -> None:
+        existing_columns = {
+            str(row["name"]) for row in conn.execute("PRAGMA table_info(bulk_jobs)").fetchall()
+        }
+        column_defs = {
+            "stage_id": "stage_id TEXT",
+            "submit_mode": "submit_mode TEXT NOT NULL DEFAULT 'single'",
+            "bulk_group_key": "bulk_group_key TEXT",
+            "bulk_parent_job_id": "bulk_parent_job_id TEXT",
+            "bulk_index": "bulk_index INTEGER",
+            "scheduler_subjob_id": "scheduler_subjob_id TEXT",
+        }
+        for column_name, column_def in column_defs.items():
+            if column_name not in existing_columns:
+                conn.execute(f"ALTER TABLE bulk_jobs ADD COLUMN {column_def}")
 
     def upsert_jobs(self, jobs: list[BulkJobSpec]) -> None:
         """Register jobs idempotently without resetting existing progress."""
@@ -129,17 +181,14 @@ class BulkJobRegistry:
                 )
 
                 if existing is None:
-                    status = (
-                        BulkJobStatus.SUCCEEDED
-                        if outputs_complete
-                        else BulkJobStatus.PENDING
-                    )
+                    status = BulkJobStatus.SUCCEEDED if outputs_complete else BulkJobStatus.PENDING
                     conn.execute(
                         """
                         INSERT INTO bulk_jobs (
                             job_key,
                             wave_id,
                             target_id,
+                            stage_id,
                             status,
                             work_dir,
                             scheduler_job_id,
@@ -156,12 +205,13 @@ class BulkJobRegistry:
                             priority,
                             max_submit_attempts
                         )
-                        VALUES (?, ?, ?, ?, ?, NULL, 0, 0, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, NULL, 0, 0, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?)
                         """,
                         (
                             job.job_key,
                             job.wave_id,
                             job.target_id,
+                            job.stage_id,
                             status.value,
                             str(job.work_dir),
                             command_args_json,
@@ -182,6 +232,7 @@ class BulkJobRegistry:
                         SET
                             wave_id = ?,
                             target_id = ?,
+                            stage_id = ?,
                             status = ?,
                             work_dir = ?,
                             command_args_json = ?,
@@ -196,6 +247,7 @@ class BulkJobRegistry:
                         (
                             job.wave_id,
                             job.target_id,
+                            job.stage_id,
                             BulkJobStatus.SUCCEEDED.value,
                             str(job.work_dir),
                             command_args_json,
@@ -214,6 +266,7 @@ class BulkJobRegistry:
                         SET
                             wave_id = ?,
                             target_id = ?,
+                            stage_id = ?,
                             work_dir = ?,
                             command_args_json = ?,
                             expected_outputs_json = ?,
@@ -225,6 +278,7 @@ class BulkJobRegistry:
                         (
                             job.wave_id,
                             job.target_id,
+                            job.stage_id,
                             str(job.work_dir),
                             command_args_json,
                             expected_outputs_json,
@@ -264,13 +318,51 @@ class BulkJobRegistry:
 
         statuses = _status_values(tuple(SUBMIT_CANDIDATE_BULK_JOB_STATUSES))
         where = (
-            f"status IN ({self._placeholders(statuses)}) "
-            "AND submit_attempts < max_submit_attempts"
+            f"status IN ({self._placeholders(statuses)}) AND submit_attempts < max_submit_attempts"
         )
         return self._fetch_records(
             where,
             [*statuses, int(limit)],
             "priority DESC, created_at, job_key LIMIT ?",
+        )
+
+    def get_submit_candidates_fifo(self, limit: int) -> list[BulkJobRecord]:
+        if limit <= 0:
+            return []
+
+        statuses = _status_values(tuple(SUBMIT_CANDIDATE_BULK_JOB_STATUSES))
+        return self._fetch_records(
+            f"status IN ({self._placeholders(statuses)})",
+            [*statuses, int(limit)],
+            "created_at ASC, rowid ASC, job_key ASC LIMIT ?",
+        )
+
+    def count_submit_candidates(self) -> int:
+        statuses = _status_values(tuple(SUBMIT_CANDIDATE_BULK_JOB_STATUSES))
+        return self._count_records(
+            f"status IN ({self._placeholders(statuses)})",
+            statuses,
+        )
+
+    def count_active_jobs(self) -> int:
+        statuses = _status_values(tuple(ACTIVE_BULK_JOB_STATUSES))
+        return self._count_records(
+            f"status IN ({self._placeholders(statuses)})",
+            statuses,
+        )
+
+    def bootstrap_done(self) -> bool:
+        return (
+            self._count_records(
+                """
+                submit_attempts > 0
+                OR submitted_at IS NOT NULL
+                OR scheduler_job_id IS NOT NULL
+                OR scheduler_subjob_id IS NOT NULL
+                """,
+                [],
+            )
+            > 0
         )
 
     def get_job(self, job_key: str) -> BulkJobRecord | None:
@@ -282,7 +374,17 @@ class BulkJobRegistry:
     def get_all_jobs(self) -> list[BulkJobRecord]:
         return self._fetch_records("1 = 1", [], "created_at, job_key")
 
-    def mark_submitted(self, job_key: str, scheduler_job_id: str) -> None:
+    def mark_submitted(
+        self,
+        job_key: str,
+        scheduler_job_id: str,
+        *,
+        submit_mode: str = "single",
+        bulk_group_key: str | None = None,
+        bulk_parent_job_id: str | None = None,
+        bulk_index: int | None = None,
+        scheduler_subjob_id: str | None = None,
+    ) -> None:
         now = _utcnow_iso()
         with self._connect() as conn:
             conn.execute(
@@ -291,6 +393,11 @@ class BulkJobRegistry:
                 SET
                     status = ?,
                     scheduler_job_id = ?,
+                    submit_mode = ?,
+                    bulk_group_key = ?,
+                    bulk_parent_job_id = ?,
+                    bulk_index = ?,
+                    scheduler_subjob_id = ?,
                     submit_attempts = submit_attempts + 1,
                     submitted_at = COALESCE(submitted_at, ?),
                     updated_at = ?,
@@ -300,6 +407,11 @@ class BulkJobRegistry:
                 (
                     BulkJobStatus.SUBMITTED.value,
                     scheduler_job_id,
+                    submit_mode,
+                    bulk_group_key,
+                    bulk_parent_job_id,
+                    bulk_index,
+                    scheduler_subjob_id,
                     now,
                     now,
                     job_key,
@@ -459,6 +571,48 @@ class BulkJobRegistry:
             ).fetchall()
         return {str(row["status"]): int(row["count"]) for row in rows}
 
+    def reset_jobs_for_rerun(
+        self,
+        statuses: Sequence[BulkJobStatus | str] | None = None,
+        *,
+        to_status: BulkJobStatus | str = BulkJobStatus.PENDING,
+    ) -> int:
+        target_status = _coerce_status(to_status)
+        source_statuses = _coerce_statuses(
+            tuple(statuses)
+            if statuses is not None
+            else (BulkJobStatus.FAILED, BulkJobStatus.UNKNOWN)
+        )
+        if not source_statuses:
+            return 0
+
+        now = _utcnow_iso()
+        source_status_values = _status_values(tuple(source_statuses))
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE bulk_jobs
+                SET
+                    status = ?,
+                    scheduler_job_id = NULL,
+                    submit_attempts = 0,
+                    monitor_attempts = 0,
+                    submitted_at = NULL,
+                    started_at = NULL,
+                    finished_at = NULL,
+                    last_error = NULL,
+                    submit_mode = 'single',
+                    bulk_group_key = NULL,
+                    bulk_parent_job_id = NULL,
+                    bulk_index = NULL,
+                    scheduler_subjob_id = NULL,
+                    updated_at = ?
+                WHERE status IN ({self._placeholders(source_status_values)})
+                """,
+                [target_status.value, now, *source_status_values],
+            )
+        return int(cursor.rowcount)
+
     def refresh_completed_jobs_from_outputs(self) -> None:
         now = _utcnow_iso()
         with self._connect() as conn:
@@ -554,6 +708,18 @@ class BulkJobRegistry:
             ).fetchall()
         return [_record_from_row(row) for row in rows]
 
+    def _count_records(self, where_clause: str, params: Sequence[Any]) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS count
+                FROM bulk_jobs
+                WHERE {where_clause}
+                """,
+                list(params),
+            ).fetchone()
+        return int(row["count"])
+
     @staticmethod
     def _placeholders(values: Sequence[Any]) -> str:
         return ", ".join("?" for _ in values)
@@ -569,6 +735,7 @@ def _record_from_row(row: sqlite3.Row) -> BulkJobRecord:
         job_key=str(row["job_key"]),
         wave_id=row["wave_id"],
         target_id=row["target_id"],
+        stage_id=row["stage_id"],
         status=status,
         work_dir=Path(str(row["work_dir"])),
         scheduler_job_id=row["scheduler_job_id"],
@@ -584,4 +751,9 @@ def _record_from_row(row: sqlite3.Row) -> BulkJobRecord:
         last_error=row["last_error"],
         priority=int(row["priority"]),
         max_submit_attempts=int(row["max_submit_attempts"]),
+        submit_mode=str(row["submit_mode"] or "single"),
+        bulk_group_key=row["bulk_group_key"],
+        bulk_parent_job_id=row["bulk_parent_job_id"],
+        bulk_index=None if row["bulk_index"] is None else int(row["bulk_index"]),
+        scheduler_subjob_id=row["scheduler_subjob_id"],
     )
