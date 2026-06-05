@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from qcsc_prefect_adapters.fugaku import runtime as runtime_mod
 
 
@@ -20,6 +21,62 @@ def test_submit_parses_job_id(tmp_path: Path, monkeypatch):
 
     assert result.job_id == "43607196"
     assert calls == [(("pjsub", str(tmp_path / "batch.pjm")), tmp_path)]
+
+
+def test_submit_bulk_invokes_pjsub_bulk_with_sparam_and_cwd(tmp_path: Path, monkeypatch):
+    calls: list[tuple[tuple[str, ...], Path | None]] = []
+
+    async def fake_run_command(*args: str, cwd: Path | None = None) -> str:
+        calls.append((args, cwd))
+        return "Job 12345 submitted."
+
+    monkeypatch.setattr(runtime_mod, "run_command", fake_run_command)
+    rt = runtime_mod.FugakuPJMRuntime()
+    script_path = tmp_path / "bulk.pjm"
+
+    parent_job_id = asyncio.run(rt.submit_bulk(script_path, bulk_count=5, cwd=tmp_path))
+
+    assert parent_job_id == "12345"
+    assert calls == [
+        (
+            ("pjsub", "--bulk", "--sparam", "0-4", str(script_path)),
+            tmp_path,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stdout", "expected"),
+    [
+        ("Job 43607196 submitted.", "43607196"),
+        ("[INFO] PJM accepted request\nJob 49047829 submitted.\n", "49047829"),
+        ("job 24680 submitted", "24680"),
+    ],
+)
+def test_parse_submit_job_id_handles_pjsub_outputs(stdout: str, expected: str):
+    assert runtime_mod.FugakuPJMRuntime._parse_submit_job_id(stdout) == expected
+
+
+def test_submit_bulk_invalid_output_raises_submit_error(tmp_path: Path, monkeypatch):
+    async def fake_run_command(*args: str, cwd: Path | None = None) -> str:
+        return "PJM accepted request but no job id was printed"
+
+    monkeypatch.setattr(runtime_mod, "run_command", fake_run_command)
+    rt = runtime_mod.FugakuPJMRuntime()
+
+    with pytest.raises(runtime_mod.SubmitError, match="parent PJM job id"):
+        asyncio.run(rt.submit_bulk(tmp_path / "bulk.pjm", bulk_count=2))
+
+
+def test_submit_bulk_rejects_non_positive_bulk_count(tmp_path: Path, monkeypatch):
+    async def fake_run_command(*args: str, cwd: Path | None = None) -> str:
+        raise AssertionError("pjsub must not be called for invalid bulk_count")
+
+    monkeypatch.setattr(runtime_mod, "run_command", fake_run_command)
+    rt = runtime_mod.FugakuPJMRuntime()
+
+    with pytest.raises(ValueError, match="bulk_count must be positive"):
+        asyncio.run(rt.submit_bulk(tmp_path / "bulk.pjm", bulk_count=0))
 
 
 def test_wait_final_status_with_pjstat_fallback(monkeypatch):

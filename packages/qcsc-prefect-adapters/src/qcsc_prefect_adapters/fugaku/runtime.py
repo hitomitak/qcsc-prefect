@@ -72,7 +72,7 @@ class FugakuPJMRuntime:
     `qcsc_prefect_executor.from_blocks.run_job_from_blocks` instead.
     """
 
-    JOB_ID_RE = re.compile(r"Job\s+(\d+)\s+submitted\.?")
+    JOB_ID_RE = re.compile(r"\bJob\s+(\d+)\s+submitted\b", re.IGNORECASE)
     PJSTAT_KEYS = [
         "JOB_ID",
         "JOB_NAME",
@@ -120,10 +120,64 @@ class FugakuPJMRuntime:
             raise SubmitError(f"pjsub failed for {script_path}") from e
 
         out = stdout.strip()
-        m = self.JOB_ID_RE.search(out)
-        if not m:
+        job_id = self._parse_submit_job_id(out)
+        if job_id is None:
             raise SubmitError(f"Failed to parse PJM job id from pjsub output: {out}")
-        return SubmitResult(job_id=m.group(1), raw_output=out)
+        return SubmitResult(job_id=job_id, raw_output=out)
+
+    async def submit_bulk(
+        self,
+        script_path: Path,
+        bulk_count: int,
+        *,
+        cwd: Path | None = None,
+    ) -> str:
+        """Submit a PJM native bulk script and return the parent job id.
+
+        Args:
+            script_path: Path to the PJM script file.
+            bulk_count: Number of native bulk subjobs. PJM subjob parameters are
+                submitted as ``0-{bulk_count - 1}``.
+            cwd: Optional working directory for ``pjsub`` execution.
+
+        Returns:
+            Parent PJM job id parsed from ``pjsub`` stdout.
+
+        Raises:
+            ValueError: If ``bulk_count`` is not positive.
+            SubmitError: If submission fails or the parent job id cannot be parsed.
+        """
+
+        if int(bulk_count) <= 0:
+            raise ValueError("bulk_count must be positive.")
+
+        sparam = f"0-{int(bulk_count) - 1}"
+        try:
+            stdout = await run_command(
+                "pjsub",
+                "--bulk",
+                "--sparam",
+                sparam,
+                str(script_path),
+                cwd=cwd,
+            )
+        except Exception as e:
+            raise SubmitError(
+                f"pjsub --bulk failed for {script_path} with --sparam {sparam!r}"
+            ) from e
+
+        out = stdout.strip()
+        job_id = self._parse_submit_job_id(out)
+        if job_id is None:
+            raise SubmitError(f"Failed to parse parent PJM job id from pjsub --bulk output: {out}")
+        return job_id
+
+    @classmethod
+    def _parse_submit_job_id(cls, stdout: str) -> str | None:
+        match = cls.JOB_ID_RE.search(stdout)
+        if match is None:
+            return None
+        return match.group(1)
 
     def _parse_pjstat(self, stdout: str) -> dict[str, Any] | None:
         """Parse a single ``pjstat -v`` row into a dictionary."""
@@ -196,9 +250,7 @@ class FugakuPJMRuntime:
             raise CancelError(f"pjdel failed for job_id={job_id}") from e
 
 
-def _parse_fixed_width_pjstat_row(
-    line: str, columns: list[tuple[str, int]]
-) -> dict[str, str]:
+def _parse_fixed_width_pjstat_row(line: str, columns: list[tuple[str, int]]) -> dict[str, str]:
     row: dict[str, str] = {}
     for index, (name, start) in enumerate(columns):
         end = columns[index + 1][1] if index + 1 < len(columns) else None
