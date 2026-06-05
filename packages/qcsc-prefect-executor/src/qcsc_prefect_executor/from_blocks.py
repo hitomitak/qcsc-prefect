@@ -835,15 +835,16 @@ async def submit_job_from_blocks(
     )
 
     if registry is not None:
-        registry.upsert_jobs(
-            [
-                BulkJobSpec(
-                    job_key=job_key,
-                    work_dir=Path(work_dir),
-                    command_args=dict(command_args or {}),
-                )
-            ]
-        )
+        if registry.get_job(job_key) is None:
+            registry.upsert_jobs(
+                [
+                    BulkJobSpec(
+                        job_key=job_key,
+                        work_dir=Path(work_dir),
+                        command_args=dict(command_args or {}),
+                    )
+                ]
+            )
         _ensure_registry_can_submit(registry=registry, job_key=job_key)
 
     prepared = await _prepare_job_from_blocks(

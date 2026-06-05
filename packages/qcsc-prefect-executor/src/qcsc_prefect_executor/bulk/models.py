@@ -165,3 +165,13 @@ class BulkRunResult:
     unknown: int
     registry_path: Path
     failed_jobs: list[str]
+
+
+@dataclass(frozen=True)
+class BulkTickResult:
+    """Summary returned by one non-blocking bulk runner tick."""
+
+    submitted: list[SubmittedJob]
+    monitored: dict[str, BulkJobStatus]
+    status_counts: dict[str, int]
+    registry_path: Path
