@@ -386,8 +386,22 @@ def test_reset_jobs_for_rerun_resets_failed_unknown_and_clears_scheduler_fields(
     registry = _registry(tmp_path)
     registry.upsert_jobs(
         [
-            _spec(tmp_path, "failed"),
-            _spec(tmp_path, "unknown"),
+            _spec(
+                tmp_path,
+                "failed",
+                stage_id="stage-a",
+                target_id="target-failed",
+                command_args={"kind": "failed"},
+                expected_outputs=[Path("done.txt")],
+            ),
+            _spec(
+                tmp_path,
+                "unknown",
+                stage_id="stage-a",
+                target_id="target-unknown",
+                command_args={"kind": "unknown"},
+                expected_outputs=[Path("result.json")],
+            ),
             _spec(tmp_path, "succeeded"),
         ]
     )
@@ -408,6 +422,14 @@ def test_reset_jobs_for_rerun_resets_failed_unknown_and_clears_scheduler_fields(
     reset_count = registry.reset_jobs_for_rerun()
 
     assert reset_count == 2
+    expected_errors = {
+        "failed": "exit 1",
+        "unknown": "missing",
+    }
+    expected_outputs = {
+        "failed": [Path("done.txt")],
+        "unknown": [Path("result.json")],
+    }
     for job_key in ["failed", "unknown"]:
         record = registry.get_job(job_key)
         assert record is not None
@@ -418,13 +440,19 @@ def test_reset_jobs_for_rerun_resets_failed_unknown_and_clears_scheduler_fields(
         assert record.submitted_at is None
         assert record.started_at is None
         assert record.finished_at is None
-        assert record.last_error is None
+        assert record.last_error == expected_errors[job_key]
         assert record.submit_mode == "single"
         assert record.bulk_group_key is None
         assert record.bulk_parent_job_id is None
         assert record.bulk_index is None
         assert record.scheduler_subjob_id is None
         assert record.effective_scheduler_job_id is None
+        assert record.stage_id == "stage-a"
+        assert record.wave_id == "wave-a"
+        assert record.target_id == f"target-{job_key}"
+        assert record.work_dir == tmp_path / job_key
+        assert record.command_args == {"kind": job_key}
+        assert record.expected_outputs == expected_outputs[job_key]
 
     succeeded = registry.get_job("succeeded")
     assert succeeded is not None
@@ -432,6 +460,121 @@ def test_reset_jobs_for_rerun_resets_failed_unknown_and_clears_scheduler_fields(
     assert succeeded.scheduler_job_id == "12345"
     assert succeeded.scheduler_subjob_id == "12345[2]"
     assert succeeded.submit_mode == "native_bulk"
+
+
+def test_reset_jobs_for_rerun_can_clear_error(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs([_spec(tmp_path, "failed")])
+    registry.mark_failed("failed", error="exit 1")
+
+    reset_count = registry.reset_jobs_for_rerun(clear_error=True)
+
+    assert reset_count == 1
+    record = registry.get_job("failed")
+    assert record is not None
+    assert record.status == BulkJobStatus.PENDING
+    assert record.last_error is None
+
+
+def test_reset_jobs_for_rerun_does_not_reset_active_or_succeeded_by_default(
+    tmp_path: Path,
+):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs(
+        [
+            _spec(tmp_path, "submitted"),
+            _spec(tmp_path, "queued"),
+            _spec(tmp_path, "running"),
+            _spec(tmp_path, "succeeded"),
+            _spec(tmp_path, "failed"),
+            _spec(tmp_path, "unknown"),
+        ]
+    )
+    registry.mark_submitted("submitted", "1")
+    registry.mark_submitted("queued", "2")
+    registry.mark_queued("queued")
+    registry.mark_submitted("running", "3")
+    registry.mark_running("running")
+    registry.mark_succeeded("succeeded")
+    registry.mark_failed("failed", error="exit 1")
+    registry.mark_unknown("unknown", error="missing")
+
+    reset_count = registry.reset_jobs_for_rerun()
+
+    assert reset_count == 2
+    assert registry.get_job("submitted").status == BulkJobStatus.SUBMITTED
+    assert registry.get_job("queued").status == BulkJobStatus.QUEUED
+    assert registry.get_job("running").status == BulkJobStatus.RUNNING
+    assert registry.get_job("succeeded").status == BulkJobStatus.SUCCEEDED
+    assert registry.get_job("failed").status == BulkJobStatus.PENDING
+    assert registry.get_job("unknown").status == BulkJobStatus.PENDING
+
+
+def test_reset_jobs_for_rerun_job_keys_restrict_target(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs(
+        [
+            _spec(tmp_path, "failed-1"),
+            _spec(tmp_path, "failed-2"),
+            _spec(tmp_path, "unknown-1"),
+        ]
+    )
+    registry.mark_failed("failed-1", error="exit 1")
+    registry.mark_failed("failed-2", error="exit 2")
+    registry.mark_unknown("unknown-1", error="missing")
+
+    reset_count = registry.reset_jobs_for_rerun(
+        job_keys=["failed-2", "unknown-1"],
+    )
+
+    assert reset_count == 2
+    assert registry.get_job("failed-1").status == BulkJobStatus.FAILED
+    assert registry.get_job("failed-2").status == BulkJobStatus.PENDING
+    assert registry.get_job("unknown-1").status == BulkJobStatus.PENDING
+
+
+def test_reset_jobs_for_rerun_respects_status_filter(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs([_spec(tmp_path, "failed"), _spec(tmp_path, "unknown")])
+    registry.mark_failed("failed", error="exit 1")
+    registry.mark_unknown("unknown", error="missing")
+
+    reset_count = registry.reset_jobs_for_rerun(statuses=[BulkJobStatus.UNKNOWN])
+
+    assert reset_count == 1
+    assert registry.get_job("failed").status == BulkJobStatus.FAILED
+    assert registry.get_job("unknown").status == BulkJobStatus.PENDING
+
+
+def test_reset_jobs_for_rerun_can_preserve_scheduler_ids(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs([_spec(tmp_path, "failed")])
+    registry.mark_submitted(
+        "failed",
+        "12345",
+        submit_mode="native_bulk",
+        bulk_group_key="bulk-group",
+        bulk_parent_job_id="12345",
+        bulk_index=7,
+        scheduler_subjob_id="12345[7]",
+    )
+    registry.mark_failed("failed", error="exit 1")
+
+    reset_count = registry.reset_jobs_for_rerun(clear_scheduler_ids=False)
+
+    assert reset_count == 1
+    record = registry.get_job("failed")
+    assert record is not None
+    assert record.status == BulkJobStatus.PENDING
+    assert record.scheduler_job_id == "12345"
+    assert record.submit_mode == "native_bulk"
+    assert record.bulk_group_key == "bulk-group"
+    assert record.bulk_parent_job_id == "12345"
+    assert record.bulk_index == 7
+    assert record.scheduler_subjob_id == "12345[7]"
+    assert record.submitted_at is not None
+    assert record.finished_at is not None
+    assert record.last_error == "exit 1"
 
 
 def test_unknown_job_with_scheduler_id_is_monitorable_but_not_active(tmp_path: Path):
