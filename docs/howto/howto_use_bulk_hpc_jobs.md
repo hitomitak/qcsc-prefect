@@ -36,12 +36,18 @@ For Fugaku-like PJM systems, use `FugakuQueueProbe` or let the bulk API create
 the default Fugaku probe from the `HPCProfileBlock` and `ExecutionProfileBlock`.
 For other schedulers, pass an explicit scheduler-specific `QueueProbe`.
 
-## Fugaku Native Bulk Mode
+## Optional Fugaku Native Bulk Mode
 
-Fugaku also supports native PJM bulk submission through `pjsub --bulk --sparam`.
-Use `submit_mode="native_bulk"` when many logical jobs should be submitted as
-PJM subjobs in fewer scheduler calls. The registry still tracks each
-`BulkJobSpec` independently.
+The default and recommended integration path is `submit_mode="single"`, which
+submits one scheduler job per logical `BulkJobSpec`. Fugaku native PJM bulk
+submission through `pjsub --bulk --sparam` is available as an experimental,
+opt-in mode. It is not used unless `submit_mode="native_bulk"` is passed to
+`run_jobs_from_blocks_bulk()`.
+
+Use native bulk only when you specifically want multiple logical jobs submitted
+as PJM subjobs in fewer scheduler calls. The registry still tracks each
+`BulkJobSpec` independently, and native bulk metadata remains nullable for
+backward compatibility with single-submit registries.
 
 Native bulk mode uses logical subjob slots for queue capacity. When creating a
 Fugaku probe yourself, set `capacity_mode="native_bulk"` so `pjstat --limit`
@@ -124,7 +130,7 @@ result = await run_jobs_from_blocks_bulk(
 print(result.status_counts)
 ```
 
-## Native Bulk Example
+## Experimental Native Bulk Example
 
 ```python
 from pathlib import Path
