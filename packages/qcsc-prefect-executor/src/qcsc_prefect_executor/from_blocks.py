@@ -551,6 +551,8 @@ async def _prepare_job_from_blocks(
             account=submission_target.project or None,
             executable=executable,
             qpu=hpc_block.slurm_qpu,
+            memory=getattr(hpc_block, "slurm_memory", None),
+            ntasks=getattr(hpc_block, "slurm_ntasks", None),
         )
     else:
         raise NotImplementedError(

@@ -19,12 +19,16 @@ class SlurmJobRequest:
         executable: Absolute or scheduler-visible command path to execute.
         account: Optional Slurm account passed to ``#SBATCH --account``.
         qpu: Optional QPU resource selector emitted by the Slurm template.
+        memory: Optional memory request passed to ``#SBATCH --mem``.
+        ntasks: Optional task count passed to ``#SBATCH --ntasks``.
     """
 
     partition: str
     executable: str
     account: str | None = None
     qpu: str | None = None
+    memory: str | None = None
+    ntasks: int | None = None
 
 
 def to_slurm_template_kwargs(*, exec_profile: ExecutionProfile, req: SlurmJobRequest) -> dict:
@@ -48,6 +52,10 @@ def to_slurm_template_kwargs(*, exec_profile: ExecutionProfile, req: SlurmJobReq
         kw["account"] = req.account
     if req.qpu:
         kw["qpu"] = req.qpu
+    if req.memory:
+        kw["memory"] = req.memory
+    if req.ntasks is not None:
+        kw["ntasks"] = req.ntasks
     if exec_profile.mpiprocs is not None:
         kw["mpiprocs"] = exec_profile.mpiprocs
     if exec_profile.ompthreads is not None:

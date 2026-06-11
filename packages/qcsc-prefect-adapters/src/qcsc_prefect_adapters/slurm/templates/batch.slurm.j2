@@ -3,7 +3,13 @@
 {%- if account is defined %}
 #SBATCH --account={{ account }}
 {%- endif %}
+{%- if memory is defined %}
+#SBATCH --mem={{ memory }}
+{%- endif %}
 #SBATCH --nodes={{ num_nodes }}
+{%- if ntasks is defined %}
+#SBATCH --ntasks={{ ntasks }}
+{%- endif %}
 {%- if mpiprocs is defined %}
 #SBATCH --ntasks-per-node={{ mpiprocs }}
 {%- endif %}
