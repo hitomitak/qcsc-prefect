@@ -59,6 +59,8 @@ class _HPCProfileBlockStub:
         mpi_options_for_pjm: list[str] | None = None,
         pjm_resources: list[str] | None = None,
         slurm_qpu: str | None = None,
+        slurm_memory: str | None = None,
+        slurm_ntasks: int | None = None,
     ) -> None:
         self.hpc_target = hpc_target
         self.executable_map = executable_map
@@ -71,6 +73,8 @@ class _HPCProfileBlockStub:
         self.mpi_options_for_pjm = mpi_options_for_pjm or []
         self.pjm_resources = pjm_resources or []
         self.slurm_qpu = slurm_qpu
+        self.slurm_memory = slurm_memory
+        self.slurm_ntasks = slurm_ntasks
 
 
 def _patch_block_loading(monkeypatch, command, profile, hpc):
@@ -288,6 +292,8 @@ def test_run_job_from_blocks_dispatches_to_slurm(monkeypatch, tmp_path: Path):
         queue_cpu="compute",
         project_cpu="proj01",
         slurm_qpu="a100",
+        slurm_memory="5001G",
+        slurm_ntasks=8,
     )
     _patch_block_loading(monkeypatch, command, profile, hpc)
 
@@ -330,6 +336,8 @@ def test_run_job_from_blocks_dispatches_to_slurm(monkeypatch, tmp_path: Path):
     assert captured["req"].account == "proj01"
     assert captured["req"].executable == "/work/proj01/bin/get_counts_hist"
     assert captured["req"].qpu == "a100"
+    assert captured["req"].memory == "5001G"
+    assert captured["req"].ntasks == 8
     assert captured["metrics_artifact_key"] == "slurm-metrics"
     assert captured["exec_profile"].launcher == "srun"
     assert captured["exec_profile"].mpi_options == ["--cpu-bind=cores"]
