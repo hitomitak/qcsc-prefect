@@ -121,6 +121,7 @@ class GlobalFugakuBulkRunner:
     initial_submit_count: int | None = None
     max_submit_per_refill: int = 100
     target_active_jobs: int | None = None
+    no_check_directory: bool = False
 
     def __post_init__(self) -> None:
         self.registry_path = Path(self.registry_path).expanduser()
@@ -206,6 +207,7 @@ class GlobalFugakuBulkRunner:
                     job_key=job.job_key,
                     command_args=job.command_args,
                     registry=self.registry,
+                    fugaku_no_check_directory=self.no_check_directory,
                 )
             except (QueueFullError, TemporarySubmitError) as exc:
                 _mark_deferred_if_needed(

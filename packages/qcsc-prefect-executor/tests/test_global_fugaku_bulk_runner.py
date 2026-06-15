@@ -54,6 +54,7 @@ def _install_single_submit_fakes(
     submitted: list[str],
     submit_failures: dict[str, Exception] | None = None,
     mark_monitored_succeeded: bool = False,
+    no_check_directory_calls: list[bool] | None = None,
 ) -> None:
     submit_failures = submit_failures or {}
 
@@ -66,12 +67,15 @@ def _install_single_submit_fakes(
         hpc_profile_block: str,
         command_args: dict[str, Any] | None = None,
         registry: BulkJobRegistry | None = None,
+        fugaku_no_check_directory: bool = False,
     ) -> SubmittedJob:
         if job_key in submit_failures:
             raise submit_failures[job_key]
 
         scheduler_job_id = f"sched-{job_key}"
         submitted.append(job_key)
+        if no_check_directory_calls is not None:
+            no_check_directory_calls.append(fugaku_no_check_directory)
         if registry is not None:
             registry.mark_submitted(job_key, scheduler_job_id)
         return SubmittedJob(
@@ -115,6 +119,7 @@ def _runner(
     queue_probe: _FixedCapacityProbe | None = None,
     initial_submit_count: int | None = 3,
     max_submit_per_refill: int = 2,
+    no_check_directory: bool = False,
 ) -> GlobalFugakuBulkRunner:
     return GlobalFugakuBulkRunner(
         command_block="cmd",
@@ -124,6 +129,7 @@ def _runner(
         queue_probe=queue_probe or _FixedCapacityProbe(10),
         initial_submit_count=initial_submit_count,
         max_submit_per_refill=max_submit_per_refill,
+        no_check_directory=no_check_directory,
     )
 
 
@@ -145,6 +151,45 @@ def test_tick_submits_initial_count_then_refill_count(tmp_path: Path, monkeypatc
     assert [job.job_key for job in second.submitted] == ["qpy-3", "qpy-4"]
     assert submitted == ["qpy-0", "qpy-1", "qpy-2", "qpy-3", "qpy-4"]
     assert runner.all_submitted("qpy") is True
+
+
+def test_tick_passes_default_no_check_directory_false(tmp_path: Path, monkeypatch):
+    submitted: list[str] = []
+    no_check_directory_calls: list[bool] = []
+    _install_single_submit_fakes(
+        monkeypatch,
+        submitted=submitted,
+        no_check_directory_calls=no_check_directory_calls,
+    )
+    runner = _runner(tmp_path, initial_submit_count=1, max_submit_per_refill=1)
+    runner.register_jobs([_spec(tmp_path, "qpy-0", "qpy")])
+
+    tick = asyncio.run(runner.tick())
+
+    assert [job.job_key for job in tick.submitted] == ["qpy-0"]
+    assert no_check_directory_calls == [False]
+
+
+def test_tick_passes_opt_in_no_check_directory_true(tmp_path: Path, monkeypatch):
+    submitted: list[str] = []
+    no_check_directory_calls: list[bool] = []
+    _install_single_submit_fakes(
+        monkeypatch,
+        submitted=submitted,
+        no_check_directory_calls=no_check_directory_calls,
+    )
+    runner = _runner(
+        tmp_path,
+        initial_submit_count=1,
+        max_submit_per_refill=1,
+        no_check_directory=True,
+    )
+    runner.register_jobs([_spec(tmp_path, "qpy-0", "qpy")])
+
+    tick = asyncio.run(runner.tick())
+
+    assert [job.job_key for job in tick.submitted] == ["qpy-0"]
+    assert no_check_directory_calls == [True]
 
 
 def test_all_submitted_false_while_pending_or_deferred_remains(

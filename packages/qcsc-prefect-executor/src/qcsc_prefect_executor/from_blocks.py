@@ -655,14 +655,20 @@ def _classify_submit_exception(exc: BaseException) -> SubmitError:
     return SubmitError(_exception_text(exc))
 
 
-async def _submit_prepared_job(prepared: _PreparedBlockJob) -> str:
+async def _submit_prepared_job(
+    prepared: _PreparedBlockJob,
+    *,
+    fugaku_no_check_directory: bool = False,
+) -> str:
     script_path = _write_script_for_prepared_job(prepared)
     target = prepared.submission_target.hpc_target
 
     if target == "miyabi":
         submit = await MiyabiPBSRuntime().submit(script_path, cwd=prepared.work_dir)
     elif target == "fugaku":
-        submit = await FugakuPJMRuntime().submit(script_path, cwd=prepared.work_dir)
+        submit = await FugakuPJMRuntime(
+            no_check_directory=fugaku_no_check_directory
+        ).submit(script_path, cwd=prepared.work_dir)
     elif target == "slurm":
         submit = await SlurmRuntime().submit(script_path, cwd=prepared.work_dir)
     else:
@@ -701,6 +707,7 @@ async def _submit_native_bulk_group_from_blocks(
     command_block: str,
     execution_profile_block: str,
     hpc_profile_block: str,
+    fugaku_no_check_directory: bool = False,
 ) -> str:
     bulk_group_key = _bulk_group_key_for_jobs(jobs)
     bulk_group_dir = registry.path.parent / "native-bulk" / bulk_group_key
@@ -721,7 +728,9 @@ async def _submit_native_bulk_group_from_blocks(
         prepared=prepared,
         bulk_manifest_dir=manifest_group.manifest_dir,
     )
-    parent_job_id = await FugakuPJMRuntime().submit_bulk(
+    parent_job_id = await FugakuPJMRuntime(
+        no_check_directory=fugaku_no_check_directory
+    ).submit_bulk(
         script_path,
         manifest_group.bulk_count,
         cwd=manifest_group.bulk_group_dir,
@@ -753,6 +762,7 @@ async def _submit_native_bulk_cycle_from_blocks(
     max_bulk_group_size: int,
     target_active_jobs: int | None,
     stop_on_first_failure: bool,
+    fugaku_no_check_directory: bool = False,
 ) -> bool:
     submit_count = _native_bulk_submit_count(
         registry=registry,
@@ -776,6 +786,7 @@ async def _submit_native_bulk_cycle_from_blocks(
                 command_block=command_block,
                 execution_profile_block=execution_profile_block,
                 hpc_profile_block=hpc_profile_block,
+                fugaku_no_check_directory=fugaku_no_check_directory,
             )
         except Exception as exc:
             classified = _classify_submit_exception(exc)
@@ -812,12 +823,15 @@ async def submit_job_from_blocks(
     command_block_name: str | None = None,
     execution_profile_block_name: str | None = None,
     hpc_profile_block_name: str | None = None,
+    fugaku_no_check_directory: bool = False,
 ) -> SubmittedJob:
     """Submit one block-defined HPC job without waiting for completion.
 
     Queue-full and retryable scheduler failures are recorded as
     ``SUBMIT_DEFERRED`` when a registry is provided, then raised so a future
-    refill loop can stop submitting more jobs in the current cycle.
+    refill loop can stop submitting more jobs in the current cycle. Set
+    ``fugaku_no_check_directory`` to opt into ``pjsub --no-check-directory`` for
+    Fugaku submissions only.
     """
 
     resolved_command_block = _resolve_named_argument(
@@ -859,7 +873,10 @@ async def submit_job_from_blocks(
     )
 
     try:
-        scheduler_job_id = await _submit_prepared_job(prepared)
+        scheduler_job_id = await _submit_prepared_job(
+            prepared,
+            fugaku_no_check_directory=fugaku_no_check_directory,
+        )
     except Exception as exc:
         classified = _classify_submit_exception(exc)
         if registry is not None:
@@ -1330,6 +1347,7 @@ async def run_jobs_from_blocks_bulk(
     poll_interval_seconds: int = 60,
     refill_interval_seconds: int = 60,
     stop_on_first_failure: bool = False,
+    fugaku_no_check_directory: bool = False,
 ) -> BulkRunResult:
     """Run many block-defined HPC jobs through one queue-aware bulk loop.
 
@@ -1338,7 +1356,9 @@ async def run_jobs_from_blocks_bulk(
     ``BulkJobSpec`` remain registry metadata for downstream workflow readiness
     checks rather than submit units. The default ``submit_mode="single"`` keeps
     using one scheduler submit per logical job. Fugaku native bulk submission is
-    an explicit opt-in path via ``submit_mode="native_bulk"``.
+    an explicit opt-in path via ``submit_mode="native_bulk"``. Set
+    ``fugaku_no_check_directory`` to opt into ``pjsub --no-check-directory`` for
+    Fugaku submissions only.
     """
 
     registry = BulkJobRegistry(registry_path)
@@ -1414,6 +1434,7 @@ async def run_jobs_from_blocks_bulk(
                     max_bulk_group_size=max_bulk_group_size,
                     target_active_jobs=target_active_jobs,
                     stop_on_first_failure=stop_on_first_failure,
+                    fugaku_no_check_directory=fugaku_no_check_directory,
                 )
             else:
                 pre_candidates = registry.get_submit_candidates(limit=submit_limit)
@@ -1433,6 +1454,7 @@ async def run_jobs_from_blocks_bulk(
                                 job_key=job.job_key,
                                 command_args=job.command_args,
                                 registry=registry,
+                                fugaku_no_check_directory=fugaku_no_check_directory,
                             )
                         except QueueFullError as exc:
                             _mark_deferred_if_needed(
