@@ -56,8 +56,8 @@ class _HPCProfileBlockStub:
         self.hpc_target = hpc_target
         self.queue_cpu = "compute"
         self.queue_gpu = "gpu"
-        self.project_cpu = ""
-        self.project_gpu = ""
+        self.project_cpu = "ra010014" if hpc_target == "fugaku" else ""
+        self.project_gpu = "ra010014" if hpc_target == "fugaku" else ""
         self.executable_map = {"bulk_executable": "/bin/echo"}
         self.slurm_qpu = None
         self.gfscache = None
@@ -137,6 +137,17 @@ def _patch_slurm_runtime(monkeypatch, runtime: _SubmitRuntimeStub) -> None:
     monkeypatch.setattr(mod, "SlurmRuntime", lambda: runtime)
 
 
+def _patch_fugaku_runtime(monkeypatch, runtime: _SubmitRuntimeStub) -> list[bool]:
+    no_check_directory_calls: list[bool] = []
+
+    def runtime_factory(*, no_check_directory: bool = False) -> _SubmitRuntimeStub:
+        no_check_directory_calls.append(no_check_directory)
+        return runtime
+
+    monkeypatch.setattr(mod, "FugakuPJMRuntime", runtime_factory)
+    return no_check_directory_calls
+
+
 def test_submit_job_from_blocks_records_submitted_with_scheduler_job_id(
     tmp_path: Path, monkeypatch
 ):
@@ -183,6 +194,51 @@ def test_submit_job_from_blocks_does_not_wait_for_completion(tmp_path: Path, mon
 
     assert len(runtime.submit_calls) == 1
     assert runtime.wait_calls == 0
+
+
+def test_submit_job_from_blocks_uses_fugaku_no_check_directory_default_false(
+    tmp_path: Path, monkeypatch
+):
+    _patch_block_loading(monkeypatch, hpc_target="fugaku")
+    runtime = _SubmitRuntimeStub(job_id="49075255")
+    no_check_directory_calls = _patch_fugaku_runtime(monkeypatch, runtime)
+
+    result = asyncio.run(
+        mod.submit_job_from_blocks(
+            command_block="cmd",
+            execution_profile_block="exec",
+            hpc_profile_block="hpc",
+            work_dir=tmp_path / "job-1",
+            job_key="job-1",
+        )
+    )
+
+    assert result.scheduler_job_id == "49075255"
+    assert no_check_directory_calls == [False]
+    assert len(runtime.submit_calls) == 1
+
+
+def test_submit_job_from_blocks_passes_fugaku_no_check_directory_true(
+    tmp_path: Path, monkeypatch
+):
+    _patch_block_loading(monkeypatch, hpc_target="fugaku")
+    runtime = _SubmitRuntimeStub(job_id="49075255")
+    no_check_directory_calls = _patch_fugaku_runtime(monkeypatch, runtime)
+
+    result = asyncio.run(
+        mod.submit_job_from_blocks(
+            command_block="cmd",
+            execution_profile_block="exec",
+            hpc_profile_block="hpc",
+            work_dir=tmp_path / "job-1",
+            job_key="job-1",
+            fugaku_no_check_directory=True,
+        )
+    )
+
+    assert result.scheduler_job_id == "49075255"
+    assert no_check_directory_calls == [True]
+    assert len(runtime.submit_calls) == 1
 
 
 def test_submit_job_from_blocks_rejects_reused_succeeded_job_key(tmp_path: Path, monkeypatch):

@@ -101,7 +101,9 @@ def _install_fake_submit_and_monitor(
         hpc_profile_block: str,
         command_args: dict[str, Any] | None = None,
         registry: BulkJobRegistry | None = None,
+        fugaku_no_check_directory: bool = False,
     ) -> SubmittedJob:
+        assert fugaku_no_check_directory is False
         failures = submit_failures.get(job_key, [])
         if failures:
             raise failures.pop(0)
@@ -201,6 +203,7 @@ class _NativeBulkSubmitRuntime:
         self.parent_job_ids = parent_job_ids or ["9000", "9001", "9002", "9003"]
         self.error = error
         self.calls: list[dict[str, Any]] = []
+        self.no_check_directory_calls: list[bool] = []
 
     async def submit_bulk(
         self,
@@ -319,7 +322,11 @@ def _install_native_bulk_fakes(
 
     monkeypatch.setattr(mod, "resolve_submission_target", fake_resolve_submission_target)
     monkeypatch.setattr(mod, "_prepare_job_from_blocks", fake_prepare_job_from_blocks)
-    monkeypatch.setattr(mod, "FugakuPJMRuntime", lambda: runtime)
+    def runtime_factory(*, no_check_directory: bool = False) -> _NativeBulkSubmitRuntime:
+        runtime.no_check_directory_calls.append(no_check_directory)
+        return runtime
+
+    monkeypatch.setattr(mod, "FugakuPJMRuntime", runtime_factory)
     monkeypatch.setattr(mod, "monitor_jobs_many", fake_monitor_jobs_many)
 
 
@@ -597,6 +604,33 @@ def test_native_bulk_initial_submit_splits_fifo_groups_and_records_subjobs(
     assert job_2.scheduler_subjob_id == "9001[0]"
     assert job_3.scheduler_subjob_id == "9001[1]"
     assert result.succeeded == 5
+
+
+def test_native_bulk_passes_fugaku_no_check_directory_option(tmp_path: Path, monkeypatch):
+    registry_path = tmp_path / "bulk.sqlite"
+    runtime = _NativeBulkSubmitRuntime(parent_job_ids=["9000"])
+    _install_native_bulk_fakes(monkeypatch, runtime)
+
+    result = asyncio.run(
+        mod.run_jobs_from_blocks_bulk(
+            jobs=_native_bulk_specs(tmp_path, 2),
+            command_block="cmd",
+            execution_profile_block="exec",
+            hpc_profile_block="hpc",
+            registry_path=registry_path,
+            queue_probe=_FixedCapacityProbe(10),
+            submit_mode="native_bulk",
+            initial_submit_count=2,
+            max_bulk_group_size=2,
+            poll_interval_seconds=0,
+            refill_interval_seconds=0,
+            fugaku_no_check_directory=True,
+        )
+    )
+
+    assert result.succeeded == 2
+    assert [call["bulk_count"] for call in runtime.calls] == [2]
+    assert runtime.no_check_directory_calls == [True]
 
 
 def test_native_bulk_queue_full_marks_group_deferred(tmp_path: Path, monkeypatch):
