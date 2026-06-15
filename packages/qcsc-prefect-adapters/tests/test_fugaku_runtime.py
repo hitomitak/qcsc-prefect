@@ -23,6 +23,23 @@ def test_submit_parses_job_id(tmp_path: Path, monkeypatch):
     assert calls == [(("pjsub", str(tmp_path / "batch.pjm")), tmp_path)]
 
 
+def test_submit_with_no_check_directory_adds_pjsub_option(tmp_path: Path, monkeypatch):
+    calls: list[tuple[tuple[str, ...], Path | None]] = []
+
+    async def fake_run_command(*args: str, cwd: Path | None = None) -> str:
+        calls.append((args, cwd))
+        return "Job 43607196 submitted."
+
+    monkeypatch.setattr(runtime_mod, "run_command", fake_run_command)
+    rt = runtime_mod.FugakuPJMRuntime(no_check_directory=True)
+    script_path = tmp_path / "batch.pjm"
+
+    result = asyncio.run(rt.submit(script_path, cwd=tmp_path))
+
+    assert result.job_id == "43607196"
+    assert calls == [(("pjsub", "--no-check-directory", str(script_path)), tmp_path)]
+
+
 def test_submit_bulk_invokes_pjsub_bulk_with_sparam_and_cwd(tmp_path: Path, monkeypatch):
     calls: list[tuple[tuple[str, ...], Path | None]] = []
 
@@ -40,6 +57,28 @@ def test_submit_bulk_invokes_pjsub_bulk_with_sparam_and_cwd(tmp_path: Path, monk
     assert calls == [
         (
             ("pjsub", "--bulk", "--sparam", "0-4", str(script_path)),
+            tmp_path,
+        )
+    ]
+
+
+def test_submit_bulk_with_no_check_directory_adds_pjsub_option(tmp_path: Path, monkeypatch):
+    calls: list[tuple[tuple[str, ...], Path | None]] = []
+
+    async def fake_run_command(*args: str, cwd: Path | None = None) -> str:
+        calls.append((args, cwd))
+        return "Job 12345 submitted."
+
+    monkeypatch.setattr(runtime_mod, "run_command", fake_run_command)
+    rt = runtime_mod.FugakuPJMRuntime(no_check_directory=True)
+    script_path = tmp_path / "bulk.pjm"
+
+    parent_job_id = asyncio.run(rt.submit_bulk(script_path, bulk_count=5, cwd=tmp_path))
+
+    assert parent_job_id == "12345"
+    assert calls == [
+        (
+            ("pjsub", "--no-check-directory", "--bulk", "--sparam", "0-4", str(script_path)),
             tmp_path,
         )
     ]
