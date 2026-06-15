@@ -100,6 +100,24 @@ class FugakuPJMRuntime:
         "REASON",
     ]
 
+    def __init__(self, *, no_check_directory: bool = False) -> None:
+        """Create a Fugaku PJM runtime.
+
+        Args:
+            no_check_directory: When true, pass ``--no-check-directory`` to
+                ``pjsub`` submissions. This is intentionally opt-in because it
+                skips PJM's data-area check for the submit working directory.
+        """
+
+        self.no_check_directory = no_check_directory
+
+    def _pjsub_args(self, *args: str) -> tuple[str, ...]:
+        command = ["pjsub"]
+        if self.no_check_directory:
+            command.append("--no-check-directory")
+        command.extend(args)
+        return tuple(command)
+
     async def submit(self, script_path: Path, *, cwd: Path | None = None) -> SubmitResult:
         """Submit a PJM script with ``pjsub``.
 
@@ -115,7 +133,7 @@ class FugakuPJMRuntime:
         """
 
         try:
-            stdout = await run_command("pjsub", str(script_path), cwd=cwd)
+            stdout = await run_command(*self._pjsub_args(str(script_path)), cwd=cwd)
         except Exception as e:
             raise SubmitError(f"pjsub failed for {script_path}") from e
 
@@ -154,11 +172,7 @@ class FugakuPJMRuntime:
         sparam = f"0-{int(bulk_count) - 1}"
         try:
             stdout = await run_command(
-                "pjsub",
-                "--bulk",
-                "--sparam",
-                sparam,
-                str(script_path),
+                *self._pjsub_args("--bulk", "--sparam", sparam, str(script_path)),
                 cwd=cwd,
             )
         except Exception as e:
