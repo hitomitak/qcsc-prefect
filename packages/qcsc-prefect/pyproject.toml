@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qcsc-prefect"
-version = "0.2.2"
+version = "0.2.3"
 description = "Meta-package for installing QCSC Prefect core packages"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,22 +16,22 @@ maintainers = [
     { name = "QCSC Prefect Maintainers" },
 ]
 dependencies = [
-    "qcsc-prefect-adapters==0.2.2",
-    "qcsc-prefect-blocks==0.2.2",
-    "qcsc-prefect-core==0.2.2",
-    "qcsc-prefect-executor==0.2.2",
+    "qcsc-prefect-adapters==0.2.3",
+    "qcsc-prefect-blocks==0.2.3",
+    "qcsc-prefect-core==0.2.3",
+    "qcsc-prefect-executor==0.2.3",
 ]
 
 [project.optional-dependencies]
 qiskit = [
-    "qcsc-prefect-qiskit==0.2.2",
+    "qcsc-prefect-qiskit==0.2.3",
 ]
 dice = [
-    "qcsc-prefect-dice==0.2.2",
+    "qcsc-prefect-dice==0.2.3",
 ]
 all = [
-    "qcsc-prefect-dice==0.2.2",
-    "qcsc-prefect-qiskit==0.2.2",
+    "qcsc-prefect-dice==0.2.3",
+    "qcsc-prefect-qiskit==0.2.3",
 ]
 
 [project.urls]
