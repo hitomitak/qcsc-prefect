@@ -34,7 +34,7 @@ qcsc-prefect/
 - `packages/qcsc-prefect-blocks/`
   Prefect Block schemas for command, execution profile, and HPC profile layers.
 - `packages/qcsc-prefect-adapters/`
-  Target-specific script builders and runtime adapters (currently Miyabi/PBS and Fugaku/PJM).
+  Local process runtime plus target-specific scheduler script builders and adapters.
 - `packages/qcsc-prefect-executor/`
   High-level execution entrypoints that resolve blocks, derive scheduler routing,
   and dispatch to target runtimes.
@@ -130,6 +130,11 @@ HPCProfileBlock(
 Generated Miyabi, Fugaku, and Slurm job scripts include a preflight check that runs on the
 HPC node before launching the job. The script fails early with a clear message if the configured
 executable path is empty, missing, not executable, or not found on `PATH`.
+
+For execution on the Prefect worker itself, set `HPCProfileBlock.hpc_target="local"`.
+Local execution invokes the mapped executable directly without a shell, job script, or scheduler.
+`environments` are merged into the process environment; `modules` and `pre_commands` are not
+supported and cause an error before the process starts.
 
 See [DICE Integration](./docs/howto/howto_use_dice_prefect.md) for a longer setup example.
 

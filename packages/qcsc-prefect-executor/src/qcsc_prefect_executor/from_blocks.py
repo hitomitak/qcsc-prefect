@@ -11,6 +11,7 @@ from qcsc_prefect_adapters.fugaku import builder as fugaku_builder
 from qcsc_prefect_adapters.fugaku import runtime as fugaku_runtime
 from qcsc_prefect_adapters.fugaku.builder import FugakuJobRequest
 from qcsc_prefect_adapters.fugaku.runtime import FugakuPJMRuntime
+from qcsc_prefect_adapters.local.runtime import LocalJobRequest
 from qcsc_prefect_adapters.miyabi import builder as miyabi_builder
 from qcsc_prefect_adapters.miyabi import runtime as miyabi_runtime
 from qcsc_prefect_adapters.miyabi.builder import MiyabiJobRequest
@@ -39,6 +40,7 @@ from qcsc_prefect_executor.bulk.models import (
 from qcsc_prefect_executor.bulk.native_manifest import create_native_bulk_group_manifests
 from qcsc_prefect_executor.bulk.registry import BulkJobRegistry
 from qcsc_prefect_executor.fugaku.run import run_fugaku_job
+from qcsc_prefect_executor.local.run import run_local_job
 from qcsc_prefect_executor.miyabi.run import run_miyabi_job
 from qcsc_prefect_executor.slurm.run import run_slurm_job
 
@@ -63,16 +65,16 @@ _KNOWN_SCRIPT_SUFFIXES = frozenset(_SCRIPT_SUFFIX_BY_TARGET.values())
 
 @dataclass(frozen=True)
 class SubmissionTarget:
-    """Scheduler routing information resolved from Prefect blocks.
+    """Execution routing information resolved from Prefect blocks.
 
     Attributes:
-        hpc_target: Scheduler backend name, such as ``"miyabi"``,
+        hpc_target: Runtime target name, such as ``"local"``, ``"miyabi"``,
             ``"fugaku"``, or ``"slurm"``.
         queue_name: Queue, partition, or resource-group name selected for the
-            execution profile's resource class.
+            execution profile's resource class. Empty for local execution.
         project: Project, group, or account name selected for the resource
-            class. This can be empty for scheduler targets that do not require
-            an account.
+            class. Empty for local execution and scheduler targets that do not
+            require an account.
     """
 
     hpc_target: str
@@ -84,7 +86,7 @@ class SubmissionTarget:
 class _PreparedBlockJob:
     submission_target: SubmissionTarget
     work_dir: Path
-    script_filename: str
+    script_filename: str | None
     exec_profile: ExecutionProfile
     req: Any
 
@@ -102,6 +104,8 @@ async def _load_block(block_cls, block_name: str):
 def _resolve_submission_target_from_loaded_blocks(
     hpc_block: HPCProfileBlock, resource_class: str
 ) -> SubmissionTarget:
+    if hpc_block.hpc_target == "local":
+        return SubmissionTarget(hpc_target="local", queue_name="", project="")
     if resource_class == "gpu":
         return SubmissionTarget(
             hpc_target=hpc_block.hpc_target,
@@ -116,15 +120,15 @@ def _resolve_submission_target_from_loaded_blocks(
 
 
 async def resolve_hpc_target(*, hpc_profile_block_name: str) -> str:
-    """Load an ``HPCProfileBlock`` and return its scheduler target name.
+    """Load an ``HPCProfileBlock`` and return its execution target name.
 
     Args:
         hpc_profile_block_name: Prefect block document name for
             `qcsc_prefect_blocks.common.blocks.HPCProfileBlock`.
 
     Returns:
-        The configured ``hpc_target`` value, for example ``"miyabi"``,
-        ``"fugaku"``, or ``"slurm"``.
+        The configured ``hpc_target`` value, for example ``"local"``,
+        ``"miyabi"``, ``"fugaku"``, or ``"slurm"``.
     """
 
     hpc_block = await _load_block(HPCProfileBlock, hpc_profile_block_name)
@@ -485,7 +489,7 @@ async def _prepare_job_from_blocks(
     execution_profile_block_name: str,
     hpc_profile_block_name: str,
     work_dir: Path,
-    script_filename: str,
+    script_filename: str | None,
     user_args: list[str] | None = None,
     fugaku_job_name: str | None = None,
     execution_profile_overrides: dict[str, Any] | None = None,
@@ -511,10 +515,15 @@ async def _prepare_job_from_blocks(
     submission_target = _resolve_submission_target_from_loaded_blocks(
         hpc_block, execution_profile_block.resource_class
     )
-    resolved_script_filename = build_scheduler_script_filename(
-        script_filename,
-        submission_target.hpc_target,
-    )
+    if submission_target.hpc_target == "local":
+        resolved_script_filename = None
+    else:
+        if not script_filename:
+            raise ValueError("script_filename is required for scheduler execution targets.")
+        resolved_script_filename = build_scheduler_script_filename(
+            script_filename,
+            submission_target.hpc_target,
+        )
     if submission_target.hpc_target in {"miyabi", "fugaku"} and not submission_target.project:
         raise ValueError("Project/Group is empty. Update HPCProfileBlock project_cpu/project_gpu.")
 
@@ -526,7 +535,9 @@ async def _prepare_job_from_blocks(
     )
     resolved_work_dir = Path(work_dir).expanduser().resolve()
 
-    if submission_target.hpc_target == "miyabi":
+    if submission_target.hpc_target == "local":
+        req = LocalJobRequest(executable=executable)
+    elif submission_target.hpc_target == "miyabi":
         req = MiyabiJobRequest(
             queue_name=submission_target.queue_name,
             project=submission_target.project,
@@ -571,6 +582,8 @@ async def _prepare_job_from_blocks(
 
 def _write_script_for_prepared_job(prepared: _PreparedBlockJob) -> Path:
     target = prepared.submission_target.hpc_target
+    if prepared.script_filename is None:
+        raise ValueError(f"hpc_target={target!r} does not use scheduler job scripts.")
     if target == "miyabi":
         script_text = miyabi_builder.render_script(
             work_dir=prepared.work_dir,
@@ -660,8 +673,13 @@ async def _submit_prepared_job(
     *,
     fugaku_no_check_directory: bool = False,
 ) -> str:
-    script_path = _write_script_for_prepared_job(prepared)
     target = prepared.submission_target.hpc_target
+    if target == "local":
+        raise ValueError(
+            "Scheduler submit APIs do not support hpc_target='local'. "
+            "Use run_job_from_blocks() for local execution."
+        )
+    script_path = _write_script_for_prepared_job(prepared)
 
     if target == "miyabi":
         submit = await MiyabiPBSRuntime().submit(script_path, cwd=prepared.work_dir)
@@ -1509,7 +1527,7 @@ async def run_job_from_blocks(
     execution_profile_block_name: str,
     hpc_profile_block_name: str,
     work_dir: Path,
-    script_filename: str,
+    script_filename: str | None = None,
     user_args: list[str] | None = None,
     watch_poll_interval: float = 10.0,
     timeout_seconds: float | None = None,
@@ -1517,23 +1535,24 @@ async def run_job_from_blocks(
     fugaku_job_name: str | None = None,
     execution_profile_overrides: dict[str, Any] | None = None,
 ) -> Any:
-    """Resolve Prefect blocks and execute a job on the configured HPC target.
+    """Resolve Prefect blocks and execute a job on the configured target.
 
     This is the main block-driven entrypoint for workflow authors. It loads the
     command, execution profile, and HPC profile blocks; converts them into the
-    internal runtime models; creates the target-specific scheduler request; and
-    dispatches to the Miyabi, Fugaku, or Slurm executor.
+    internal runtime models; and dispatches to local execution or the Miyabi,
+    Fugaku, or Slurm executor.
 
     Args:
         command_block_name: Prefect block document name for the command to run.
         execution_profile_block_name: Prefect block document name describing
             resources, launcher, environment, and default execution behavior.
         hpc_profile_block_name: Prefect block document name describing the
-            scheduler target, queues, projects, and executable mapping.
-        work_dir: Working directory where scheduler scripts and job outputs are
-            created.
+            execution target and executable mapping, plus scheduler routing
+            fields when applicable.
+        work_dir: Working directory for the process or scheduler job.
         script_filename: Logical or scheduler-specific script filename. The
-            suffix is normalized for the resolved target.
+            suffix is normalized for scheduler targets. It is ignored for local
+            execution and may be omitted.
         user_args: Optional extra command-line arguments appended after the
             command block's default arguments.
         watch_poll_interval: Seconds to wait between scheduler status polls.
@@ -1545,13 +1564,14 @@ async def run_job_from_blocks(
             execution profile fields, such as ``num_nodes`` or ``walltime``.
 
     Returns:
-        A target-specific result object: ``MiyabiRunResult``,
-        ``FugakuRunResult``, or ``SlurmRunResult``.
+        A target-specific result object: ``LocalRunResult``,
+        ``MiyabiRunResult``, ``FugakuRunResult``, or ``SlurmRunResult``.
 
     Raises:
         ValueError: If the command and execution profile blocks refer to
-            different command names, if a required project/group is missing, or
-            if unsupported execution profile override keys are provided.
+            different command names, if a required project/group is missing,
+            if local execution receives ``modules`` or ``pre_commands``, or if
+            unsupported execution profile override keys are provided.
         KeyError: If the command's executable key is missing from the HPC
             profile's executable map.
         NotImplementedError: If the resolved ``hpc_target`` is unsupported.
@@ -1566,6 +1586,15 @@ async def run_job_from_blocks(
         fugaku_job_name=fugaku_job_name,
         execution_profile_overrides=execution_profile_overrides,
     )
+
+    if prepared.submission_target.hpc_target == "local":
+        return await run_local_job(
+            work_dir=prepared.work_dir,
+            exec_profile=prepared.exec_profile,
+            req=prepared.req,
+            timeout_seconds=timeout_seconds,
+            metrics_artifact_key=metrics_artifact_key,
+        )
 
     if prepared.submission_target.hpc_target == "miyabi":
         return await run_miyabi_job(

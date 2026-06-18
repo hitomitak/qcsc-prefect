@@ -207,6 +207,61 @@ def test_run_job_from_blocks_dispatches_to_fugaku(monkeypatch, tmp_path: Path):
     assert captured["metrics_artifact_key"] == "fugaku-metrics"
 
 
+def test_run_job_from_blocks_executes_local_without_a_script(monkeypatch, tmp_path: Path):
+    command = _CommandBlockStub("bitcount-hist", "bitcount_hist", ["--base"])
+    profile = _ExecutionProfileBlockStub(
+        profile_name="bitcount-local",
+        command_name="bitcount-hist",
+        launcher="mpiexec",
+        mpi_options=["-n", "2"],
+        environments={"LOCAL_TEST": "enabled"},
+    )
+    hpc = _HPCProfileBlockStub(
+        hpc_target="local",
+        executable_map={"bitcount_hist": "/opt/local/get_counts_hist"},
+    )
+    _patch_block_loading(monkeypatch, command, profile, hpc)
+
+    captured: dict[str, object] = {}
+
+    class _LocalResult:
+        job_id = "local-123"
+        exit_status = 0
+
+    async def fake_run_local_job(**kwargs):
+        captured.update(kwargs)
+        return _LocalResult()
+
+    async def fail_scheduler_run(**kwargs):
+        raise AssertionError("A scheduler executor must not be called for local execution")
+
+    monkeypatch.setattr(mod, "run_local_job", fake_run_local_job)
+    monkeypatch.setattr(mod, "run_miyabi_job", fail_scheduler_run)
+    monkeypatch.setattr(mod, "run_fugaku_job", fail_scheduler_run)
+    monkeypatch.setattr(mod, "run_slurm_job", fail_scheduler_run)
+
+    result = asyncio.run(
+        mod.run_job_from_blocks(
+            command_block_name="cmd",
+            execution_profile_block_name="exec",
+            hpc_profile_block_name="hpc",
+            work_dir=tmp_path,
+            user_args=["--override"],
+            timeout_seconds=12.5,
+            metrics_artifact_key="local-metrics",
+        )
+    )
+
+    assert result.job_id == "local-123"
+    assert captured["work_dir"] == tmp_path.resolve()
+    assert captured["req"].executable == "/opt/local/get_counts_hist"
+    assert captured["exec_profile"].arguments == ["--base", "--override"]
+    assert captured["exec_profile"].environments == {"LOCAL_TEST": "enabled"}
+    assert captured["timeout_seconds"] == 12.5
+    assert captured["metrics_artifact_key"] == "local-metrics"
+    assert not list(tmp_path.iterdir())
+
+
 def test_run_job_from_blocks_applies_execution_profile_overrides(monkeypatch, tmp_path: Path):
     command = _CommandBlockStub("bitcount-hist", "bitcount_hist", ["--base"])
     profile = _ExecutionProfileBlockStub(

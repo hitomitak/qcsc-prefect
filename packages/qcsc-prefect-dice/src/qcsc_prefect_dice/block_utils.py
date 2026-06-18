@@ -26,11 +26,11 @@ def register_dice_block_types() -> None:
 
 def create_dice_blocks(
     *,
-    hpc_target: Literal["miyabi", "fugaku"],
-    project: str,
-    queue: str,
+    hpc_target: Literal["local", "miyabi", "fugaku"],
     root_dir: str,
     dice_executable: str,
+    project: str = "",
+    queue: str = "",
     command_block_name: str = "cmd-dice-solver",
     execution_profile_block_name: str | None = None,
     hpc_profile_block_name: str | None = None,
@@ -67,19 +67,36 @@ def create_dice_blocks(
     without leaking config-shape coupling into the shared package.
     """
 
+    if hpc_target == "local" and (modules or pre_commands):
+        unsupported = []
+        if modules:
+            unsupported.append("modules")
+        if pre_commands:
+            unsupported.append("pre_commands")
+        raise ValueError("Local execution does not support " + " or ".join(unsupported) + ".")
+
     register_dice_block_types()
 
-    resolved_launcher = launcher or ("mpiexec.hydra" if hpc_target == "miyabi" else "mpiexec")
-    resolved_exec_block_name = execution_profile_block_name or (
-        "exec-dice-mpi" if hpc_target == "miyabi" else "exec-dice-fugaku"
-    )
+    default_launcher = {
+        "local": "single",
+        "miyabi": "mpiexec.hydra",
+        "fugaku": "mpiexec",
+    }[hpc_target]
+    resolved_launcher = launcher or default_launcher
+    default_exec_block_name = {
+        "local": "exec-dice-local",
+        "miyabi": "exec-dice-mpi",
+        "fugaku": "exec-dice-fugaku",
+    }[hpc_target]
+    resolved_exec_block_name = execution_profile_block_name or default_exec_block_name
     resolved_hpc_block_name = hpc_profile_block_name or f"hpc-{hpc_target}-dice"
-    resolved_script_filename = script_filename or (
-        "dice_solver.pbs" if hpc_target == "miyabi" else "dice_solver.pjm"
-    )
-    resolved_metrics_key = metrics_artifact_key or (
-        "miyabi-dice-metrics" if hpc_target == "miyabi" else "fugaku-dice-metrics"
-    )
+    default_script_filename = {
+        "local": "dice_solver",
+        "miyabi": "dice_solver.pbs",
+        "fugaku": "dice_solver.pjm",
+    }[hpc_target]
+    resolved_script_filename = script_filename or default_script_filename
+    resolved_metrics_key = metrics_artifact_key or f"{hpc_target}-dice-metrics"
     resolved_dice_executable = str(dice_executable)
     resolved_environments = dict(environments or {})
     if hpc_target == "fugaku" and "LD_LIBRARY_PATH" not in resolved_environments:
