@@ -43,12 +43,14 @@ class ExecutionProfileBlock(Block):
 
 
 class HPCProfileBlock(Block):
-    """HPC target-specific profile (where to submit). Supports Miyabi, Fugaku, and Slurm."""
+    """Execution target profile for local and supported HPC runtimes."""
 
     _block_type_name = "HPC Profile"
     _block_type_slug = "hpc_profile"
 
-    hpc_target: Literal["miyabi", "fugaku", "slurm"] = Field(default="miyabi", title="HPC Target")
+    hpc_target: Literal["local", "miyabi", "fugaku", "slurm"] = Field(
+        default="miyabi", title="Execution Target"
+    )
 
     # Queue/partition/resource-group names (terminology differs by system)
     queue_cpu: str = Field(default="regular-c", title="CPU Queue/Partition/Resource Group")

@@ -11,7 +11,7 @@ flowchart TD
     A[Workflow Code<br/>algorithm logic + parameters] --> B[CommandBlock<br/>WHAT to run]
     B --> C[ExecutionProfileBlock<br/>HOW to run]
     C --> D[HPCProfileBlock<br/>WHERE to run]
-    D --> E[Executor<br/>submits to qsub/pjsub/sbatch]
+    D --> E[Executor<br/>direct exec or scheduler submit]
 
     style A fill:#e1f5ff
     style B fill:#fff4e1
@@ -55,7 +55,8 @@ Prefect Block definitions for the three-layer architecture:
 - [`HPCProfileBlock`](https://github.com/qiskit-community/qcsc-prefect/blob/main/packages/qcsc-prefect-blocks/src/qcsc_prefect_blocks/common/blocks.py): Defines WHERE to execute (queue, project/group, system-specific settings)
 
 #### [`qcsc-prefect-adapters`](https://github.com/qiskit-community/qcsc-prefect/tree/main/packages/qcsc-prefect-adapters)
-HPC system-specific adapters that handle job script generation and submission:
+Runtime adapters for local execution and HPC job script generation/submission:
+- [`local`](https://github.com/qiskit-community/qcsc-prefect/tree/main/packages/qcsc-prefect-adapters/src/qcsc_prefect_adapters/local): Direct, shell-free process execution on the Prefect worker
 - [`miyabi`](https://github.com/qiskit-community/qcsc-prefect/tree/main/packages/qcsc-prefect-adapters/src/qcsc_prefect_adapters/miyabi): PBS/Torque adapter for Miyabi
 - [`fugaku`](https://github.com/qiskit-community/qcsc-prefect/tree/main/packages/qcsc-prefect-adapters/src/qcsc_prefect_adapters/fugaku): PJM adapter for Fugaku
 - [`slurm`](https://github.com/qiskit-community/qcsc-prefect/tree/main/packages/qcsc-prefect-adapters/src/qcsc_prefect_adapters/slurm): Slurm adapter for generic clusters
@@ -69,7 +70,7 @@ For local Slurm testing with Docker, see
 High-level execution API that orchestrates the entire workflow:
 - [`run_job_from_blocks()`](https://github.com/qiskit-community/qcsc-prefect/blob/main/packages/qcsc-prefect-executor/src/qcsc_prefect_executor/from_blocks.py): Main entry point for block-based execution
 - Scheduler resolution helpers such as `resolve_submission_target()` and `build_scheduler_script_filename()`
-- System-specific runners: [`run_miyabi_job()`](https://github.com/qiskit-community/qcsc-prefect/blob/main/packages/qcsc-prefect-executor/src/qcsc_prefect_executor/miyabi/run.py), [`run_fugaku_job()`](https://github.com/qiskit-community/qcsc-prefect/blob/main/packages/qcsc-prefect-executor/src/qcsc_prefect_executor/fugaku/run.py)
+- Target-specific runners, including local direct execution and scheduler runners
 - Automatic block resolution and job lifecycle management
 
 ---
@@ -252,8 +253,8 @@ sequenceDiagram
     participant User as Workflow Code
     participant Executor as run_job_from_blocks
     participant Blocks as Prefect Blocks
-    participant Adapter as HPC Adapter
-    participant HPC as HPC System
+    participant Adapter as Runtime Adapter
+    participant Target as Local Worker / HPC System
 
     User->>Executor: Call with block names
     Executor->>Blocks: Load CommandBlock
@@ -262,11 +263,16 @@ sequenceDiagram
     Executor->>Executor: Build ExecutionProfile
     Executor->>Executor: Merge default_args and user_args
     Executor->>Adapter: Create job request
-    Adapter->>Adapter: Generate job script (Jinja2)
-    Adapter->>HPC: Submit job (qsub/pjsub)
-    HPC-->>Adapter: Job ID
-    Adapter->>HPC: Poll status
-    HPC-->>Adapter: Job completed
+    alt hpc_target = local
+        Adapter->>Target: Direct exec in work_dir
+        Target-->>Adapter: Process exit status
+    else Scheduler target
+        Adapter->>Adapter: Generate job script (Jinja2)
+        Adapter->>Target: Submit job
+        Target-->>Adapter: Job ID
+        Adapter->>Target: Poll status
+        Target-->>Adapter: Job completed
+    end
     Adapter-->>Executor: Job result
     Executor-->>User: Return result
 ```

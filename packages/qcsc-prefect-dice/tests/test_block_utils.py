@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from qcsc_prefect_dice import block_utils as mod
 
 
@@ -132,3 +133,49 @@ def test_create_dice_blocks_fugaku_preserves_explicit_ld_library_path(monkeypatc
 
     execution_block = next(model for kind, _, _, model in saved if kind == "execution")
     assert execution_block.environments["LD_LIBRARY_PATH"] == "/custom/lib:$LD_LIBRARY_PATH"
+
+
+def test_create_dice_blocks_local_uses_direct_execution_defaults(monkeypatch, tmp_path):
+    saved: list[tuple[str, str, bool, object]] = []
+
+    def fake_save(kind):
+        def _save(self, name, overwrite=False):
+            saved.append((kind, name, overwrite, self))
+            return self
+
+        return _save
+
+    monkeypatch.setattr(mod, "register_dice_block_types", lambda: None)
+    monkeypatch.setattr(mod.CommandBlock, "save", fake_save("command"), raising=False)
+    monkeypatch.setattr(mod.ExecutionProfileBlock, "save", fake_save("execution"), raising=False)
+    monkeypatch.setattr(mod.HPCProfileBlock, "save", fake_save("hpc"), raising=False)
+    monkeypatch.setattr(mod.DiceSHCISolverJob, "save", fake_save("solver"), raising=False)
+
+    names = mod.create_dice_blocks(
+        hpc_target="local",
+        root_dir=str(tmp_path / "jobs"),
+        dice_executable=str(tmp_path / "bin" / "Dice"),
+    )
+
+    execution_block = next(model for kind, _, _, model in saved if kind == "execution")
+    hpc_block = next(model for kind, _, _, model in saved if kind == "hpc")
+    solver_block = next(model for kind, _, _, model in saved if kind == "solver")
+
+    assert names["execution_profile_block_name"] == "exec-dice-local"
+    assert names["hpc_profile_block_name"] == "hpc-local-dice"
+    assert execution_block.launcher == "single"
+    assert execution_block.modules == []
+    assert execution_block.pre_commands == []
+    assert hpc_block.hpc_target == "local"
+    assert solver_block.script_filename == "dice_solver"
+    assert solver_block.metrics_artifact_key == "local-dice-metrics"
+
+
+def test_create_dice_blocks_local_rejects_shell_setup(tmp_path):
+    with pytest.raises(ValueError, match="modules"):
+        mod.create_dice_blocks(
+            hpc_target="local",
+            root_dir=str(tmp_path / "jobs"),
+            dice_executable=str(tmp_path / "bin" / "Dice"),
+            modules=["openmpi"],
+        )
