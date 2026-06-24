@@ -41,17 +41,27 @@ For other schedulers, pass an explicit scheduler-specific `QueueProbe`.
 Use `GlobalFugakuBulkRunner` when the calling workflow needs to make progress
 between submit/refill cycles. The runner uses the default single-submit path:
 each `tick()` monitors active jobs once, refreshes completed expected outputs,
-and submits only the FIFO jobs allowed by the current Fugaku queue capacity.
-It does not wait until all jobs are terminal.
+and submits only the FIFO `PENDING` jobs allowed by the current Fugaku queue
+capacity. It does not wait until all jobs are terminal.
 
 This is useful for staged workflows: register QPY jobs first, call `tick()` on
 a schedule, let the application run downstream work after QPY outputs appear,
 then register later-stage jobs such as TrimSQD into the same registry.
 
 `initial_submit_count` applies only before the registry has submitted anything.
-Later ticks use `max_submit_per_refill`. `SUBMIT_DEFERRED` jobs are not retried
-automatically by the runner; use stable `job_key` values, expected output
-skips, and explicit reset helpers for workflow-level reruns.
+Later ticks use `max_submit_per_refill`. Within one tick, the selected submit
+batch runs concurrently up to `submit_workers` jobs at a time. The default is
+`8`. This only controls how many `pjsub` calls may be in flight; it does not
+increase the batch size selected by queue capacity, `initial_submit_count`,
+`max_submit_per_refill`, or `target_active_jobs`.
+
+If one selected job raises `QueueFullError` or `TemporarySubmitError`, only that
+job is marked `SUBMIT_DEFERRED`; the runner still lets other jobs already
+selected for the same tick finish their submit attempts. `SUBMIT_DEFERRED` jobs
+are not retried automatically by `GlobalFugakuBulkRunner`, because the runner
+selects only `PENDING` jobs for staged submission. Use stable `job_key` values,
+expected output skips, and explicit registry reset helpers for workflow-level
+reruns.
 
 ```python
 from pathlib import Path
@@ -67,6 +77,7 @@ runner = GlobalFugakuBulkRunner(
     initial_submit_count=4,
     max_submit_per_refill=2,
     target_active_jobs=5,
+    submit_workers=8,
 )
 
 runner.register_jobs(
