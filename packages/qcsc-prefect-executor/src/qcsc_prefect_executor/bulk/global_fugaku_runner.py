@@ -13,6 +13,8 @@ from qcsc_prefect_executor.bulk.models import (
     BulkJobStatus,
     BulkTickResult,
     SubmittedJob,
+    effective_execution_profile_block,
+    effective_hpc_profile_block,
 )
 from qcsc_prefect_executor.bulk.registry import BulkJobRegistry
 
@@ -183,14 +185,23 @@ class GlobalFugakuBulkRunner:
         if not monitorable_jobs:
             return {}
 
-        scheduler_job_ids = [
-            str(job.effective_scheduler_job_id) for job in monitorable_jobs
-        ]
-        return await monitor_jobs_many(
-            hpc_profile_block=self.hpc_profile_block,
-            scheduler_job_ids=scheduler_job_ids,
-            registry=self.registry,
-        )
+        grouped_scheduler_ids: dict[str, list[str]] = {}
+        for job in monitorable_jobs:
+            hpc_profile_block = effective_hpc_profile_block(job, self.hpc_profile_block)
+            grouped_scheduler_ids.setdefault(hpc_profile_block, []).append(
+                str(job.effective_scheduler_job_id)
+            )
+
+        results: dict[str, BulkJobStatus] = {}
+        for hpc_profile_block, scheduler_job_ids in grouped_scheduler_ids.items():
+            results.update(
+                await monitor_jobs_many(
+                    hpc_profile_block=hpc_profile_block,
+                    scheduler_job_ids=scheduler_job_ids,
+                    registry=self.registry,
+                )
+            )
+        return results
 
     async def _submit_once(self) -> list[SubmittedJob]:
         submit_limit = _submit_limit_for_cycle(
@@ -212,8 +223,14 @@ class GlobalFugakuBulkRunner:
                 try:
                     submitted_job = await submit_job_from_blocks(
                         command_block=self.command_block,
-                        execution_profile_block=self.execution_profile_block,
-                        hpc_profile_block=self.hpc_profile_block,
+                        execution_profile_block=effective_execution_profile_block(
+                            job,
+                            self.execution_profile_block,
+                        ),
+                        hpc_profile_block=effective_hpc_profile_block(
+                            job,
+                            self.hpc_profile_block,
+                        ),
                         work_dir=job.work_dir,
                         job_key=job.job_key,
                         command_args=job.command_args,
