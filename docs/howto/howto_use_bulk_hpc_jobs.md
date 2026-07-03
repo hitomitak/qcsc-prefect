@@ -36,6 +36,35 @@ For Fugaku-like PJM systems, use `FugakuQueueProbe` or let the bulk API create
 the default Fugaku probe from the `HPCProfileBlock` and `ExecutionProfileBlock`.
 For other schedulers, pass an explicit scheduler-specific `QueueProbe`.
 
+## Per-Job Profile Overrides
+
+`BulkJobSpec.execution_profile_block` and `BulkJobSpec.hpc_profile_block` can
+override the runner/API default blocks for one logical job. Leave either field as
+`None` to use the default passed to `GlobalFugakuBulkRunner` or
+`run_jobs_from_blocks_bulk()`.
+
+```python
+BulkJobSpec(
+    job_key=f"trim-{size}-{index:04d}",
+    stage_id="trim",
+    work_dir=Path("work") / f"trim-{size}-{index:04d}",
+    command_args={"size": size, "index": index},
+    expected_outputs=[Path("done.marker")],
+    execution_profile_block=f"exec-trimsqd-{size}",
+)
+```
+
+The single-submit bulk paths group monitoring by the effective
+`hpc_profile_block`, so jobs submitted with different HPC profile blocks are
+queried through the matching scheduler target. Fugaku native PJM bulk mode
+(`submit_mode="native_bulk"`) does not support per-job block overrides because
+one generated script and profile are shared by all subjobs in the native bulk
+group.
+
+Queue capacity probing is still configured at the runner/API level. If per-job
+`hpc_profile_block` values point at different queues or projects, pass an
+explicit conservative `QueueProbe`.
+
 ## Staged Rolling Workflows on Fugaku
 
 Use `GlobalFugakuBulkRunner` when the calling workflow needs to make progress

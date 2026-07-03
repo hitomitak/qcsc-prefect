@@ -38,6 +38,8 @@ def _spec(
     stage_id: str,
     *,
     expected_outputs: list[Path] | None = None,
+    execution_profile_block: str | None = None,
+    hpc_profile_block: str | None = None,
 ) -> BulkJobSpec:
     return BulkJobSpec(
         job_key=job_key,
@@ -45,6 +47,8 @@ def _spec(
         work_dir=tmp_path / job_key,
         command_args={"job_key": job_key},
         expected_outputs=expected_outputs or [],
+        execution_profile_block=execution_profile_block,
+        hpc_profile_block=hpc_profile_block,
     )
 
 
@@ -55,6 +59,8 @@ def _install_single_submit_fakes(
     submit_failures: dict[str, Exception] | None = None,
     mark_monitored_succeeded: bool = False,
     no_check_directory_calls: list[bool] | None = None,
+    submit_block_calls: list[tuple[str, str, str]] | None = None,
+    monitor_block_calls: list[tuple[str, list[str]]] | None = None,
 ) -> None:
     submit_failures = submit_failures or {}
 
@@ -74,6 +80,8 @@ def _install_single_submit_fakes(
 
         scheduler_job_id = f"sched-{job_key}"
         submitted.append(job_key)
+        if submit_block_calls is not None:
+            submit_block_calls.append((job_key, execution_profile_block, hpc_profile_block))
         if no_check_directory_calls is not None:
             no_check_directory_calls.append(fugaku_no_check_directory)
         if registry is not None:
@@ -91,6 +99,8 @@ def _install_single_submit_fakes(
         scheduler_job_ids: list[str],
         registry: BulkJobRegistry | None = None,
     ) -> dict[str, BulkJobStatus]:
+        if monitor_block_calls is not None:
+            monitor_block_calls.append((hpc_profile_block, list(scheduler_job_ids)))
         if registry is not None and mark_monitored_succeeded:
             records_by_scheduler_id = {
                 record.effective_scheduler_job_id: record
@@ -201,6 +211,76 @@ def test_tick_passes_opt_in_no_check_directory_true(tmp_path: Path, monkeypatch)
 
     assert [job.job_key for job in tick.submitted] == ["qpy-0"]
     assert no_check_directory_calls == [True]
+
+
+def test_tick_uses_per_job_blocks_and_runner_defaults(tmp_path: Path, monkeypatch):
+    submitted: list[str] = []
+    submit_block_calls: list[tuple[str, str, str]] = []
+    _install_single_submit_fakes(
+        monkeypatch,
+        submitted=submitted,
+        submit_block_calls=submit_block_calls,
+    )
+    runner = _runner(
+        tmp_path,
+        initial_submit_count=2,
+        max_submit_per_refill=2,
+        submit_workers=1,
+    )
+    runner.register_jobs(
+        [
+            _spec(
+                tmp_path,
+                "qpy-0",
+                "qpy",
+                execution_profile_block="exec-small",
+                hpc_profile_block="hpc-small",
+            ),
+            _spec(tmp_path, "qpy-1", "qpy"),
+        ]
+    )
+
+    tick = asyncio.run(runner.tick())
+
+    assert [job.job_key for job in tick.submitted] == ["qpy-0", "qpy-1"]
+    assert submit_block_calls == [
+        ("qpy-0", "exec-small", "hpc-small"),
+        ("qpy-1", "exec", "hpc"),
+    ]
+
+
+def test_monitor_groups_jobs_by_effective_hpc_block(tmp_path: Path, monkeypatch):
+    submitted: list[str] = []
+    monitor_block_calls: list[tuple[str, list[str]]] = []
+    _install_single_submit_fakes(
+        monkeypatch,
+        submitted=submitted,
+        monitor_block_calls=monitor_block_calls,
+    )
+    runner = _runner(tmp_path)
+    runner.register_jobs(
+        [
+            _spec(tmp_path, "qpy-0", "qpy", hpc_profile_block="hpc-a"),
+            _spec(tmp_path, "qpy-1", "qpy", hpc_profile_block="hpc-b"),
+            _spec(tmp_path, "qpy-2", "qpy"),
+        ]
+    )
+    runner.registry.mark_submitted("qpy-0", "sched-qpy-0")
+    runner.registry.mark_submitted("qpy-1", "sched-qpy-1")
+    runner.registry.mark_submitted("qpy-2", "sched-qpy-2")
+
+    monitored = asyncio.run(runner._monitor_once())
+
+    assert monitored == {
+        "sched-qpy-0": BulkJobStatus.SUBMITTED,
+        "sched-qpy-1": BulkJobStatus.SUBMITTED,
+        "sched-qpy-2": BulkJobStatus.SUBMITTED,
+    }
+    assert dict(monitor_block_calls) == {
+        "hpc-a": ["sched-qpy-0"],
+        "hpc-b": ["sched-qpy-1"],
+        "hpc": ["sched-qpy-2"],
+    }
 
 
 def test_submit_workers_one_and_many_submit_same_job_set(tmp_path: Path, monkeypatch):
