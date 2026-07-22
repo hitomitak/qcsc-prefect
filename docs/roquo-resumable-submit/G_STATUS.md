@@ -3,17 +3,18 @@
 Allowed feature states are `未着手`, `実装済(CI)`, `実機検証済`, and `hold`.
 
 PR0 is a design gate and does not implement a G item. The owner approved shared-filesystem
-SQLite with a transactional compare-and-set and no sidecar claim. Every feature remains
-`未着手` until its implementation PR is complete.
+SQLite with a transactional compare-and-set and no sidecar claim. PR1 adds the schema and
+model foundation for G1/G4/G5/G6 without enabling behavior. Those gaps remain `未着手`
+until their behavior PRs are complete.
 
 | Gap | Status | Current baseline at `bb97c7f` | Planned PR | Real-machine gate |
 |---|---|---|---|---|
-| G1 sbatch↔record window | 未着手 | Job ID is stored only after scheduler submit; no PREPARED claim/CAS. | PR1 foundation, completed behavior in PR4 | Test 1 |
+| G1 sbatch↔record window | 未着手 | `PREPARED` and `prepared_at` are modeled, but production still stores the job ID only after scheduler submit; no claim/CAS yet. | PR1 foundation complete; behavior in PR4 | Test 1 |
 | G2 deterministic Slurm identity | 未着手 | Slurm request/template has no deterministic job-name/comment contract. | PR3 | Test 1 |
 | G3 search and attach by identity | 未着手 | Monitoring requires known job IDs; no squeue/sacct identity search. | PR4 | Test 1 |
-| G4 immutable spec hash | 未着手 | Registry has no canonical `spec_hash` guard. | PR1 fields, PR2 behavior | Test 1 indirectly |
-| G5 operator hold | 未着手 | UNKNOWN remains monitorable and can poll indefinitely. | PR1 state, PR4 behavior | Test 1 |
-| G6 explicit cancel intent | 未着手 | No durable desired state; Slurm wait cancellation currently calls scancel automatically. | PR1 fields, PR5 behavior | Tests 2 and 3 |
+| G4 immutable spec hash | 未着手 | Registry persists optional `spec_hash`, but does not compute or enforce a canonical fingerprint. | PR1 field complete; behavior in PR2 | Test 1 indirectly |
+| G5 operator hold | 未着手 | `AWAITING_OPERATOR` is modeled and excluded from automatic classifications, but no production transition/operator API exists. | PR1 state complete; behavior in PR4 | Test 1 |
+| G6 explicit cancel intent | 未着手 | Desired-state and audit fields are persisted with safe defaults, but Slurm wait cancellation still calls scancel automatically. | PR1 fields complete; behavior in PR5 | Tests 2 and 3 |
 | G7 Slurm bounded probe/runner | 未着手 | Generic bulk runner accepts a probe, but no standard Slurm capacity probe is supplied. | PR7 | Test 5 |
 | G8 Cloud log policy | 未着手 | Truncation exists in one path; no shared policy across bulk/reconcile. | PR8 | None required |
 | G9 IBM Runtime durable attach | 未着手 | Job-reference fetch exists; no durable PREPARED/tag-search/operator-hold contract. | PR6 | Test 4 |
@@ -23,3 +24,4 @@ SQLite with a transactional compare-and-set and no sidecar claim. Every feature 
 | Date | Gate | Result | Evidence |
 |---|---|---|---|
 | 2026-07-22 | PR0 atomicity decision | approved | Option A: trust HPC shared filesystem/SQLite locking; no sidecar or external mutex |
+| 2026-07-22 | PR1 registry/model foundation | implemented (CI) | Migration, defaults, round-trip, and complete lifecycle classification tests |

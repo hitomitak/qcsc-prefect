@@ -14,6 +14,7 @@ from qcsc_prefect_executor.bulk.exceptions import (
 )
 from qcsc_prefect_executor.bulk.global_fugaku_runner import GlobalFugakuBulkRunner
 from qcsc_prefect_executor.bulk.models import (
+    BulkJobDesiredState,
     BulkJobRecord,
     BulkJobSpec,
     BulkJobStatus,
@@ -52,6 +53,7 @@ async def submit_job_from_blocks(*args: Any, **kwargs: Any):
 
 
 __all__ = [
+    "BulkJobDesiredState",
     "BulkJobRecord",
     "BulkJobRegistry",
     "BulkJobSpec",

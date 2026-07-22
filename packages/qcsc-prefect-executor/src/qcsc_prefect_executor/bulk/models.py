@@ -11,6 +11,7 @@ class BulkJobStatus(str, Enum):
 
     PENDING = "PENDING"
     SUBMIT_DEFERRED = "SUBMIT_DEFERRED"
+    PREPARED = "PREPARED"
     SUBMITTED = "SUBMITTED"
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
@@ -18,6 +19,7 @@ class BulkJobStatus(str, Enum):
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
     UNKNOWN = "UNKNOWN"
+    AWAITING_OPERATOR = "AWAITING_OPERATOR"
 
     @property
     def is_terminal(self) -> bool:
@@ -36,6 +38,19 @@ class BulkJobStatus(str, Enum):
         """Return whether this status may be submitted in a future refill."""
 
         return self in SUBMIT_CANDIDATE_BULK_JOB_STATUSES
+
+    @property
+    def is_recovery_candidate(self) -> bool:
+        """Return whether this status may be reconciled automatically."""
+
+        return self in RECOVERY_CANDIDATE_BULK_JOB_STATUSES
+
+
+class BulkJobDesiredState(str, Enum):
+    """Operator-requested target state for one logical bulk job."""
+
+    RUN = "RUN"
+    CANCEL_REQUESTED = "CANCEL_REQUESTED"
 
 
 TERMINAL_BULK_JOB_STATUSES = frozenset(
@@ -56,6 +71,12 @@ SUBMIT_CANDIDATE_BULK_JOB_STATUSES = frozenset(
     {
         BulkJobStatus.PENDING,
         BulkJobStatus.SUBMIT_DEFERRED,
+    }
+)
+RECOVERY_CANDIDATE_BULK_JOB_STATUSES = frozenset(
+    {
+        BulkJobStatus.PREPARED,
+        BulkJobStatus.UNKNOWN,
     }
 )
 
@@ -79,11 +100,20 @@ class BulkJobSpec:
     max_submit_attempts: int = 5
     execution_profile_block: str | None = None
     hpc_profile_block: str | None = None
+    spec_hash: str | None = None
+    job_name: str | None = None
+    job_comment: str | None = None
 
     def __post_init__(self) -> None:
         if not self.job_key.strip():
             raise ValueError("BulkJobSpec.job_key must be non-empty.")
-        for field_name in ("execution_profile_block", "hpc_profile_block"):
+        for field_name in (
+            "execution_profile_block",
+            "hpc_profile_block",
+            "spec_hash",
+            "job_name",
+            "job_comment",
+        ):
             value = getattr(self, field_name)
             if value is None:
                 continue
@@ -136,6 +166,14 @@ class BulkJobRecord:
     scheduler_subjob_id: str | None = None
     execution_profile_block: str | None = None
     hpc_profile_block: str | None = None
+    spec_hash: str | None = None
+    prepared_at: str | None = None
+    job_name: str | None = None
+    job_comment: str | None = None
+    desired_state: BulkJobDesiredState = BulkJobDesiredState.RUN
+    cancel_requested_at: str | None = None
+    cancel_requested_by: str | None = None
+    cancel_reason: str | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -150,6 +188,10 @@ class BulkJobRecord:
         return self.status.is_submit_candidate
 
     @property
+    def is_recovery_candidate(self) -> bool:
+        return self.status.is_recovery_candidate
+
+    @property
     def effective_scheduler_job_id(self) -> str | None:
         return self.scheduler_subjob_id or self.scheduler_job_id
 
@@ -160,11 +202,7 @@ def effective_execution_profile_block(
 ) -> str:
     """Return the per-job execution profile block or the runner/API default."""
 
-    return (
-        job.execution_profile_block
-        if job.execution_profile_block is not None
-        else default_block
-    )
+    return job.execution_profile_block if job.execution_profile_block is not None else default_block
 
 
 def effective_hpc_profile_block(

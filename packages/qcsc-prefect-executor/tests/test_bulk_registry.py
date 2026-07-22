@@ -3,7 +3,11 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from qcsc_prefect_executor.bulk.models import BulkJobSpec, BulkJobStatus
+from qcsc_prefect_executor.bulk.models import (
+    BulkJobDesiredState,
+    BulkJobSpec,
+    BulkJobStatus,
+)
 from qcsc_prefect_executor.bulk.registry import BulkJobRegistry
 
 
@@ -24,6 +28,9 @@ def _spec(
     max_submit_attempts: int = 5,
     execution_profile_block: str | None = None,
     hpc_profile_block: str | None = None,
+    spec_hash: str | None = None,
+    job_name: str | None = None,
+    job_comment: str | None = None,
 ) -> BulkJobSpec:
     return BulkJobSpec(
         job_key=job_key,
@@ -37,6 +44,9 @@ def _spec(
         max_submit_attempts=max_submit_attempts,
         execution_profile_block=execution_profile_block,
         hpc_profile_block=hpc_profile_block,
+        spec_hash=spec_hash,
+        job_name=job_name,
+        job_comment=job_comment,
     )
 
 
@@ -131,7 +141,7 @@ def test_registry_creates_sqlite_file_and_table(tmp_path: Path):
     assert row == ("bulk_jobs",)
 
 
-def test_registry_migrates_old_schema_with_native_bulk_columns(tmp_path: Path):
+def test_registry_migrates_old_schema_with_resumable_submit_columns(tmp_path: Path):
     db_path = tmp_path / "bulk.sqlite"
     _create_old_schema_registry(db_path)
 
@@ -150,6 +160,14 @@ def test_registry_migrates_old_schema_with_native_bulk_columns(tmp_path: Path):
         "scheduler_subjob_id",
         "execution_profile_block",
         "hpc_profile_block",
+        "spec_hash",
+        "prepared_at",
+        "job_name",
+        "job_comment",
+        "desired_state",
+        "cancel_requested_at",
+        "cancel_requested_by",
+        "cancel_reason",
     } <= columns
     assert {
         "idx_bulk_jobs_status",
@@ -169,6 +187,14 @@ def test_registry_migrates_old_schema_with_native_bulk_columns(tmp_path: Path):
     assert record.scheduler_subjob_id is None
     assert record.execution_profile_block is None
     assert record.hpc_profile_block is None
+    assert record.spec_hash is None
+    assert record.prepared_at is None
+    assert record.job_name is None
+    assert record.job_comment is None
+    assert record.desired_state == BulkJobDesiredState.RUN
+    assert record.cancel_requested_at is None
+    assert record.cancel_requested_by is None
+    assert record.cancel_reason is None
     assert record.effective_scheduler_job_id == "43607196"
 
 
@@ -179,6 +205,78 @@ def test_upsert_jobs_inserts_new_jobs(tmp_path: Path):
 
     assert registry.status_counts() == {BulkJobStatus.PENDING.value: 2}
     assert [job.job_key for job in registry.jobs_for_wave("wave-a")] == ["job-1", "job-2"]
+
+
+def test_new_resumable_submit_fields_default_without_changing_existing_api(tmp_path: Path):
+    registry = _registry(tmp_path)
+
+    registry.upsert_jobs([_spec(tmp_path, "job-1")])
+
+    record = _only_job(registry)
+    assert record.spec_hash is None
+    assert record.prepared_at is None
+    assert record.job_name is None
+    assert record.job_comment is None
+    assert record.desired_state == BulkJobDesiredState.RUN
+    assert record.cancel_requested_at is None
+    assert record.cancel_requested_by is None
+    assert record.cancel_reason is None
+
+
+def test_resumable_submit_fields_round_trip(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs(
+        [
+            _spec(
+                tmp_path,
+                "job-1",
+                spec_hash="v1:abc123",
+                job_name="qcsc-job-abc123",
+                job_comment="qcsc-spec=v1:abc123",
+            )
+        ]
+    )
+    registry.upsert_jobs([_spec(tmp_path, "job-1")])
+
+    legacy_upsert = _only_job(registry)
+    assert legacy_upsert.spec_hash == "v1:abc123"
+    assert legacy_upsert.job_name == "qcsc-job-abc123"
+    assert legacy_upsert.job_comment == "qcsc-spec=v1:abc123"
+
+    with sqlite3.connect(registry.path) as conn:
+        conn.execute(
+            """
+            UPDATE bulk_jobs
+            SET
+                status = ?,
+                prepared_at = ?,
+                desired_state = ?,
+                cancel_requested_at = ?,
+                cancel_requested_by = ?,
+                cancel_reason = ?
+            WHERE job_key = ?
+            """,
+            (
+                BulkJobStatus.PREPARED.value,
+                "2026-07-22T01:02:03+00:00",
+                BulkJobDesiredState.CANCEL_REQUESTED.value,
+                "2026-07-22T01:03:00+00:00",
+                "operator@example.invalid",
+                "test cancellation intent",
+                "job-1",
+            ),
+        )
+
+    record = _only_job(registry)
+    assert record.status == BulkJobStatus.PREPARED
+    assert record.spec_hash == "v1:abc123"
+    assert record.prepared_at == "2026-07-22T01:02:03+00:00"
+    assert record.job_name == "qcsc-job-abc123"
+    assert record.job_comment == "qcsc-spec=v1:abc123"
+    assert record.desired_state == BulkJobDesiredState.CANCEL_REQUESTED
+    assert record.cancel_requested_at == "2026-07-22T01:03:00+00:00"
+    assert record.cancel_requested_by == "operator@example.invalid"
+    assert record.cancel_reason == "test cancellation intent"
 
 
 def test_stage_and_native_bulk_fields_round_trip(tmp_path: Path):
@@ -349,6 +447,31 @@ def test_submit_deferred_is_not_terminal(tmp_path: Path):
     assert record.last_error == "queue full"
     assert record.status.is_terminal is False
     assert registry.all_terminal() is False
+
+
+def test_all_status_properties_are_classified():
+    expected = {
+        BulkJobStatus.PENDING: (False, False, True, False),
+        BulkJobStatus.SUBMIT_DEFERRED: (False, False, True, False),
+        BulkJobStatus.PREPARED: (False, False, False, True),
+        BulkJobStatus.SUBMITTED: (False, True, False, False),
+        BulkJobStatus.QUEUED: (False, True, False, False),
+        BulkJobStatus.RUNNING: (False, True, False, False),
+        BulkJobStatus.SUCCEEDED: (True, False, False, False),
+        BulkJobStatus.FAILED: (True, False, False, False),
+        BulkJobStatus.CANCELLED: (True, False, False, False),
+        BulkJobStatus.UNKNOWN: (False, False, False, True),
+        BulkJobStatus.AWAITING_OPERATOR: (False, False, False, False),
+    }
+
+    assert set(expected) == set(BulkJobStatus)
+    for status, classification in expected.items():
+        assert (
+            status.is_terminal,
+            status.is_active,
+            status.is_submit_candidate,
+            status.is_recovery_candidate,
+        ) == classification
 
 
 def test_submit_deferred_jobs_are_submit_candidates(tmp_path: Path):

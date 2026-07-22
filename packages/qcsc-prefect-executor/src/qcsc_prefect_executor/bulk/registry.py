@@ -11,6 +11,7 @@ from qcsc_prefect_executor.bulk.models import (
     ACTIVE_BULK_JOB_STATUSES,
     SUBMIT_CANDIDATE_BULK_JOB_STATUSES,
     TERMINAL_BULK_JOB_STATUSES,
+    BulkJobDesiredState,
     BulkJobRecord,
     BulkJobSpec,
     BulkJobStatus,
@@ -31,6 +32,13 @@ def _coerce_status(status: BulkJobStatus | str) -> BulkJobStatus:
 
 def _coerce_statuses(statuses: Sequence[BulkJobStatus | str]) -> list[BulkJobStatus]:
     return [_coerce_status(status) for status in statuses]
+
+
+def _coerce_desired_state(value: object) -> BulkJobDesiredState:
+    try:
+        return BulkJobDesiredState(str(value))
+    except ValueError:
+        return BulkJobDesiredState.RUN
 
 
 def _json_dumps(value: Any) -> str:
@@ -98,6 +106,14 @@ class BulkJobRegistry:
                     expected_outputs_json TEXT,
                     execution_profile_block TEXT,
                     hpc_profile_block TEXT,
+                    spec_hash TEXT,
+                    prepared_at TEXT,
+                    job_name TEXT,
+                    job_comment TEXT,
+                    desired_state TEXT NOT NULL DEFAULT 'RUN',
+                    cancel_requested_at TEXT,
+                    cancel_requested_by TEXT,
+                    cancel_reason TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     submitted_at TEXT,
@@ -156,6 +172,14 @@ class BulkJobRegistry:
             "scheduler_subjob_id": "scheduler_subjob_id TEXT",
             "execution_profile_block": "execution_profile_block TEXT",
             "hpc_profile_block": "hpc_profile_block TEXT",
+            "spec_hash": "spec_hash TEXT",
+            "prepared_at": "prepared_at TEXT",
+            "job_name": "job_name TEXT",
+            "job_comment": "job_comment TEXT",
+            "desired_state": "desired_state TEXT NOT NULL DEFAULT 'RUN'",
+            "cancel_requested_at": "cancel_requested_at TEXT",
+            "cancel_requested_by": "cancel_requested_by TEXT",
+            "cancel_reason": "cancel_reason TEXT",
         }
         for column_name, column_def in column_defs.items():
             if column_name not in existing_columns:
@@ -202,6 +226,10 @@ class BulkJobRegistry:
                             expected_outputs_json,
                             execution_profile_block,
                             hpc_profile_block,
+                            spec_hash,
+                            job_name,
+                            job_comment,
+                            desired_state,
                             created_at,
                             updated_at,
                             submitted_at,
@@ -212,7 +240,7 @@ class BulkJobRegistry:
                             max_submit_attempts
                         )
                         VALUES (
-                            ?, ?, ?, ?, ?, ?, NULL, 0, 0, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, NULL, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                             NULL, NULL, NULL, ?, ?
                         )
                         """,
@@ -227,6 +255,10 @@ class BulkJobRegistry:
                             expected_outputs_json,
                             job.execution_profile_block,
                             job.hpc_profile_block,
+                            job.spec_hash,
+                            job.job_name,
+                            job.job_comment,
+                            BulkJobDesiredState.RUN.value,
                             now,
                             now,
                             now if status == BulkJobStatus.SUCCEEDED else None,
@@ -258,6 +290,21 @@ class BulkJobRegistry:
                                 THEN ?
                                 ELSE hpc_profile_block
                             END,
+                            spec_hash = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN COALESCE(?, spec_hash)
+                                ELSE spec_hash
+                            END,
+                            job_name = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN COALESCE(?, job_name)
+                                ELSE job_name
+                            END,
+                            job_comment = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN COALESCE(?, job_comment)
+                                ELSE job_comment
+                            END,
                             updated_at = ?,
                             finished_at = COALESCE(finished_at, ?),
                             last_error = NULL,
@@ -275,6 +322,9 @@ class BulkJobRegistry:
                             expected_outputs_json,
                             job.execution_profile_block,
                             job.hpc_profile_block,
+                            job.spec_hash,
+                            job.job_name,
+                            job.job_comment,
                             now,
                             now,
                             job.priority,
@@ -303,6 +353,21 @@ class BulkJobRegistry:
                                 THEN ?
                                 ELSE hpc_profile_block
                             END,
+                            spec_hash = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN COALESCE(?, spec_hash)
+                                ELSE spec_hash
+                            END,
+                            job_name = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN COALESCE(?, job_name)
+                                ELSE job_name
+                            END,
+                            job_comment = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN COALESCE(?, job_comment)
+                                ELSE job_comment
+                            END,
                             updated_at = ?,
                             priority = ?,
                             max_submit_attempts = ?
@@ -317,6 +382,9 @@ class BulkJobRegistry:
                             expected_outputs_json,
                             job.execution_profile_block,
                             job.hpc_profile_block,
+                            job.spec_hash,
+                            job.job_name,
+                            job.job_comment,
                             now,
                             job.priority,
                             job.max_submit_attempts,
@@ -817,4 +885,12 @@ def _record_from_row(row: sqlite3.Row) -> BulkJobRecord:
         scheduler_subjob_id=row["scheduler_subjob_id"],
         execution_profile_block=row["execution_profile_block"],
         hpc_profile_block=row["hpc_profile_block"],
+        spec_hash=row["spec_hash"],
+        prepared_at=row["prepared_at"],
+        job_name=row["job_name"],
+        job_comment=row["job_comment"],
+        desired_state=_coerce_desired_state(row["desired_state"]),
+        cancel_requested_at=row["cancel_requested_at"],
+        cancel_requested_by=row["cancel_requested_by"],
+        cancel_reason=row["cancel_reason"],
     )
