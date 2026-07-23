@@ -12,6 +12,7 @@ machine verified” is used only after a human records an actual scheduler/runti
 | PR1 | Foundation for G1/G4/G5/G6 | implemented (CI) | `bulk/{__init__,models,registry}.py`, `tests/test_bulk_registry.py`, PR tracking docs | Added durable schema/model vocabulary required by later immutable-spec, submit-or-attach, hold, and cancel-intent PRs. | Existing constructors keep defaults; old databases migrate in place; submit, monitor, and cancel candidate selection is unchanged. | Registry tests, executor tests, Ruff, and strict docs build; see PR1 checks below. | Not required. | No production transition enters `PREPARED` or `AWAITING_OPERATOR` until PR4; cancel intent behavior waits for PR5. |
 | PR2 | G4 | implemented (CI) | `bulk/{spec_hash,exceptions,models,registry}.py`, `from_blocks.py`, focused tests, PR tracking docs | Added versioned canonical resolved-spec hashing and rejected reuse of a `job_key` when its stored hash differs. | Optional caller digests default to `NULL`; legacy rows remain readable; stored hashed rows become immutable before scheduler side effects. | Canonicalization/guard tests, executor tests, Ruff, format check, and strict docs build; see PR2 checks below. | Not required. | Legacy scheduler rows whose hash is `NULL` cannot be cryptographically verified; existing non-submit status guards still prevent automatic resubmission. |
 | PR3 | G2 | implemented (CI) | Slurm builder/template, adapter tests, `SLURM_IDENTITY.md`, PR tracking docs | Added deterministic, non-secret Slurm job-name/comment generation and safe optional template directives. | Existing callers that do not provide identity values render the same script. No scheduler search, registry claim, or automatic recovery behavior changes before PR4. | Adapter rendering/identity tests, Ruff, format check, and strict docs build; see PR3 checks below. | Test 1 after PR4 must verify the target cluster preserves name/comment in `squeue` and `sacct`. | Target-specific name/comment limits and accounting visibility remain operational facts to record before enabling recovery. |
+| PR4 | G1/G3/G5; wires G2/G4 | implemented (CI) | Slurm runtime/subprocess boundary, `from_blocks.py`, `bulk/{exceptions,models,registry}.py`, focused/full tests, `SLURM_SUBMIT_OR_ATTACH.md`, runbook/status docs | Added PREPARED-before-sbatch CAS, bounded ambiguous-result handling, active/history identity recovery, unique attach, output-gated terminal success, and durable operator hold. | Registry-backed Slurm gains durable recovery. Non-registry Slurm remains a direct-submit path but now reports timeout/parse ambiguity explicitly; Fugaku/Miyabi behavior is unchanged. Existing databases need no new PR4 columns. | 60 adapter tests and 147 executor tests passed; Ruff, format, and strict docs checks are recorded below. | Test 1 is required; no real Slurm job was run by Codex. | Record target name/comment retention, account defaults, accounting lag/retention, and clock skew before marking real-machine verified. |
 
 ## PR0 review notes
 
@@ -39,11 +40,11 @@ existing submit, monitor, and cancel behavior remains unchanged.
 |---|---:|---:|---:|---:|---|
 | `PENDING` | no | no | yes | no | Eligible for the existing submit path. |
 | `SUBMIT_DEFERRED` | no | no | yes | no | Retryable submit was deferred before scheduler acceptance. |
-| `PREPARED` | no | no | no | yes | A durable claim exists but no scheduler job ID is recorded. The process may have stopped either before `sbatch` or after a successful `sbatch`. PR4 will reconcile before any resubmit. |
+| `PREPARED` | no | no | no | yes | A durable claim exists but no scheduler job ID is recorded. The process may have stopped either before `sbatch` or after a successful `sbatch`. PR4 reconciles it before any resubmit. |
 | `SUBMITTED`, `QUEUED`, `RUNNING` | no | yes | no | no | A scheduler job ID is known and the job is active. |
 | `SUCCEEDED`, `FAILED`, `CANCELLED` | yes | no | no | no | Existing terminal states. |
 | `UNKNOWN` | no | no | no | yes | Existing uncertain scheduler state. It remains monitorable; marking it recovery-capable records that reconciliation may resolve it. |
-| `AWAITING_OPERATOR` | no | no | no | no | Durable hold excluded from automatic processing. Only an explicit operator action may move it in the completed PR4 behavior. |
+| `AWAITING_OPERATOR` | no | no | no | no | Durable hold excluded from automatic processing. Only an explicit operator action may move it. |
 
 `PREPARED` is deliberately not an active state because scheduler acceptance has not yet
 been associated with a recorded job ID. `AWAITING_OPERATOR` is deliberately neither
@@ -55,7 +56,7 @@ an unbounded polling loop.
 | Field | PR1 default | Contract |
 |---|---|---|
 | `spec_hash` | `NULL` | Versioned canonical resolved-spec fingerprint. PR2 will compute and enforce it. |
-| `prepared_at` | `NULL` | UTC claim time used to bound scheduler history lookup. PR4 will write it atomically with `PREPARED`. |
+| `prepared_at` | `NULL` | UTC claim time used to bound scheduler history lookup. PR4 writes it atomically with `PREPARED`. |
 | `job_name`, `job_comment` | `NULL` | Deterministic, non-secret scheduler search identity. PR3 will generate it. |
 | `desired_state` | `RUN` | Operator-requested target state. The other modeled value is `CANCEL_REQUESTED`; PR5 will add its behavior. |
 | `cancel_requested_at`, `cancel_requested_by`, `cancel_reason` | `NULL` | Audit fields for explicit cancellation intent. PR5 will write and act on them. |
@@ -195,6 +196,45 @@ These focused checks exercised only the PR3 identity/rendering paths. Unrelated
 uncommitted scheduler-timeout work was present in the working tree and is not
 part of this PR3 change.
 
+## PR4 complete Slurm submit-or-attach
+
+Registry-backed Slurm submission now computes and persists the PR3 identity, then claims
+`PENDING`/`SUBMIT_DEFERRED → PREPARED` with one SQLite compare-and-set before writing the
+script or invoking `sbatch`. Concurrent losers cannot call the scheduler. Saving the same
+job ID is idempotent and preserves a more advanced active state.
+
+The shared scheduler subprocess boundary bounds command waits and preserves typed
+non-zero-exit diagnostics. Slurm submission distinguishes explicit rejection from timeout,
+controller communication loss, cancellation, and invalid success output. Every ambiguous
+case keeps `PREPARED`; it never becomes an automatic submit candidate.
+
+Recovery queries allocation-level active and historical rows, validates the full
+spec-derived comment plus user/account/partition/time metadata, and attaches only one
+candidate. No candidate inside the visibility grace stays `PREPARED`. Zero after grace,
+multiple rows, metadata mismatch, or terminal completion without expected output evidence
+enters `AWAITING_OPERATOR`. Output refresh cannot bypass a claim or hold. Bulk execution
+returns the held/prepared counts and held job keys instead of keeping a long-running poll
+alive.
+
+The registry exposes `operator_attach` and `confirm_not_submitted_and_reset`. The latter
+requires an explicit actor/reason and refuses rows with a known scheduler ID. Operational
+preconditions and the manual evidence procedure are in `SLURM_SUBMIT_OR_ATTACH.md` and
+Test 1 of `REAL_MACHINE_RUNBOOK.md`.
+
+### PR4 automated checks
+
+- `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=packages/qcsc-prefect-core/src:packages/qcsc-prefect-adapters/src uv run --with pytest --with jinja2 pytest packages/qcsc-prefect-adapters/tests -q`
+  — 60 passed.
+- `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=packages/qcsc-prefect-core/src:packages/qcsc-prefect-adapters/src:packages/qcsc-prefect-blocks/src:packages/qcsc-prefect-executor/src uv run --with pytest --with jinja2 --with prefect --with pydantic pytest packages/qcsc-prefect-executor/tests -q`
+  — 147 passed, 2 explicitly opt-in HPC integration tests skipped.
+- Focused PR4 scheduler/recovery/registry suite — 99 passed.
+- Ruff lint and format checks for every changed Python file — passed.
+- Strict MkDocs build — passed.
+
+The real-machine state remains unverified. Test 1 must exercise an actual submit/record
+fault window, unique active and historical attach, zero/multiple/mismatch holds, concurrent
+callers, identity preservation, accounting visibility/retention, and clock skew.
+
 ## Future PR entry template
 
 Copy this section for each PR and complete every field.
@@ -214,8 +254,8 @@ gb_demo gap-checklist delta note:
 
 ## gb_demo gap-checklist delta note
 
-PR0 does not change the G1–G9 implementation findings in
-`gb_demo_2026/python/docs/QCSC_PREFECT_GAP_CHECKLIST.md`. After the owner approves the
-atomicity mechanism, a future gb_demo documentation change should record the chosen
-production registry path, filesystem assumptions, and claim primitive. The qcsc-prefect
-PR must not modify the gb_demo document directly.
+PR4 changes qcsc-prefect's G1/G3/G5 implementation status to `実装済(CI)` and wires the
+G2/G4 contracts into Slurm recovery. A later gb_demo documentation update should record
+the chosen production registry path, trusted-filesystem assumption, recovery grace/skew,
+explicit account/partition/user configuration, and Test 1 result. The qcsc-prefect PR does
+not modify the gb_demo document directly.

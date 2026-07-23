@@ -8,9 +8,13 @@ from qcsc_prefect_core.queue import QueueAwareSubmitGate, QueueCapacity, QueuePr
 
 from qcsc_prefect_executor.bulk.exceptions import (
     DuplicateJobKeyError,
+    OperatorActionRequired,
     QueueFullError,
+    RecoveryPending,
+    SchedulerIdentityMismatchError,
     SpecHashMismatchError,
     SubmitError,
+    SubmitOutcomeUnknownError,
     TemporarySubmitError,
 )
 from qcsc_prefect_executor.bulk.global_fugaku_runner import GlobalFugakuBulkRunner
@@ -70,13 +74,17 @@ __all__ = [
     "DuplicateJobKeyError",
     "GlobalFugakuBulkRunner",
     "NativeBulkManifestGroup",
+    "OperatorActionRequired",
     "QueueFullError",
     "QueueAwareSubmitGate",
     "QueueCapacity",
     "QueueProbe",
+    "RecoveryPending",
+    "SchedulerIdentityMismatchError",
     "SpecHashMismatchError",
     "SubmittedJob",
     "SubmitError",
+    "SubmitOutcomeUnknownError",
     "TemporarySubmitError",
     "build_bulk_spec_hash",
     "canonical_bulk_spec_json",

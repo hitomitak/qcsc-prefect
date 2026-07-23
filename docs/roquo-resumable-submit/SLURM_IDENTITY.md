@@ -39,6 +39,7 @@ values are restricted to safe single-token directive characters; this avoids
 newline/directive injection because Slurm parses `#SBATCH` directives before
 the shell begins.
 
-PR4 will generate these values before the durable `PREPARED` claim, persist
-them in the registry, and use the full comment during scheduler search and
-attach. PR3 alone does not change submission recovery behavior.
+PR4 now generates these values before the durable `PREPARED` claim, persists
+them in the registry, and uses the full comment during scheduler search and
+attach. Existing Slurm calls without a registry retain the earlier submission
+path and do not gain resumable identity behavior.

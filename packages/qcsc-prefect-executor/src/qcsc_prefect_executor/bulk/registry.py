@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from qcsc_prefect_executor.bulk.exceptions import SpecHashMismatchError
+from qcsc_prefect_executor.bulk.exceptions import (
+    SchedulerIdentityMismatchError,
+    SpecHashMismatchError,
+)
 from qcsc_prefect_executor.bulk.models import (
     ACTIVE_BULK_JOB_STATUSES,
     SUBMIT_CANDIDATE_BULK_JOB_STATUSES,
@@ -215,6 +218,24 @@ class BulkJobRegistry:
                         stored_spec_hash=str(existing["spec_hash"]),
                         incoming_spec_hash=job.spec_hash,
                     )
+                if existing is not None and existing["status"] in {
+                    BulkJobStatus.PREPARED.value,
+                    BulkJobStatus.AWAITING_OPERATOR.value,
+                }:
+                    identity_changed = (
+                        job.job_name is not None
+                        and existing["job_name"] is not None
+                        and job.job_name != existing["job_name"]
+                    ) or (
+                        job.job_comment is not None
+                        and existing["job_comment"] is not None
+                        and job.job_comment != existing["job_comment"]
+                    )
+                    if identity_changed:
+                        raise SchedulerIdentityMismatchError(
+                            job_key=job.job_key,
+                            stored_spec_hash=str(existing["spec_hash"] or "<legacy-null>"),
+                        )
                 if existing is not None and existing["status"] == BulkJobStatus.SUCCEEDED.value:
                     continue
 
@@ -225,6 +246,14 @@ class BulkJobRegistry:
                     job.expected_outputs,
                     work_dir=job.work_dir,
                 )
+                if existing is not None and existing["status"] in {
+                    BulkJobStatus.PREPARED.value,
+                    BulkJobStatus.AWAITING_OPERATOR.value,
+                }:
+                    # Output files alone cannot resolve a scheduler-side-effect
+                    # ambiguity. Preserve the claim/hold until Slurm identity
+                    # reconciliation or an explicit operator action completes.
+                    outputs_complete = False
 
                 if existing is None:
                     status = BulkJobStatus.SUCCEEDED if outputs_complete else BulkJobStatus.PENDING
@@ -561,6 +590,210 @@ class BulkJobRegistry:
     def get_all_jobs(self) -> list[BulkJobRecord]:
         return self._fetch_records("1 = 1", [], "created_at, job_key")
 
+    def get_recovery_candidates(self) -> list[BulkJobRecord]:
+        return self._fetch_records(
+            "status IN (?, ?)",
+            [BulkJobStatus.PREPARED.value, BulkJobStatus.UNKNOWN.value],
+            "prepared_at IS NULL, prepared_at, created_at, job_key",
+        )
+
+    def get_awaiting_operator_jobs(self) -> list[BulkJobRecord]:
+        return self._fetch_records(
+            "status = ?",
+            [BulkJobStatus.AWAITING_OPERATOR.value],
+            "updated_at, job_key",
+        )
+
+    def claim_prepared(
+        self,
+        *,
+        job_key: str,
+        spec_hash: str,
+        job_name: str,
+        job_comment: str,
+        prepared_at: str | None = None,
+    ) -> bool:
+        """Atomically claim one submit candidate before any scheduler side effect."""
+
+        now = prepared_at or _utcnow_iso()
+        submit_statuses = _status_values(tuple(SUBMIT_CANDIDATE_BULK_JOB_STATUSES))
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE bulk_jobs
+                SET
+                    status = ?,
+                    prepared_at = ?,
+                    job_name = ?,
+                    job_comment = ?,
+                    submit_attempts = submit_attempts + 1,
+                    updated_at = ?,
+                    last_error = NULL
+                WHERE
+                    job_key = ?
+                    AND status IN ({self._placeholders(submit_statuses)})
+                    AND spec_hash = ?
+                    AND job_name = ?
+                    AND job_comment = ?
+                """,
+                (
+                    BulkJobStatus.PREPARED.value,
+                    now,
+                    job_name,
+                    job_comment,
+                    now,
+                    job_key,
+                    *submit_statuses,
+                    spec_hash,
+                    job_name,
+                    job_comment,
+                ),
+            )
+        return int(cursor.rowcount) == 1
+
+    def record_prepared_error(self, job_key: str, error: str) -> bool:
+        now = _utcnow_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE bulk_jobs
+                SET updated_at = ?, last_error = ?
+                WHERE job_key = ? AND status = ?
+                """,
+                (now, str(error), job_key, BulkJobStatus.PREPARED.value),
+            )
+        return int(cursor.rowcount) == 1
+
+    def release_prepared_for_retry(self, job_key: str, error: str) -> bool:
+        """Return a claimed job to retry only after proven scheduler rejection."""
+
+        now = _utcnow_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE bulk_jobs
+                SET
+                    status = ?,
+                    prepared_at = NULL,
+                    updated_at = ?,
+                    last_error = ?
+                WHERE job_key = ? AND status = ?
+                """,
+                (
+                    BulkJobStatus.SUBMIT_DEFERRED.value,
+                    now,
+                    str(error),
+                    job_key,
+                    BulkJobStatus.PREPARED.value,
+                ),
+            )
+        return int(cursor.rowcount) == 1
+
+    def mark_awaiting_operator(self, job_key: str, error: str) -> bool:
+        now = _utcnow_iso()
+        terminal_statuses = _status_values(tuple(TERMINAL_BULK_JOB_STATUSES))
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE bulk_jobs
+                SET status = ?, updated_at = ?, last_error = ?
+                WHERE job_key = ?
+                  AND status NOT IN ({self._placeholders(terminal_statuses)})
+                """,
+                (
+                    BulkJobStatus.AWAITING_OPERATOR.value,
+                    now,
+                    str(error),
+                    job_key,
+                    *terminal_statuses,
+                ),
+            )
+        return int(cursor.rowcount) == 1
+
+    def operator_attach(self, job_key: str, scheduler_job_id: str) -> bool:
+        """Explicitly attach an operator-verified Slurm job to a held row."""
+
+        normalized_job_id = str(scheduler_job_id).strip()
+        if not normalized_job_id:
+            raise ValueError("scheduler_job_id must be non-empty.")
+        if not normalized_job_id.isascii() or not normalized_job_id.isdigit():
+            raise ValueError("scheduler_job_id must be a numeric Slurm allocation id.")
+        now = _utcnow_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE bulk_jobs
+                SET
+                    status = ?,
+                    scheduler_job_id = ?,
+                    submitted_at = COALESCE(submitted_at, ?),
+                    updated_at = ?,
+                    last_error = NULL
+                WHERE job_key = ? AND status IN (?, ?)
+                """,
+                (
+                    BulkJobStatus.SUBMITTED.value,
+                    normalized_job_id,
+                    now,
+                    now,
+                    job_key,
+                    BulkJobStatus.PREPARED.value,
+                    BulkJobStatus.AWAITING_OPERATOR.value,
+                ),
+            )
+        return int(cursor.rowcount) == 1
+
+    def confirm_not_submitted_and_reset(
+        self,
+        job_key: str,
+        *,
+        confirmed_by: str,
+        reason: str,
+    ) -> bool:
+        """Explicitly reset a held claim after an operator proves no submit."""
+
+        normalized_actor = str(confirmed_by).strip()
+        normalized_reason = str(reason).strip()
+        if not normalized_actor or not normalized_reason:
+            raise ValueError("confirmed_by and reason must be non-empty.")
+        now = _utcnow_iso()
+        audit = (
+            f"Operator {normalized_actor} confirmed no scheduler submission and reset "
+            f"the claim: {normalized_reason}"
+        )
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE bulk_jobs
+                SET
+                    status = ?,
+                    prepared_at = NULL,
+                    scheduler_job_id = NULL,
+                    scheduler_subjob_id = NULL,
+                    submitted_at = NULL,
+                    started_at = NULL,
+                    finished_at = NULL,
+                    submit_attempts = 0,
+                    monitor_attempts = 0,
+                    updated_at = ?,
+                    last_error = ?
+                WHERE
+                    job_key = ?
+                    AND status IN (?, ?)
+                    AND scheduler_job_id IS NULL
+                    AND scheduler_subjob_id IS NULL
+                """,
+                (
+                    BulkJobStatus.PENDING.value,
+                    now,
+                    audit,
+                    job_key,
+                    BulkJobStatus.PREPARED.value,
+                    BulkJobStatus.AWAITING_OPERATOR.value,
+                ),
+            )
+        return int(cursor.rowcount) == 1
+
     def mark_submitted(
         self,
         job_key: str,
@@ -571,11 +804,16 @@ class BulkJobRegistry:
         bulk_parent_job_id: str | None = None,
         bulk_index: int | None = None,
         scheduler_subjob_id: str | None = None,
-    ) -> None:
+    ) -> bool:
         now = _utcnow_iso()
+        allowed_statuses = [
+            BulkJobStatus.PENDING.value,
+            BulkJobStatus.SUBMIT_DEFERRED.value,
+            BulkJobStatus.PREPARED.value,
+        ]
         with self._connect() as conn:
-            conn.execute(
-                """
+            cursor = conn.execute(
+                f"""
                 UPDATE bulk_jobs
                 SET
                     status = ?,
@@ -585,11 +823,16 @@ class BulkJobRegistry:
                     bulk_parent_job_id = ?,
                     bulk_index = ?,
                     scheduler_subjob_id = ?,
-                    submit_attempts = submit_attempts + 1,
+                    submit_attempts = submit_attempts
+                        + CASE WHEN status = ? THEN 0 ELSE 1 END,
                     submitted_at = COALESCE(submitted_at, ?),
                     updated_at = ?,
                     last_error = NULL
-                WHERE job_key = ? AND status != ?
+                WHERE
+                    job_key = ?
+                    AND status != ?
+                    AND scheduler_job_id IS NULL
+                    AND status IN ({self._placeholders(allowed_statuses)})
                 """,
                 (
                     BulkJobStatus.SUBMITTED.value,
@@ -599,11 +842,34 @@ class BulkJobRegistry:
                     bulk_parent_job_id,
                     bulk_index,
                     scheduler_subjob_id,
+                    BulkJobStatus.PREPARED.value,
                     now,
                     now,
                     job_key,
                     BulkJobStatus.SUCCEEDED.value,
+                    *allowed_statuses,
                 ),
+            )
+            if int(cursor.rowcount) == 1:
+                return True
+
+            existing = conn.execute(
+                "SELECT scheduler_job_id, spec_hash FROM bulk_jobs WHERE job_key = ?",
+                (job_key,),
+            ).fetchone()
+            if (
+                existing is not None
+                and existing["scheduler_job_id"] is not None
+                and str(existing["scheduler_job_id"]) != str(scheduler_job_id)
+            ):
+                raise SchedulerIdentityMismatchError(
+                    job_key=job_key,
+                    stored_spec_hash=str(existing["spec_hash"] or "<legacy-null>"),
+                )
+            return bool(
+                existing is not None
+                and existing["scheduler_job_id"] is not None
+                and str(existing["scheduler_job_id"]) == str(scheduler_job_id)
             )
 
     def mark_queued(self, job_key: str) -> None:
@@ -638,13 +904,16 @@ class BulkJobRegistry:
                 UPDATE bulk_jobs
                 SET
                     status = ?,
-                    submit_attempts = submit_attempts + 1,
+                    submit_attempts = submit_attempts
+                        + CASE WHEN status = ? THEN 0 ELSE 1 END,
+                    prepared_at = NULL,
                     updated_at = ?,
                     last_error = ?
                 WHERE job_key = ? AND status != ?
                 """,
                 (
                     BulkJobStatus.SUBMIT_DEFERRED.value,
+                    BulkJobStatus.PREPARED.value,
                     now,
                     error,
                     job_key,
@@ -828,8 +1097,12 @@ class BulkJobRegistry:
         now = _utcnow_iso()
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM bulk_jobs WHERE status != ?",
-                (BulkJobStatus.SUCCEEDED.value,),
+                "SELECT * FROM bulk_jobs WHERE status NOT IN (?, ?, ?)",
+                (
+                    BulkJobStatus.SUCCEEDED.value,
+                    BulkJobStatus.PREPARED.value,
+                    BulkJobStatus.AWAITING_OPERATOR.value,
+                ),
             ).fetchall()
             for row in rows:
                 expected_outputs = _json_loads_paths(row["expected_outputs_json"])

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from qcsc_prefect_executor.bulk.exceptions import SpecHashMismatchError
+from qcsc_prefect_executor.bulk.exceptions import (
+    SchedulerIdentityMismatchError,
+    SpecHashMismatchError,
+)
 from qcsc_prefect_executor.bulk.models import (
     BulkJobDesiredState,
     BulkJobSpec,
@@ -899,6 +903,237 @@ def test_refresh_completed_jobs_from_outputs_marks_succeeded(tmp_path: Path):
     registry.refresh_completed_jobs_from_outputs()
 
     assert _only_job(registry).status == BulkJobStatus.SUCCEEDED
+
+
+def test_claim_prepared_is_atomic_across_concurrent_callers(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs(
+        [
+            _spec(
+                tmp_path,
+                "job-1",
+                spec_hash="a" * 64,
+                job_name="qcsc-job-1",
+                job_comment="qcsc:v1:" + "a" * 64,
+            )
+        ]
+    )
+
+    def claim() -> bool:
+        return registry.claim_prepared(
+            job_key="job-1",
+            spec_hash="a" * 64,
+            job_name="qcsc-job-1",
+            job_comment="qcsc:v1:" + "a" * 64,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: claim(), range(8)))
+
+    assert results.count(True) == 1
+    record = registry.get_job("job-1")
+    assert record is not None
+    assert record.status == BulkJobStatus.PREPARED
+    assert record.prepared_at is not None
+    assert record.submit_attempts == 1
+
+
+def test_prepared_identity_is_immutable(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs(
+        [
+            _spec(
+                tmp_path,
+                "job-1",
+                spec_hash="a" * 64,
+                job_name="qcsc-job-1",
+                job_comment="qcsc:v1:" + "a" * 64,
+            )
+        ]
+    )
+    assert registry.claim_prepared(
+        job_key="job-1",
+        spec_hash="a" * 64,
+        job_name="qcsc-job-1",
+        job_comment="qcsc:v1:" + "a" * 64,
+    )
+
+    with pytest.raises(SchedulerIdentityMismatchError):
+        registry.upsert_jobs(
+            [
+                _spec(
+                    tmp_path,
+                    "job-1",
+                    spec_hash="a" * 64,
+                    job_name="qcsc-different",
+                    job_comment="qcsc:v1:" + "a" * 64,
+                )
+            ]
+        )
+
+
+def test_mark_submitted_does_not_double_count_prepared_attempt(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs(
+        [
+            _spec(
+                tmp_path,
+                "job-1",
+                spec_hash="a" * 64,
+                job_name="qcsc-job-1",
+                job_comment="qcsc:v1:" + "a" * 64,
+            )
+        ]
+    )
+    assert registry.claim_prepared(
+        job_key="job-1",
+        spec_hash="a" * 64,
+        job_name="qcsc-job-1",
+        job_comment="qcsc:v1:" + "a" * 64,
+    )
+
+    registry.mark_submitted("job-1", "43607196")
+
+    record = registry.get_job("job-1")
+    assert record is not None
+    assert record.status == BulkJobStatus.SUBMITTED
+    assert record.scheduler_job_id == "43607196"
+    assert record.submit_attempts == 1
+
+
+def test_mark_submitted_same_id_does_not_regress_running_state(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs([_spec(tmp_path, "job-1")])
+    assert registry.mark_submitted("job-1", "43607196")
+    registry.mark_running("job-1")
+
+    assert registry.mark_submitted("job-1", "43607196")
+
+    record = registry.get_job("job-1")
+    assert record is not None
+    assert record.status == BulkJobStatus.RUNNING
+    assert record.scheduler_job_id == "43607196"
+    assert record.submit_attempts == 1
+
+
+def test_mark_submitted_cannot_overwrite_operator_hold(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs([_spec(tmp_path, "job-1")])
+    registry.mark_awaiting_operator("job-1", "manual review")
+
+    assert registry.mark_submitted("job-1", "43607196") is False
+
+    record = registry.get_job("job-1")
+    assert record is not None
+    assert record.status == BulkJobStatus.AWAITING_OPERATOR
+    assert record.scheduler_job_id is None
+
+
+def test_mark_submitted_rejects_conflicting_scheduler_id(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs([_spec(tmp_path, "job-1", spec_hash="a" * 64)])
+    registry.mark_submitted("job-1", "43607196")
+
+    with pytest.raises(SchedulerIdentityMismatchError):
+        registry.mark_submitted("job-1", "99999999")
+
+    record = registry.get_job("job-1")
+    assert record is not None
+    assert record.scheduler_job_id == "43607196"
+    assert record.submit_attempts == 1
+
+
+def test_operator_can_attach_or_explicitly_reset_held_claim(tmp_path: Path):
+    registry = _registry(tmp_path)
+    identity = {
+        "spec_hash": "a" * 64,
+        "job_name": "qcsc-job-1",
+        "job_comment": "qcsc:v1:" + "a" * 64,
+    }
+    registry.upsert_jobs(
+        [
+            _spec(tmp_path, "attach", **identity),
+            _spec(tmp_path, "reset", **identity),
+        ]
+    )
+    for job_key in ("attach", "reset"):
+        assert registry.claim_prepared(job_key=job_key, **identity)
+        assert registry.mark_awaiting_operator(job_key, "ambiguous scheduler identity")
+
+    assert registry.operator_attach("attach", "43607196")
+    attached = registry.get_job("attach")
+    assert attached is not None
+    assert attached.status == BulkJobStatus.SUBMITTED
+    assert attached.scheduler_job_id == "43607196"
+
+    assert registry.confirm_not_submitted_and_reset(
+        "reset",
+        confirmed_by="operator@example",
+        reason="squeue and sacct were checked manually",
+    )
+    reset = registry.get_job("reset")
+    assert reset is not None
+    assert reset.status == BulkJobStatus.PENDING
+    assert reset.prepared_at is None
+    assert reset.submit_attempts == 0
+    assert "operator@example" in str(reset.last_error)
+
+
+def test_operator_attach_rejects_non_allocation_job_id(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs([_spec(tmp_path, "job-1")])
+    registry.mark_awaiting_operator("job-1", "manual review")
+
+    with pytest.raises(ValueError, match="numeric Slurm allocation"):
+        registry.operator_attach("job-1", "43607196.batch")
+
+    assert registry.get_job("job-1").status == BulkJobStatus.AWAITING_OPERATOR
+
+
+def test_output_refresh_does_not_bypass_prepared_or_operator_hold(tmp_path: Path):
+    registry = _registry(tmp_path)
+    work_dir = tmp_path / "job-1"
+    registry.upsert_jobs(
+        [
+            _spec(
+                tmp_path,
+                "job-1",
+                expected_outputs=[Path("done.txt")],
+                spec_hash="a" * 64,
+                job_name="qcsc-job-1",
+                job_comment="qcsc:v1:" + "a" * 64,
+            )
+        ]
+    )
+    assert registry.claim_prepared(
+        job_key="job-1",
+        spec_hash="a" * 64,
+        job_name="qcsc-job-1",
+        job_comment="qcsc:v1:" + "a" * 64,
+    )
+    work_dir.mkdir()
+    (work_dir / "done.txt").write_text("ok")
+
+    registry.upsert_jobs(
+        [
+            _spec(
+                tmp_path,
+                "job-1",
+                expected_outputs=[Path("done.txt")],
+                spec_hash="a" * 64,
+                job_name="qcsc-job-1",
+                job_comment="qcsc:v1:" + "a" * 64,
+            )
+        ]
+    )
+    assert registry.get_job("job-1").status == BulkJobStatus.PREPARED
+
+    registry.refresh_completed_jobs_from_outputs()
+    assert registry.get_job("job-1").status == BulkJobStatus.PREPARED
+
+    registry.mark_awaiting_operator("job-1", "operator review required")
+    registry.refresh_completed_jobs_from_outputs()
+    assert registry.get_job("job-1").status == BulkJobStatus.AWAITING_OPERATOR
 
 
 def test_registry_reload_preserves_state(tmp_path: Path):

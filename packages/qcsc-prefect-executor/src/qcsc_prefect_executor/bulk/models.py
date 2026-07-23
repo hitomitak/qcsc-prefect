@@ -246,6 +246,9 @@ class BulkRunResult:
     unknown: int
     registry_path: Path
     failed_jobs: list[str]
+    prepared: int = 0
+    awaiting_operator: int = 0
+    operator_action_required_jobs: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

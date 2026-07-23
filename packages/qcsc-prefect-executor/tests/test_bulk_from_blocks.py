@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import pytest
 from qcsc_prefect_executor import from_blocks as mod
 from qcsc_prefect_executor.bulk.exceptions import (
-    DuplicateJobKeyError,
+    OperatorActionRequired,
     QueueFullError,
+    RecoveryPending,
+    SchedulerIdentityMismatchError,
     SubmitError,
+    SubmitOutcomeUnknownError,
     TemporarySubmitError,
 )
 from qcsc_prefect_executor.bulk.models import BulkJobSpec, BulkJobStatus
@@ -111,14 +116,34 @@ def _mark_native_subjob_submitted(
 
 
 class _SubmitRuntimeStub:
-    def __init__(self, *, job_id: str = "12345", error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        job_id: str = "12345",
+        error: BaseException | None = None,
+        candidates: list[Any] | None = None,
+    ) -> None:
         self.job_id = job_id
         self.error = error
+        self.candidates = list(candidates or [])
         self.submit_calls: list[dict[str, Any]] = []
+        self.find_calls: list[dict[str, Any]] = []
         self.wait_calls = 0
 
-    async def submit(self, script_path: Path, *, cwd: Path | None = None):
-        self.submit_calls.append({"script_path": script_path, "cwd": cwd})
+    async def submit(
+        self,
+        script_path: Path,
+        *,
+        cwd: Path | None = None,
+        timeout_seconds: float | None = None,
+    ):
+        self.submit_calls.append(
+            {
+                "script_path": script_path,
+                "cwd": cwd,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
         if self.error is not None:
             raise self.error
 
@@ -127,6 +152,10 @@ class _SubmitRuntimeStub:
                 self.job_id = job_id
 
         return _SubmitResult(self.job_id)
+
+    async def find_jobs_by_identity(self, **kwargs: Any) -> list[Any]:
+        self.find_calls.append(dict(kwargs))
+        return list(self.candidates)
 
     async def wait_final_status(self, *args, **kwargs):
         self.wait_calls += 1
@@ -146,6 +175,30 @@ def _patch_fugaku_runtime(monkeypatch, runtime: _SubmitRuntimeStub) -> list[bool
 
     monkeypatch.setattr(mod, "FugakuPJMRuntime", runtime_factory)
     return no_check_directory_calls
+
+
+def _slurm_candidate(
+    record,
+    *,
+    job_id: str = "12345",
+    state: str = "RUNNING",
+    comment: str | None = None,
+    user: str = "alice",
+    account: str = "",
+    partition: str = "compute",
+    submit_time: datetime | None = None,
+):
+    return mod.SlurmJobCandidate(
+        job_id=job_id,
+        job_name=str(record.job_name),
+        comment=str(record.job_comment if comment is None else comment),
+        user=user,
+        account=account,
+        partition=partition,
+        submit_time=submit_time or datetime.now(timezone.utc),
+        state=state,
+        source="squeue" if state in {"PENDING", "RUNNING"} else "sacct",
+    )
 
 
 def test_submit_job_from_blocks_records_submitted_with_scheduler_job_id(
@@ -220,9 +273,7 @@ def test_submit_job_from_blocks_uses_fugaku_no_check_directory_default_false(
     assert len(runtime.submit_calls) == 1
 
 
-def test_submit_job_from_blocks_passes_fugaku_no_check_directory_true(
-    tmp_path: Path, monkeypatch
-):
+def test_submit_job_from_blocks_passes_fugaku_no_check_directory_true(tmp_path: Path, monkeypatch):
     _patch_block_loading(monkeypatch, hpc_target="fugaku")
     runtime = _SubmitRuntimeStub(job_id="49075255")
     no_check_directory_calls = _patch_fugaku_runtime(monkeypatch, runtime)
@@ -243,7 +294,7 @@ def test_submit_job_from_blocks_passes_fugaku_no_check_directory_true(
     assert len(runtime.submit_calls) == 1
 
 
-def test_submit_job_from_blocks_rejects_reused_succeeded_job_key(tmp_path: Path, monkeypatch):
+def test_submit_job_from_blocks_attaches_reused_succeeded_job_key(tmp_path: Path, monkeypatch):
     _patch_block_loading(monkeypatch)
     runtime = _SubmitRuntimeStub(job_id="new-job-id")
     _patch_slurm_runtime(monkeypatch, runtime)
@@ -252,30 +303,27 @@ def test_submit_job_from_blocks_rejects_reused_succeeded_job_key(tmp_path: Path,
     registry.mark_submitted("job-1", "old-job-id")
     registry.mark_succeeded("job-1")
 
-    try:
-        asyncio.run(
-            mod.submit_job_from_blocks(
-                command_block="cmd",
-                execution_profile_block="exec",
-                hpc_profile_block="hpc",
-                work_dir=tmp_path / "job-1",
-                job_key="job-1",
-                registry=registry,
-            )
+    result = asyncio.run(
+        mod.submit_job_from_blocks(
+            command_block="cmd",
+            execution_profile_block="exec",
+            hpc_profile_block="hpc",
+            work_dir=tmp_path / "job-1",
+            job_key="job-1",
+            registry=registry,
         )
-    except DuplicateJobKeyError as exc:
-        assert "already has status SUCCEEDED" in str(exc)
-    else:
-        raise AssertionError("Expected DuplicateJobKeyError")
+    )
 
     record = registry.get_job("job-1")
     assert runtime.submit_calls == []
+    assert result.scheduler_job_id == "old-job-id"
+    assert result.status == BulkJobStatus.SUCCEEDED
     assert record is not None
     assert record.status == BulkJobStatus.SUCCEEDED
     assert record.scheduler_job_id == "old-job-id"
 
 
-def test_submit_job_from_blocks_rejects_reused_active_job_key(tmp_path: Path, monkeypatch):
+def test_submit_job_from_blocks_attaches_reused_active_job_key(tmp_path: Path, monkeypatch):
     _patch_block_loading(monkeypatch)
     runtime = _SubmitRuntimeStub(job_id="new-job-id")
     _patch_slurm_runtime(monkeypatch, runtime)
@@ -283,23 +331,20 @@ def test_submit_job_from_blocks_rejects_reused_active_job_key(tmp_path: Path, mo
     registry.upsert_jobs([BulkJobSpec(job_key="job-1", work_dir=tmp_path / "job-1")])
     registry.mark_submitted("job-1", "old-job-id")
 
-    try:
-        asyncio.run(
-            mod.submit_job_from_blocks(
-                command_block="cmd",
-                execution_profile_block="exec",
-                hpc_profile_block="hpc",
-                work_dir=tmp_path / "job-1",
-                job_key="job-1",
-                registry=registry,
-            )
+    result = asyncio.run(
+        mod.submit_job_from_blocks(
+            command_block="cmd",
+            execution_profile_block="exec",
+            hpc_profile_block="hpc",
+            work_dir=tmp_path / "job-1",
+            job_key="job-1",
+            registry=registry,
         )
-    except DuplicateJobKeyError as exc:
-        assert "already has status SUBMITTED" in str(exc)
-    else:
-        raise AssertionError("Expected DuplicateJobKeyError")
+    )
 
     assert runtime.submit_calls == []
+    assert result.scheduler_job_id == "old-job-id"
+    assert result.status == BulkJobStatus.SUBMITTED
 
 
 def test_submit_job_from_blocks_allows_submit_deferred_retry(tmp_path: Path, monkeypatch):
@@ -406,8 +451,11 @@ def test_temporary_submit_error_is_recorded_as_submit_deferred(tmp_path: Path, m
 
 
 def test_unrecoverable_submit_error_is_recorded_as_failed(tmp_path: Path, monkeypatch):
+    class _RejectedSubmitError(RuntimeError):
+        submission_definitely_rejected = True
+
     _patch_block_loading(monkeypatch)
-    runtime = _SubmitRuntimeStub(error=RuntimeError("invalid account"))
+    runtime = _SubmitRuntimeStub(error=_RejectedSubmitError("invalid account"))
     _patch_slurm_runtime(monkeypatch, runtime)
     registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
 
@@ -430,6 +478,500 @@ def test_unrecoverable_submit_error_is_recorded_as_failed(tmp_path: Path, monkey
     record = registry.get_job("job-1")
     assert record is not None
     assert record.status == BulkJobStatus.FAILED
+
+
+def test_ambiguous_submit_preserves_prepared_then_restart_attaches(
+    tmp_path: Path,
+    monkeypatch,
+):
+    _patch_block_loading(monkeypatch)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    first_runtime = _SubmitRuntimeStub(
+        error=mod.slurm_runtime.SubmitOutcomeUnknownError("connection lost")
+    )
+    _patch_slurm_runtime(monkeypatch, first_runtime)
+
+    with pytest.raises(RecoveryPending):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+            )
+        )
+
+    prepared = registry.get_job("job-1")
+    assert prepared is not None
+    assert prepared.status == BulkJobStatus.PREPARED
+    assert prepared.scheduler_job_id is None
+
+    recovery_runtime = _SubmitRuntimeStub(
+        candidates=[_slurm_candidate(prepared, job_id="789", state="RUNNING")]
+    )
+    _patch_slurm_runtime(monkeypatch, recovery_runtime)
+    result = asyncio.run(
+        mod.submit_job_from_blocks(
+            command_block="cmd",
+            execution_profile_block="exec",
+            hpc_profile_block="hpc",
+            work_dir=tmp_path / "job-1",
+            job_key="job-1",
+            registry=registry,
+            slurm_user="alice",
+        )
+    )
+
+    attached = registry.get_job("job-1")
+    assert recovery_runtime.submit_calls == []
+    assert result.scheduler_job_id == "789"
+    assert result.status == BulkJobStatus.RUNNING
+    assert attached is not None
+    assert attached.scheduler_job_id == "789"
+    assert attached.status == BulkJobStatus.RUNNING
+
+
+def test_ambiguous_submit_after_grace_enters_operator_hold(tmp_path: Path, monkeypatch):
+    _patch_block_loading(monkeypatch)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    runtime = _SubmitRuntimeStub(
+        error=mod.slurm_runtime.SubmitOutcomeUnknownError("sbatch timed out")
+    )
+    _patch_slurm_runtime(monkeypatch, runtime)
+
+    with pytest.raises(OperatorActionRequired, match="No matching Slurm allocation"):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+                slurm_recovery_grace_seconds=0,
+            )
+        )
+
+    held = registry.get_job("job-1")
+    assert held is not None
+    assert held.status == BulkJobStatus.AWAITING_OPERATOR
+
+    second_runtime = _SubmitRuntimeStub()
+    _patch_slurm_runtime(monkeypatch, second_runtime)
+    with pytest.raises(OperatorActionRequired):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+            )
+        )
+    assert second_runtime.submit_calls == []
+    assert second_runtime.find_calls == []
+
+
+def test_multiple_recovery_candidates_enter_operator_hold(tmp_path: Path, monkeypatch):
+    _patch_block_loading(monkeypatch)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    first_runtime = _SubmitRuntimeStub(
+        error=mod.slurm_runtime.SubmitOutcomeUnknownError("connection lost")
+    )
+    _patch_slurm_runtime(monkeypatch, first_runtime)
+    with pytest.raises(RecoveryPending):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+            )
+        )
+
+    prepared = registry.get_job("job-1")
+    assert prepared is not None
+    runtime = _SubmitRuntimeStub(
+        candidates=[
+            _slurm_candidate(prepared, job_id="101"),
+            _slurm_candidate(prepared, job_id="102"),
+        ]
+    )
+    _patch_slurm_runtime(monkeypatch, runtime)
+
+    with pytest.raises(OperatorActionRequired, match="2 matching Slurm allocations"):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+            )
+        )
+    assert registry.get_job("job-1").status == BulkJobStatus.AWAITING_OPERATOR
+
+
+def test_comment_mismatch_forbids_attach_and_holds(tmp_path: Path, monkeypatch):
+    _patch_block_loading(monkeypatch)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    first_runtime = _SubmitRuntimeStub(
+        error=mod.slurm_runtime.SubmitOutcomeUnknownError("connection lost")
+    )
+    _patch_slurm_runtime(monkeypatch, first_runtime)
+    with pytest.raises(RecoveryPending):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+            )
+        )
+
+    prepared = registry.get_job("job-1")
+    assert prepared is not None
+    runtime = _SubmitRuntimeStub(
+        candidates=[_slurm_candidate(prepared, comment="different-spec-comment")]
+    )
+    _patch_slurm_runtime(monkeypatch, runtime)
+
+    with pytest.raises(SchedulerIdentityMismatchError):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+            )
+        )
+    held = registry.get_job("job-1")
+    assert held is not None
+    assert held.status == BulkJobStatus.AWAITING_OPERATOR
+    assert held.scheduler_job_id is None
+
+
+def test_terminal_recovery_requires_output_evidence(tmp_path: Path, monkeypatch):
+    _patch_block_loading(monkeypatch)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    registry.upsert_jobs(
+        [
+            BulkJobSpec(
+                job_key="job-1",
+                work_dir=tmp_path / "job-1",
+                expected_outputs=[Path("done.txt")],
+            )
+        ]
+    )
+    first_runtime = _SubmitRuntimeStub(
+        error=mod.slurm_runtime.SubmitOutcomeUnknownError("connection lost")
+    )
+    _patch_slurm_runtime(monkeypatch, first_runtime)
+    with pytest.raises(RecoveryPending):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+            )
+        )
+
+    prepared = registry.get_job("job-1")
+    assert prepared is not None
+    (tmp_path / "job-1").mkdir(exist_ok=True)
+    (tmp_path / "job-1" / "done.txt").write_text("complete")
+    recovery_runtime = _SubmitRuntimeStub(
+        candidates=[_slurm_candidate(prepared, job_id="222", state="COMPLETED")]
+    )
+    _patch_slurm_runtime(monkeypatch, recovery_runtime)
+
+    result = asyncio.run(
+        mod.submit_job_from_blocks(
+            command_block="cmd",
+            execution_profile_block="exec",
+            hpc_profile_block="hpc",
+            work_dir=tmp_path / "job-1",
+            job_key="job-1",
+            registry=registry,
+            slurm_user="alice",
+        )
+    )
+    assert result.status == BulkJobStatus.SUCCEEDED
+    assert registry.get_job("job-1").status == BulkJobStatus.SUCCEEDED
+
+
+def test_terminal_recovery_without_output_enters_hold(tmp_path: Path, monkeypatch):
+    _patch_block_loading(monkeypatch)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    registry.upsert_jobs(
+        [
+            BulkJobSpec(
+                job_key="job-1",
+                work_dir=tmp_path / "job-1",
+                expected_outputs=[Path("done.txt")],
+            )
+        ]
+    )
+    first_runtime = _SubmitRuntimeStub(
+        error=mod.slurm_runtime.SubmitOutcomeUnknownError("connection lost")
+    )
+    _patch_slurm_runtime(monkeypatch, first_runtime)
+    with pytest.raises(RecoveryPending):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+            )
+        )
+
+    prepared = registry.get_job("job-1")
+    assert prepared is not None
+    runtime = _SubmitRuntimeStub(
+        candidates=[_slurm_candidate(prepared, job_id="333", state="COMPLETED")]
+    )
+    _patch_slurm_runtime(monkeypatch, runtime)
+
+    with pytest.raises(OperatorActionRequired, match="output evidence is missing"):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+            )
+        )
+    held = registry.get_job("job-1")
+    assert held is not None
+    assert held.scheduler_job_id == "333"
+    assert held.status == BulkJobStatus.AWAITING_OPERATOR
+
+
+def test_mark_submitted_failure_preserves_prepared(tmp_path: Path, monkeypatch):
+    _patch_block_loading(monkeypatch)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    runtime = _SubmitRuntimeStub(job_id="444")
+    _patch_slurm_runtime(monkeypatch, runtime)
+
+    def fail_mark_submitted(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("fault after sbatch")
+
+    monkeypatch.setattr(registry, "mark_submitted", fail_mark_submitted)
+    with pytest.raises(SubmitOutcomeUnknownError, match="registry update failed"):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+            )
+        )
+
+    prepared = registry.get_job("job-1")
+    assert prepared is not None
+    assert prepared.status == BulkJobStatus.PREPARED
+    assert prepared.scheduler_job_id is None
+    assert len(runtime.submit_calls) == 1
+
+
+def test_cancelled_submit_preserves_prepared(tmp_path: Path, monkeypatch):
+    _patch_block_loading(monkeypatch)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    runtime = _SubmitRuntimeStub(error=asyncio.CancelledError())
+    _patch_slurm_runtime(monkeypatch, runtime)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+            )
+        )
+    record = registry.get_job("job-1")
+    assert record is not None
+    assert record.status == BulkJobStatus.PREPARED
+
+
+def test_concurrent_submit_callers_invoke_scheduler_once(tmp_path: Path, monkeypatch):
+    _patch_block_loading(monkeypatch)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+
+    class _BlockingRuntime(_SubmitRuntimeStub):
+        def __init__(self) -> None:
+            super().__init__(job_id="555")
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def submit(self, script_path: Path, **kwargs: Any):
+            self.submit_calls.append({"script_path": script_path, **kwargs})
+            self.started.set()
+            await self.release.wait()
+
+            class _SubmitResult:
+                job_id = "555"
+
+            return _SubmitResult()
+
+    runtime = _BlockingRuntime()
+    _patch_slurm_runtime(monkeypatch, runtime)
+
+    async def submit_once():
+        return await mod.submit_job_from_blocks(
+            command_block="cmd",
+            execution_profile_block="exec",
+            hpc_profile_block="hpc",
+            work_dir=tmp_path / "job-1",
+            job_key="job-1",
+            registry=registry,
+            slurm_user="alice",
+        )
+
+    async def scenario():
+        winner = asyncio.create_task(submit_once())
+        await runtime.started.wait()
+        loser = asyncio.create_task(submit_once())
+        with pytest.raises(RecoveryPending):
+            await loser
+        runtime.release.set()
+        return await winner
+
+    result = asyncio.run(scenario())
+    assert result.scheduler_job_id == "555"
+    assert len(runtime.submit_calls) == 1
+    assert registry.get_job("job-1").scheduler_job_id == "555"
+
+
+def test_recovery_rejects_candidate_outside_clock_skew_window(tmp_path: Path, monkeypatch):
+    _patch_block_loading(monkeypatch)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    first_runtime = _SubmitRuntimeStub(
+        error=mod.slurm_runtime.SubmitOutcomeUnknownError("connection lost")
+    )
+    _patch_slurm_runtime(monkeypatch, first_runtime)
+    with pytest.raises(RecoveryPending):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+            )
+        )
+    prepared = registry.get_job("job-1")
+    assert prepared is not None
+    runtime = _SubmitRuntimeStub(
+        candidates=[
+            _slurm_candidate(
+                prepared,
+                submit_time=datetime.now(timezone.utc) + timedelta(hours=1),
+            )
+        ]
+    )
+    _patch_slurm_runtime(monkeypatch, runtime)
+
+    with pytest.raises(OperatorActionRequired, match="clock-skew window"):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("candidate_overrides", "error_pattern"),
+    [
+        ({"user": "other-user"}, "user does not match"),
+        ({"account": "other-account"}, "account does not match"),
+        ({"partition": "other-partition"}, "partition does not match"),
+    ],
+)
+def test_recovery_rejects_scheduler_metadata_mismatch(
+    tmp_path: Path,
+    monkeypatch,
+    candidate_overrides: dict[str, str],
+    error_pattern: str,
+):
+    _patch_block_loading(monkeypatch)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    first_runtime = _SubmitRuntimeStub(
+        error=mod.slurm_runtime.SubmitOutcomeUnknownError("connection lost")
+    )
+    _patch_slurm_runtime(monkeypatch, first_runtime)
+    with pytest.raises(RecoveryPending):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+            )
+        )
+    prepared = registry.get_job("job-1")
+    assert prepared is not None
+    runtime = _SubmitRuntimeStub(candidates=[_slurm_candidate(prepared, **candidate_overrides)])
+    _patch_slurm_runtime(monkeypatch, runtime)
+
+    with pytest.raises(OperatorActionRequired, match=error_pattern):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+            )
+        )
+    assert registry.get_job("job-1").status == BulkJobStatus.AWAITING_OPERATOR
 
 
 def test_monitor_jobs_many_maps_scheduler_states(monkeypatch):
@@ -607,11 +1149,17 @@ def test_monitor_jobs_many_updates_registry_if_provided(tmp_path: Path, monkeypa
     registry.upsert_jobs(
         [
             BulkJobSpec(job_key="job-1", work_dir=tmp_path / "job-1"),
-            BulkJobSpec(job_key="job-2", work_dir=tmp_path / "job-2"),
+            BulkJobSpec(
+                job_key="job-2",
+                work_dir=tmp_path / "job-2",
+                expected_outputs=[Path("done.txt")],
+            ),
         ]
     )
     registry.mark_submitted("job-1", "1")
     registry.mark_submitted("job-2", "2")
+    (tmp_path / "job-2").mkdir()
+    (tmp_path / "job-2" / "done.txt").write_text("ok")
 
     asyncio.run(
         mod.monitor_jobs_many(
@@ -637,9 +1185,19 @@ def test_monitor_jobs_many_updates_unknown_registry_record(tmp_path: Path, monke
 
     monkeypatch.setattr(mod, "_query_scheduler_statuses", fake_query_scheduler_statuses)
     registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
-    registry.upsert_jobs([BulkJobSpec(job_key="job-1", work_dir=tmp_path / "job-1")])
+    registry.upsert_jobs(
+        [
+            BulkJobSpec(
+                job_key="job-1",
+                work_dir=tmp_path / "job-1",
+                expected_outputs=[Path("done.txt")],
+            )
+        ]
+    )
     registry.mark_submitted("job-1", "49075255")
     registry.mark_unknown("job-1", error="job was not found in scheduler output")
+    (tmp_path / "job-1").mkdir()
+    (tmp_path / "job-1" / "done.txt").write_text("ok")
 
     statuses = asyncio.run(
         mod.monitor_jobs_many(
@@ -912,3 +1470,46 @@ def test_disappeared_job_without_success_evidence_becomes_unknown(tmp_path: Path
     assert statuses["1"] == BulkJobStatus.UNKNOWN
     assert record is not None
     assert record.status == BulkJobStatus.UNKNOWN
+
+
+def test_bulk_returns_immediately_when_operator_hold_exists(tmp_path: Path):
+    registry_path = tmp_path / "bulk.sqlite"
+    registry = BulkJobRegistry(registry_path)
+    registry.upsert_jobs([BulkJobSpec(job_key="held", work_dir=tmp_path / "held")])
+    registry.mark_awaiting_operator("held", "manual scheduler identity review required")
+
+    result = asyncio.run(
+        mod.run_jobs_from_blocks_bulk(
+            jobs=[],
+            command_block="unused",
+            execution_profile_block="unused",
+            hpc_profile_block="unused",
+            registry_path=registry_path,
+        )
+    )
+
+    assert result.awaiting_operator == 1
+    assert result.operator_action_required_jobs == ["held"]
+
+
+def test_bulk_moves_unknown_without_scheduler_id_to_operator_hold(tmp_path: Path):
+    registry_path = tmp_path / "bulk.sqlite"
+    registry = BulkJobRegistry(registry_path)
+    registry.upsert_jobs([BulkJobSpec(job_key="unknown", work_dir=tmp_path / "unknown")])
+    registry.mark_unknown("unknown", error="scheduler identity was lost")
+
+    result = asyncio.run(
+        mod.run_jobs_from_blocks_bulk(
+            jobs=[],
+            command_block="unused",
+            execution_profile_block="unused",
+            hpc_profile_block="unused",
+            registry_path=registry_path,
+        )
+    )
+
+    assert result.awaiting_operator == 1
+    assert result.operator_action_required_jobs == ["unknown"]
+    assert BulkJobRegistry(registry_path).get_job("unknown").status == (
+        BulkJobStatus.AWAITING_OPERATOR
+    )

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import getpass
 import inspect
 import re
 from dataclasses import asdict, dataclass, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from qcsc_prefect_adapters.base.subprocess import (
+    DEFAULT_SCHEDULER_COMMAND_TIMEOUT_SECONDS,
+)
 from qcsc_prefect_adapters.fugaku import builder as fugaku_builder
 from qcsc_prefect_adapters.fugaku import runtime as fugaku_runtime
 from qcsc_prefect_adapters.fugaku.builder import FugakuJobRequest
@@ -18,17 +23,24 @@ from qcsc_prefect_adapters.miyabi.builder import MiyabiJobRequest
 from qcsc_prefect_adapters.miyabi.runtime import MiyabiPBSRuntime
 from qcsc_prefect_adapters.slurm import builder as slurm_builder
 from qcsc_prefect_adapters.slurm import runtime as slurm_runtime
-from qcsc_prefect_adapters.slurm.builder import SlurmJobRequest
-from qcsc_prefect_adapters.slurm.runtime import SlurmRuntime
+from qcsc_prefect_adapters.slurm.builder import (
+    SlurmJobRequest,
+    build_slurm_job_identity,
+)
+from qcsc_prefect_adapters.slurm.runtime import SlurmJobCandidate, SlurmRuntime
 from qcsc_prefect_blocks.common.blocks import CommandBlock, ExecutionProfileBlock, HPCProfileBlock
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 from qcsc_prefect_core.queue import QueueAwareSubmitGate, QueueProbe
 
 from qcsc_prefect_executor.bulk.exceptions import (
     DuplicateJobKeyError,
+    OperatorActionRequired,
     QueueFullError,
+    RecoveryPending,
+    SchedulerIdentityMismatchError,
     SpecHashMismatchError,
     SubmitError,
+    SubmitOutcomeUnknownError,
     TemporarySubmitError,
 )
 from qcsc_prefect_executor.bulk.models import (
@@ -65,6 +77,22 @@ _SCRIPT_SUFFIX_BY_TARGET = {
     "slurm": ".slurm",
 }
 _KNOWN_SCRIPT_SUFFIXES = frozenset(_SCRIPT_SUFFIX_BY_TARGET.values())
+DEFAULT_SLURM_RECOVERY_GRACE_SECONDS = 120.0
+DEFAULT_SLURM_CLOCK_SKEW_MARGIN_SECONDS = 60.0
+
+
+def _validate_slurm_recovery_settings(
+    *,
+    recovery_grace_seconds: float,
+    clock_skew_margin_seconds: float,
+    scheduler_command_timeout_seconds: float | None,
+) -> None:
+    if recovery_grace_seconds < 0:
+        raise ValueError("slurm_recovery_grace_seconds must be non-negative.")
+    if clock_skew_margin_seconds < 0:
+        raise ValueError("slurm_clock_skew_margin_seconds must be non-negative.")
+    if scheduler_command_timeout_seconds is not None and scheduler_command_timeout_seconds <= 0:
+        raise ValueError("scheduler_command_timeout_seconds must be greater than 0.")
 
 
 @dataclass(frozen=True)
@@ -141,6 +169,31 @@ def _resolved_bulk_spec_hash(
             code_digest=code_digest,
             environment_digest=environment_digest,
         )
+    )
+
+
+def _with_slurm_identity(
+    prepared: _PreparedBlockJob,
+    *,
+    job_key: str,
+    spec_hash: str,
+) -> tuple[_PreparedBlockJob, str, str]:
+    if prepared.submission_target.hpc_target != "slurm":
+        raise ValueError("Slurm identity can only be added to a Slurm job request.")
+    if not isinstance(prepared.req, SlurmJobRequest):
+        raise TypeError("Prepared Slurm job has an unexpected request type.")
+    identity = build_slurm_job_identity(job_key=job_key, spec_hash=spec_hash)
+    return (
+        replace(
+            prepared,
+            req=replace(
+                prepared.req,
+                job_name=identity.job_name,
+                comment=identity.comment,
+            ),
+        ),
+        identity.job_name,
+        identity.comment,
     )
 
 
@@ -449,6 +502,11 @@ def _build_bulk_run_result(
         for record in registry.get_all_jobs()
         if record.status == BulkJobStatus.FAILED
     ]
+    operator_action_required_jobs = [
+        record.job_key
+        for record in registry.get_all_jobs()
+        if record.status == BulkJobStatus.AWAITING_OPERATOR
+    ]
     return BulkRunResult(
         total_jobs=total_jobs,
         status_counts=counts,
@@ -459,11 +517,18 @@ def _build_bulk_run_result(
         unknown=counts.get(BulkJobStatus.UNKNOWN.value, 0),
         registry_path=registry.path,
         failed_jobs=failed_jobs,
+        prepared=counts.get(BulkJobStatus.PREPARED.value, 0),
+        awaiting_operator=counts.get(BulkJobStatus.AWAITING_OPERATOR.value, 0),
+        operator_action_required_jobs=operator_action_required_jobs,
     )
 
 
 def _has_failed_jobs(registry: BulkJobRegistry) -> bool:
     return registry.status_counts().get(BulkJobStatus.FAILED.value, 0) > 0
+
+
+def _has_operator_holds(registry: BulkJobRegistry) -> bool:
+    return registry.status_counts().get(BulkJobStatus.AWAITING_OPERATOR.value, 0) > 0
 
 
 def _safe_bulk_group_key(value: str) -> str:
@@ -558,8 +623,7 @@ def _validate_native_bulk_candidates(jobs: list[BulkJobRecord]) -> None:
     if overridden_blocks:
         raise ValueError(
             "submit_mode='native_bulk' does not support per-job execution_profile_block "
-            "or hpc_profile_block overrides: "
-            + ", ".join(overridden_blocks)
+            "or hpc_profile_block overrides: " + ", ".join(overridden_blocks)
         )
 
 
@@ -572,8 +636,7 @@ def _validate_native_bulk_specs(jobs: list[BulkJobSpec]) -> None:
     if overridden_blocks:
         raise ValueError(
             "submit_mode='native_bulk' does not support per-job execution_profile_block "
-            "or hpc_profile_block overrides: "
-            + ", ".join(overridden_blocks)
+            "or hpc_profile_block overrides: " + ", ".join(overridden_blocks)
         )
 
 
@@ -759,6 +822,8 @@ def _exception_text(exc: BaseException) -> str:
 def _classify_submit_exception(exc: BaseException) -> SubmitError:
     if isinstance(exc, SubmitError):
         return exc
+    if getattr(exc, "submit_outcome_unknown", False):
+        return SubmitOutcomeUnknownError(_exception_text(exc))
 
     message = _exception_text(exc).lower()
     queue_full_patterns = {
@@ -794,6 +859,7 @@ async def _submit_prepared_job(
     prepared: _PreparedBlockJob,
     *,
     fugaku_no_check_directory: bool = False,
+    slurm_submit_timeout_seconds: float | None = DEFAULT_SCHEDULER_COMMAND_TIMEOUT_SECONDS,
 ) -> str:
     target = prepared.submission_target.hpc_target
     if target == "local":
@@ -806,15 +872,377 @@ async def _submit_prepared_job(
     if target == "miyabi":
         submit = await MiyabiPBSRuntime().submit(script_path, cwd=prepared.work_dir)
     elif target == "fugaku":
-        submit = await FugakuPJMRuntime(
-            no_check_directory=fugaku_no_check_directory
-        ).submit(script_path, cwd=prepared.work_dir)
+        submit = await FugakuPJMRuntime(no_check_directory=fugaku_no_check_directory).submit(
+            script_path, cwd=prepared.work_dir
+        )
     elif target == "slurm":
-        submit = await SlurmRuntime().submit(script_path, cwd=prepared.work_dir)
+        submit = await SlurmRuntime().submit(
+            script_path,
+            cwd=prepared.work_dir,
+            timeout_seconds=slurm_submit_timeout_seconds,
+        )
     else:
         raise NotImplementedError(f"Unsupported hpc_target for submit: {target}")
 
     return submit.job_id
+
+
+def _parse_registry_datetime(value: str | None, *, field_name: str) -> datetime:
+    if not value:
+        raise ValueError(f"{field_name} is required for Slurm recovery.")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be an ISO-8601 timestamp.") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _normalized_slurm_metadata(value: str | None) -> str:
+    normalized = str(value or "").strip()
+    if normalized.lower() in {"n/a", "none", "(null)", "unknown"}:
+        return ""
+    return normalized
+
+
+def _candidate_metadata_error(
+    candidate: SlurmJobCandidate,
+    *,
+    record: BulkJobRecord,
+    prepared: _PreparedBlockJob,
+    slurm_user: str,
+    search_start: datetime,
+    search_end: datetime,
+) -> str | None:
+    if not isinstance(prepared.req, SlurmJobRequest):
+        return "prepared request is not a SlurmJobRequest"
+    if candidate.job_name != record.job_name:
+        return f"job {candidate.job_id} name does not match"
+    if candidate.user != slurm_user:
+        return f"job {candidate.job_id} user does not match"
+    if _normalized_slurm_metadata(candidate.account) != _normalized_slurm_metadata(
+        prepared.req.account
+    ):
+        return f"job {candidate.job_id} account does not match"
+    if candidate.partition != prepared.req.partition:
+        return f"job {candidate.job_id} partition does not match"
+    if candidate.submit_time is None:
+        return f"job {candidate.job_id} has no parseable submit time"
+    candidate_submit_time = candidate.submit_time.astimezone(timezone.utc)
+    if candidate_submit_time < search_start.astimezone(timezone.utc):
+        return f"job {candidate.job_id} predates the recovery window"
+    if candidate_submit_time > search_end.astimezone(timezone.utc):
+        return f"job {candidate.job_id} is beyond the recovery clock-skew window"
+    return None
+
+
+def _raise_operator_hold(
+    *,
+    registry: BulkJobRegistry,
+    job_key: str,
+    reason: str,
+) -> None:
+    registry.mark_awaiting_operator(job_key, reason)
+    raise OperatorActionRequired(job_keys=[job_key], reason=reason)
+
+
+def _attach_recovered_slurm_candidate(
+    *,
+    registry: BulkJobRegistry,
+    record: BulkJobRecord,
+    candidate: SlurmJobCandidate,
+) -> SubmittedJob:
+    try:
+        attached = registry.mark_submitted(record.job_key, candidate.job_id)
+        if not attached:
+            raise SubmitOutcomeUnknownError(
+                f"Slurm job {candidate.job_id} was found, but registry row "
+                f"{record.job_key!r} no longer permits automatic attachment."
+            )
+    except SchedulerIdentityMismatchError:
+        registry.mark_awaiting_operator(
+            record.job_key,
+            "A different Slurm job ID was stored during candidate attachment",
+        )
+        raise
+    except Exception as exc:
+        registry.record_prepared_error(
+            record.job_key,
+            f"Found Slurm job {candidate.job_id} but could not persist the attachment: "
+            f"{_exception_text(exc)}",
+        )
+        raise SubmitOutcomeUnknownError(
+            f"Found Slurm job {candidate.job_id} for {record.job_key!r}, but its "
+            "registry attachment could not be persisted. Do not resubmit."
+        ) from exc
+
+    attached = registry.get_job(record.job_key)
+    if attached is None:
+        raise SubmitOutcomeUnknownError(
+            f"Slurm job {candidate.job_id} was attached but registry row "
+            f"{record.job_key!r} could not be reloaded."
+        )
+    status, error = _monitor_status_from_scheduler_row(
+        hpc_target="slurm",
+        row={"JobID": candidate.job_id, "State": candidate.state},
+        record=attached,
+    )
+    if status == BulkJobStatus.AWAITING_OPERATOR:
+        reason = error or f"Slurm job {candidate.job_id} requires operator reconciliation"
+        _raise_operator_hold(
+            registry=registry,
+            job_key=record.job_key,
+            reason=reason,
+        )
+    _update_registry_for_monitor_status(
+        registry=registry,
+        job_key=record.job_key,
+        status=status,
+        error=error,
+    )
+    updated = registry.get_job(record.job_key)
+    if updated is None:
+        raise SubmitOutcomeUnknownError(
+            f"Attached Slurm job {candidate.job_id}, but registry row "
+            f"{record.job_key!r} could not be reloaded."
+        )
+    return SubmittedJob(
+        job_key=record.job_key,
+        scheduler_job_id=candidate.job_id,
+        status=updated.status,
+        work_dir=updated.work_dir,
+    )
+
+
+async def _reconcile_prepared_slurm_job(
+    *,
+    registry: BulkJobRegistry,
+    record: BulkJobRecord,
+    prepared: _PreparedBlockJob,
+    slurm_user: str,
+    recovery_grace_seconds: float,
+    clock_skew_margin_seconds: float,
+    scheduler_command_timeout_seconds: float | None,
+    now: datetime | None = None,
+) -> SubmittedJob:
+    if record.status != BulkJobStatus.PREPARED:
+        raise DuplicateJobKeyError(
+            f"Bulk job key {record.job_key!r} is not PREPARED; current status is "
+            f"{record.status.value}."
+        )
+    if not record.spec_hash or not record.job_name or not record.job_comment:
+        _raise_operator_hold(
+            registry=registry,
+            job_key=record.job_key,
+            reason="PREPARED row is missing immutable spec or Slurm identity fields",
+        )
+
+    prepared_at = _parse_registry_datetime(record.prepared_at, field_name="prepared_at")
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        raise ValueError("recovery current time must be timezone-aware.")
+    skew = timedelta(seconds=max(0.0, float(clock_skew_margin_seconds)))
+    search_start = prepared_at - skew
+    search_end = current_time + skew
+
+    try:
+        candidates = await SlurmRuntime().find_jobs_by_identity(
+            job_name=record.job_name,
+            user=slurm_user,
+            search_start=search_start,
+            timeout_seconds=scheduler_command_timeout_seconds,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        registry.record_prepared_error(
+            record.job_key,
+            f"Slurm identity search failed; PREPARED is preserved: {_exception_text(exc)}",
+        )
+        elapsed = max(0.0, (current_time - prepared_at).total_seconds())
+        raise RecoveryPending(
+            job_key=record.job_key,
+            retry_after_seconds=max(0.0, recovery_grace_seconds - elapsed),
+        ) from exc
+
+    comment_mismatches = [
+        candidate for candidate in candidates if candidate.comment != record.job_comment
+    ]
+    if comment_mismatches:
+        reason = (
+            "Slurm candidate comment does not match the immutable spec-derived "
+            "identity; automatic attach is forbidden"
+        )
+        registry.mark_awaiting_operator(record.job_key, reason)
+        raise SchedulerIdentityMismatchError(
+            job_key=record.job_key,
+            stored_spec_hash=record.spec_hash,
+        )
+
+    metadata_errors = [
+        error
+        for candidate in candidates
+        if (
+            error := _candidate_metadata_error(
+                candidate,
+                record=record,
+                prepared=prepared,
+                slurm_user=slurm_user,
+                search_start=search_start,
+                search_end=search_end,
+            )
+        )
+        is not None
+    ]
+    if metadata_errors:
+        _raise_operator_hold(
+            registry=registry,
+            job_key=record.job_key,
+            reason="; ".join(metadata_errors),
+        )
+
+    if len(candidates) > 1:
+        _raise_operator_hold(
+            registry=registry,
+            job_key=record.job_key,
+            reason=(
+                f"Found {len(candidates)} matching Slurm allocations; automatic "
+                "selection is forbidden"
+            ),
+        )
+    if len(candidates) == 1:
+        return _attach_recovered_slurm_candidate(
+            registry=registry,
+            record=record,
+            candidate=candidates[0],
+        )
+
+    elapsed = max(0.0, (current_time - prepared_at).total_seconds())
+    if elapsed < recovery_grace_seconds:
+        remaining = max(0.0, recovery_grace_seconds - elapsed)
+        registry.record_prepared_error(
+            record.job_key,
+            "No Slurm identity candidate is visible yet; PREPARED is preserved "
+            f"for {remaining:g} more grace seconds.",
+        )
+        raise RecoveryPending(
+            job_key=record.job_key,
+            retry_after_seconds=remaining,
+        )
+
+    _raise_operator_hold(
+        registry=registry,
+        job_key=record.job_key,
+        reason=(
+            "No matching Slurm allocation was found after the scheduler-visibility grace period"
+        ),
+    )
+
+
+async def _submit_claimed_slurm_job(
+    *,
+    registry: BulkJobRegistry,
+    record: BulkJobRecord,
+    prepared: _PreparedBlockJob,
+    slurm_user: str,
+    recovery_grace_seconds: float,
+    clock_skew_margin_seconds: float,
+    scheduler_command_timeout_seconds: float | None,
+) -> SubmittedJob:
+    try:
+        script_path = _write_script_for_prepared_job(prepared)
+    except Exception as exc:
+        classified = SubmitError(
+            f"Failed to write the Slurm script before sbatch: {_exception_text(exc)}"
+        )
+        registry.mark_failed(record.job_key, error=str(classified))
+        raise classified from exc
+
+    try:
+        submit = await SlurmRuntime().submit(
+            script_path,
+            cwd=prepared.work_dir,
+            timeout_seconds=scheduler_command_timeout_seconds,
+        )
+    except asyncio.CancelledError:
+        registry.record_prepared_error(
+            record.job_key,
+            "Submission coroutine was cancelled after PREPARED; scheduler outcome "
+            "is unknown and automatic resubmit is forbidden.",
+        )
+        raise
+    except Exception as exc:
+        if getattr(exc, "submission_definitely_rejected", False) or isinstance(
+            exc,
+            QueueFullError | TemporarySubmitError,
+        ):
+            classified = _classify_submit_exception(exc)
+            if isinstance(classified, QueueFullError | TemporarySubmitError):
+                registry.release_prepared_for_retry(record.job_key, str(classified))
+            else:
+                registry.mark_failed(record.job_key, error=str(classified))
+            raise classified from exc
+
+        registry.record_prepared_error(
+            record.job_key,
+            "Slurm submission outcome is unknown; automatic resubmit is forbidden: "
+            f"{_exception_text(exc)}",
+        )
+        refreshed = registry.get_job(record.job_key)
+        if refreshed is None:
+            raise SubmitOutcomeUnknownError(
+                f"Slurm submission outcome is unknown and registry row "
+                f"{record.job_key!r} cannot be reloaded."
+            ) from exc
+        return await _reconcile_prepared_slurm_job(
+            registry=registry,
+            record=refreshed,
+            prepared=prepared,
+            slurm_user=slurm_user,
+            recovery_grace_seconds=recovery_grace_seconds,
+            clock_skew_margin_seconds=clock_skew_margin_seconds,
+            scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+        )
+
+    try:
+        submitted = registry.mark_submitted(record.job_key, submit.job_id)
+        if not submitted:
+            registry.mark_awaiting_operator(
+                record.job_key,
+                "Slurm accepted the job after its PREPARED claim changed state; "
+                "automatic attachment is forbidden",
+            )
+            raise SubmitOutcomeUnknownError(
+                f"Slurm accepted job {submit.job_id} for {record.job_key!r}, but "
+                "the registry claim no longer permits automatic attachment."
+            )
+    except SchedulerIdentityMismatchError:
+        registry.mark_awaiting_operator(
+            record.job_key,
+            "Slurm returned a job ID different from the ID attached concurrently",
+        )
+        raise
+    except Exception as exc:
+        registry.record_prepared_error(
+            record.job_key,
+            f"sbatch returned job id {submit.job_id}, but the registry update failed: "
+            f"{_exception_text(exc)}",
+        )
+        raise SubmitOutcomeUnknownError(
+            f"Slurm accepted job {submit.job_id} for {record.job_key!r}, but the "
+            "registry update failed. PREPARED must be reconciled; do not resubmit."
+        ) from exc
+
+    submitted_record = registry.get_job(record.job_key)
+    return SubmittedJob(
+        job_key=record.job_key,
+        scheduler_job_id=submit.job_id,
+        status=(
+            submitted_record.status if submitted_record is not None else BulkJobStatus.SUBMITTED
+        ),
+        work_dir=(submitted_record.work_dir if submitted_record is not None else prepared.work_dir),
+    )
 
 
 def _write_fugaku_native_bulk_script(
@@ -1007,6 +1435,10 @@ async def submit_job_from_blocks(
     execution_profile_block_name: str | None = None,
     hpc_profile_block_name: str | None = None,
     fugaku_no_check_directory: bool = False,
+    slurm_user: str | None = None,
+    slurm_recovery_grace_seconds: float = DEFAULT_SLURM_RECOVERY_GRACE_SECONDS,
+    slurm_clock_skew_margin_seconds: float = DEFAULT_SLURM_CLOCK_SKEW_MARGIN_SECONDS,
+    scheduler_command_timeout_seconds: float | None = (DEFAULT_SCHEDULER_COMMAND_TIMEOUT_SECONDS),
 ) -> SubmittedJob:
     """Submit one block-defined HPC job without waiting for completion.
 
@@ -1015,7 +1447,19 @@ async def submit_job_from_blocks(
     refill loop can stop submitting more jobs in the current cycle. Set
     ``fugaku_no_check_directory`` to opt into ``pjsub --no-check-directory`` for
     Fugaku submissions only.
+
+    For Slurm with a registry, this function stores a durable ``PREPARED``
+    compare-and-set claim before writing the script or invoking ``sbatch``.
+    Ambiguous submission outcomes remain ``PREPARED`` and are reconciled by
+    deterministic scheduler identity. They are never changed into an automatic
+    resubmit candidate.
     """
+
+    _validate_slurm_recovery_settings(
+        recovery_grace_seconds=slurm_recovery_grace_seconds,
+        clock_skew_margin_seconds=slurm_clock_skew_margin_seconds,
+        scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+    )
 
     resolved_command_block = _resolve_named_argument(
         preferred=command_block,
@@ -1047,29 +1491,141 @@ async def submit_job_from_blocks(
         code_digest=code_digest,
         environment_digest=environment_digest,
     )
+    job_name: str | None = None
+    job_comment: str | None = None
+    if prepared.submission_target.hpc_target == "slurm":
+        prepared, job_name, job_comment = _with_slurm_identity(
+            prepared,
+            job_key=job_key,
+            spec_hash=spec_hash,
+        )
 
     if registry is not None:
+        existing_record = registry.get_job(job_key)
         registry.upsert_jobs(
             [
                 BulkJobSpec(
                     job_key=job_key,
                     work_dir=Path(work_dir),
                     command_args=dict(command_args or {}),
+                    wave_id=existing_record.wave_id if existing_record is not None else None,
+                    target_id=existing_record.target_id if existing_record is not None else None,
+                    stage_id=existing_record.stage_id if existing_record is not None else None,
+                    priority=existing_record.priority if existing_record is not None else 0,
+                    expected_outputs=(
+                        existing_record.expected_outputs if existing_record is not None else []
+                    ),
+                    max_submit_attempts=(
+                        existing_record.max_submit_attempts if existing_record is not None else 5
+                    ),
                     execution_profile_block=resolved_execution_profile_block,
                     hpc_profile_block=resolved_hpc_profile_block,
                     spec_hash=spec_hash,
                     input_digest=input_digest,
                     code_digest=code_digest,
                     environment_digest=environment_digest,
+                    job_name=job_name,
+                    job_comment=job_comment,
                 )
             ]
         )
+        if prepared.submission_target.hpc_target == "slurm":
+            if job_name is None or job_comment is None:
+                raise RuntimeError("Slurm identity was not generated before registry claim.")
+            resolved_slurm_user = str(slurm_user or getpass.getuser()).strip()
+            if not resolved_slurm_user:
+                raise ValueError("slurm_user must be non-empty for resumable submission.")
+
+            record = registry.get_job(job_key)
+            if record is None:
+                raise SubmitError(f"Bulk job {job_key!r} was not persisted before submission.")
+            if record.status == BulkJobStatus.AWAITING_OPERATOR:
+                raise OperatorActionRequired(
+                    job_keys=[job_key],
+                    reason=record.last_error or "the registry row is in durable operator hold",
+                )
+            if record.scheduler_job_id:
+                return SubmittedJob(
+                    job_key=job_key,
+                    scheduler_job_id=record.scheduler_job_id,
+                    status=record.status,
+                    work_dir=record.work_dir,
+                )
+            if record.status == BulkJobStatus.UNKNOWN:
+                _raise_operator_hold(
+                    registry=registry,
+                    job_key=job_key,
+                    reason="UNKNOWN Slurm row has no scheduler job id",
+                )
+            if record.status == BulkJobStatus.PREPARED:
+                return await _reconcile_prepared_slurm_job(
+                    registry=registry,
+                    record=record,
+                    prepared=prepared,
+                    slurm_user=resolved_slurm_user,
+                    recovery_grace_seconds=slurm_recovery_grace_seconds,
+                    clock_skew_margin_seconds=slurm_clock_skew_margin_seconds,
+                    scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+                )
+
+            _ensure_registry_can_submit(registry=registry, job_key=job_key)
+            claimed = registry.claim_prepared(
+                job_key=job_key,
+                spec_hash=spec_hash,
+                job_name=job_name,
+                job_comment=job_comment,
+            )
+            claimed_record = registry.get_job(job_key)
+            if claimed_record is None:
+                raise SubmitError(f"Bulk job {job_key!r} disappeared during PREPARED claim.")
+            if not claimed:
+                if claimed_record.status == BulkJobStatus.AWAITING_OPERATOR:
+                    raise OperatorActionRequired(
+                        job_keys=[job_key],
+                        reason=(
+                            claimed_record.last_error
+                            or "the registry row entered durable operator hold"
+                        ),
+                    )
+                if claimed_record.scheduler_job_id:
+                    return SubmittedJob(
+                        job_key=job_key,
+                        scheduler_job_id=claimed_record.scheduler_job_id,
+                        status=claimed_record.status,
+                        work_dir=claimed_record.work_dir,
+                    )
+                if claimed_record.status == BulkJobStatus.PREPARED:
+                    return await _reconcile_prepared_slurm_job(
+                        registry=registry,
+                        record=claimed_record,
+                        prepared=prepared,
+                        slurm_user=resolved_slurm_user,
+                        recovery_grace_seconds=slurm_recovery_grace_seconds,
+                        clock_skew_margin_seconds=slurm_clock_skew_margin_seconds,
+                        scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+                    )
+                _ensure_registry_can_submit(registry=registry, job_key=job_key)
+                raise DuplicateJobKeyError(
+                    f"Bulk job key {job_key!r} lost the PREPARED claim race."
+                )
+
+            return await _submit_claimed_slurm_job(
+                registry=registry,
+                record=claimed_record,
+                prepared=prepared,
+                slurm_user=resolved_slurm_user,
+                recovery_grace_seconds=slurm_recovery_grace_seconds,
+                clock_skew_margin_seconds=slurm_clock_skew_margin_seconds,
+                scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+            )
+
         _ensure_registry_can_submit(registry=registry, job_key=job_key)
 
     try:
         scheduler_job_id = await _submit_prepared_job(
             prepared,
             fugaku_no_check_directory=fugaku_no_check_directory,
+            slurm_submit_timeout_seconds=scheduler_command_timeout_seconds,
         )
     except Exception as exc:
         classified = _classify_submit_exception(exc)
@@ -1387,6 +1943,13 @@ def _monitor_status_from_scheduler_row(
     record: Any | None,
 ) -> tuple[BulkJobStatus, str | None]:
     status = _bulk_status_from_scheduler_row(hpc_target, row)
+    if hpc_target == "slurm" and status == BulkJobStatus.SUCCEEDED and record is not None:
+        if _record_has_success_evidence(record):
+            return BulkJobStatus.SUCCEEDED, None
+        return (
+            BulkJobStatus.AWAITING_OPERATOR,
+            "Slurm reported COMPLETED but expected output evidence is missing",
+        )
     if hpc_target != "fugaku":
         error = None if status != BulkJobStatus.UNKNOWN else "unknown scheduler state"
         return status, error
@@ -1455,6 +2018,11 @@ def _update_registry_for_monitor_status(
         registry.mark_cancelled(job_key, error=error)
     elif status == BulkJobStatus.UNKNOWN:
         registry.mark_unknown(job_key, error=error)
+    elif status == BulkJobStatus.AWAITING_OPERATOR:
+        registry.mark_awaiting_operator(
+            job_key,
+            error or "scheduler state requires operator reconciliation",
+        )
     else:
         registry.record_monitor_attempt(job_key)
 
@@ -1523,6 +2091,70 @@ async def monitor_jobs_many(
     return results
 
 
+async def _reconcile_bulk_prepared_jobs(
+    *,
+    registry: BulkJobRegistry,
+    command_block: str,
+    execution_profile_block: str,
+    hpc_profile_block: str,
+    slurm_user: str | None,
+    slurm_recovery_grace_seconds: float,
+    slurm_clock_skew_margin_seconds: float,
+    scheduler_command_timeout_seconds: float | None,
+) -> bool:
+    """Reconcile durable Slurm claims once and report whether a later retry is needed."""
+
+    for job in registry.get_recovery_candidates():
+        if job.status == BulkJobStatus.UNKNOWN:
+            if job.scheduler_job_id is None:
+                registry.mark_awaiting_operator(
+                    job.job_key,
+                    "UNKNOWN Slurm row has no scheduler job id",
+                )
+                return True
+            continue
+        if job.status != BulkJobStatus.PREPARED or job.scheduler_job_id is not None:
+            continue
+        caller_digests = {
+            key: value
+            for key, value in {
+                "input_digest": job.input_digest,
+                "code_digest": job.code_digest,
+                "environment_digest": job.environment_digest,
+            }.items()
+            if value is not None
+        }
+        try:
+            await submit_job_from_blocks(
+                command_block=command_block,
+                execution_profile_block=effective_execution_profile_block(
+                    job,
+                    execution_profile_block,
+                ),
+                hpc_profile_block=effective_hpc_profile_block(
+                    job,
+                    hpc_profile_block,
+                ),
+                work_dir=job.work_dir,
+                job_key=job.job_key,
+                command_args=job.command_args,
+                registry=registry,
+                slurm_user=slurm_user,
+                slurm_recovery_grace_seconds=slurm_recovery_grace_seconds,
+                slurm_clock_skew_margin_seconds=slurm_clock_skew_margin_seconds,
+                scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+                **caller_digests,
+            )
+        except (
+            OperatorActionRequired,
+            RecoveryPending,
+            SchedulerIdentityMismatchError,
+            SubmitOutcomeUnknownError,
+        ):
+            return True
+    return False
+
+
 async def run_jobs_from_blocks_bulk(
     *,
     jobs: list[BulkJobSpec],
@@ -1542,6 +2174,10 @@ async def run_jobs_from_blocks_bulk(
     refill_interval_seconds: int = 60,
     stop_on_first_failure: bool = False,
     fugaku_no_check_directory: bool = False,
+    slurm_user: str | None = None,
+    slurm_recovery_grace_seconds: float = DEFAULT_SLURM_RECOVERY_GRACE_SECONDS,
+    slurm_clock_skew_margin_seconds: float = DEFAULT_SLURM_CLOCK_SKEW_MARGIN_SECONDS,
+    scheduler_command_timeout_seconds: float | None = (DEFAULT_SCHEDULER_COMMAND_TIMEOUT_SECONDS),
 ) -> BulkRunResult:
     """Run many block-defined HPC jobs through one queue-aware bulk loop.
 
@@ -1557,6 +2193,11 @@ async def run_jobs_from_blocks_bulk(
 
     if submit_mode not in {"single", "native_bulk"}:
         raise ValueError("submit_mode must be 'single' or 'native_bulk'.")
+    _validate_slurm_recovery_settings(
+        recovery_grace_seconds=slurm_recovery_grace_seconds,
+        clock_skew_margin_seconds=slurm_clock_skew_margin_seconds,
+        scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+    )
     if submit_mode == "native_bulk":
         _validate_native_bulk_specs(jobs)
 
@@ -1572,7 +2213,25 @@ async def run_jobs_from_blocks_bulk(
     registry.refresh_completed_jobs_from_outputs()
     total_jobs = len({job.job_key for job in jobs})
 
-    if registry.all_terminal() or (stop_on_first_failure and _has_failed_jobs(registry)):
+    if (
+        registry.all_terminal()
+        or _has_operator_holds(registry)
+        or (stop_on_first_failure and _has_failed_jobs(registry))
+    ):
+        return _build_bulk_run_result(registry=registry, total_jobs=total_jobs)
+
+    recovery_pending = await _reconcile_bulk_prepared_jobs(
+        registry=registry,
+        command_block=command_block,
+        execution_profile_block=execution_profile_block,
+        hpc_profile_block=hpc_profile_block,
+        slurm_user=slurm_user,
+        slurm_recovery_grace_seconds=slurm_recovery_grace_seconds,
+        slurm_clock_skew_margin_seconds=slurm_clock_skew_margin_seconds,
+        scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+    )
+    registry.refresh_completed_jobs_from_outputs()
+    if recovery_pending or _has_operator_holds(registry) or registry.all_terminal():
         return _build_bulk_run_result(registry=registry, total_jobs=total_jobs)
 
     if submit_mode == "native_bulk":
@@ -1622,6 +2281,8 @@ async def run_jobs_from_blocks_bulk(
 
         registry.refresh_completed_jobs_from_outputs()
 
+        if _has_operator_holds(registry):
+            return _build_bulk_run_result(registry=registry, total_jobs=total_jobs)
         if stop_on_first_failure and _has_failed_jobs(registry):
             break
 
@@ -1633,6 +2294,7 @@ async def run_jobs_from_blocks_bulk(
                 max_submit_per_refill=max_submit_per_refill,
             )
             stop_after_deferred_submit = False
+            recovery_waiting = False
             if submit_mode == "native_bulk":
                 stop_after_deferred_submit = await _submit_native_bulk_cycle_from_blocks(
                     registry=registry,
@@ -1680,8 +2342,22 @@ async def run_jobs_from_blocks_bulk(
                                 command_args=job.command_args,
                                 registry=registry,
                                 fugaku_no_check_directory=fugaku_no_check_directory,
+                                slurm_user=slurm_user,
+                                slurm_recovery_grace_seconds=slurm_recovery_grace_seconds,
+                                slurm_clock_skew_margin_seconds=(slurm_clock_skew_margin_seconds),
+                                scheduler_command_timeout_seconds=(
+                                    scheduler_command_timeout_seconds
+                                ),
                                 **caller_digests,
                             )
+                        except (
+                            OperatorActionRequired,
+                            RecoveryPending,
+                            SchedulerIdentityMismatchError,
+                            SubmitOutcomeUnknownError,
+                        ):
+                            recovery_waiting = True
+                            break
                         except QueueFullError as exc:
                             _mark_deferred_if_needed(
                                 registry=registry,
@@ -1709,6 +2385,8 @@ async def run_jobs_from_blocks_bulk(
 
             if stop_after_deferred_submit:
                 break
+            if recovery_waiting or _has_operator_holds(registry):
+                return _build_bulk_run_result(registry=registry, total_jobs=total_jobs)
 
             next_refill_at = now + max(0.0, float(refill_interval_seconds))
 

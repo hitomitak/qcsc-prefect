@@ -98,6 +98,17 @@ on 2026-07-22.**
 
 ## Test 1: Slurm submit-or-attach and operator hold (after PR4)
 
+### Configuration to choose and record
+
+- Set an explicit test account and partition in the Slurm HPC profile. Automatic recovery
+  compares both values exactly with scheduler output.
+- Set `slurm_user` explicitly if the local process user is not exactly the Slurm user.
+- Start with `slurm_recovery_grace_seconds=120`,
+  `slurm_clock_skew_margin_seconds=60`, and
+  `scheduler_command_timeout_seconds=300`; tune only from recorded measurements.
+- Confirm the site's `sacct` retention window covers the longest expected interval between
+  `PREPARED` and recovery.
+
 ### Procedure
 
 1. Submit one short, low-resource test job normally. Record deterministic job-name,
@@ -119,6 +130,36 @@ on 2026-07-22.**
    record is not overwritten.
 8. Launch two concurrent callers for the same key/spec. Verify exactly one scheduler
    submit occurs.
+
+### Operator hold procedure
+
+1. Stop the runner and inspect the held row, including `last_error`, `prepared_at`,
+   `job_name`, `job_comment`, user, account, partition, and any stored scheduler ID.
+2. Search both active queue and retained accounting history using the exact user/name and
+   a start time earlier than `prepared_at` by the configured skew margin. Inspect the full
+   comment and allocation-level row; do not select a candidate only because it is newest.
+3. If exactly one allocation is proven to be the logical job, attach it explicitly:
+
+   ```python
+   from qcsc_prefect_executor.bulk import BulkJobRegistry
+
+   registry = BulkJobRegistry("/absolute/shared/test/bulk.sqlite")
+   assert registry.operator_attach("logical-job-key", "123456")
+   ```
+
+4. Reset only after proving that no submission occurred across both active and retained
+   history, and record who made that decision and why:
+
+   ```python
+   assert registry.confirm_not_submitted_and_reset(
+       "logical-job-key",
+       confirmed_by="operator-identity",
+       reason="checked squeue and retained sacct window; no matching allocation",
+   )
+   ```
+
+5. If a scheduler ID is already stored, `confirm_not_submitted_and_reset` refuses the
+   reset. Reconcile that allocation and its expected outputs instead.
 
 ### Expected result
 
