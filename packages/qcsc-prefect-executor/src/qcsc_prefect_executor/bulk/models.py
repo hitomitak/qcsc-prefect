@@ -101,6 +101,9 @@ class BulkJobSpec:
     execution_profile_block: str | None = None
     hpc_profile_block: str | None = None
     spec_hash: str | None = None
+    input_digest: str | None = None
+    code_digest: str | None = None
+    environment_digest: str | None = None
     job_name: str | None = None
     job_comment: str | None = None
 
@@ -111,6 +114,9 @@ class BulkJobSpec:
             "execution_profile_block",
             "hpc_profile_block",
             "spec_hash",
+            "input_digest",
+            "code_digest",
+            "environment_digest",
             "job_name",
             "job_comment",
         ):
@@ -167,6 +173,9 @@ class BulkJobRecord:
     execution_profile_block: str | None = None
     hpc_profile_block: str | None = None
     spec_hash: str | None = None
+    input_digest: str | None = None
+    code_digest: str | None = None
+    environment_digest: str | None = None
     prepared_at: str | None = None
     job_name: str | None = None
     job_comment: str | None = None

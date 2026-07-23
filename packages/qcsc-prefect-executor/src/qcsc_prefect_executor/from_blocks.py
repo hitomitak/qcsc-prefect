@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -27,6 +27,7 @@ from qcsc_prefect_core.queue import QueueAwareSubmitGate, QueueProbe
 from qcsc_prefect_executor.bulk.exceptions import (
     DuplicateJobKeyError,
     QueueFullError,
+    SpecHashMismatchError,
     SubmitError,
     TemporarySubmitError,
 )
@@ -41,6 +42,7 @@ from qcsc_prefect_executor.bulk.models import (
 )
 from qcsc_prefect_executor.bulk.native_manifest import create_native_bulk_group_manifests
 from qcsc_prefect_executor.bulk.registry import BulkJobRegistry
+from qcsc_prefect_executor.bulk.spec_hash import build_bulk_spec_hash
 from qcsc_prefect_executor.fugaku.run import run_fugaku_job
 from qcsc_prefect_executor.local.run import run_local_job
 from qcsc_prefect_executor.miyabi.run import run_miyabi_job
@@ -91,6 +93,55 @@ class _PreparedBlockJob:
     script_filename: str | None
     exec_profile: ExecutionProfile
     req: Any
+
+
+def _resolved_bulk_spec_payload(
+    prepared: _PreparedBlockJob,
+    *,
+    input_digest: str | None,
+    code_digest: str | None,
+    environment_digest: str | None,
+) -> dict[str, Any]:
+    scheduler_request = asdict(prepared.req)
+    for derived_identity_field in ("job_name", "job_comment", "comment"):
+        scheduler_request.pop(derived_identity_field, None)
+
+    return {
+        "command": {
+            "command_key": prepared.exec_profile.command_key,
+            "executable": scheduler_request.get("executable"),
+            "arguments": list(prepared.exec_profile.arguments),
+        },
+        "execution_profile": asdict(prepared.exec_profile),
+        "scheduler": {
+            "target": prepared.submission_target.hpc_target,
+            "queue": prepared.submission_target.queue_name,
+            "account_or_project": prepared.submission_target.project,
+            "request": scheduler_request,
+        },
+        "caller_digests": {
+            "input": input_digest,
+            "code": code_digest,
+            "environment": environment_digest,
+        },
+    }
+
+
+def _resolved_bulk_spec_hash(
+    prepared: _PreparedBlockJob,
+    *,
+    input_digest: str | None = None,
+    code_digest: str | None = None,
+    environment_digest: str | None = None,
+) -> str:
+    return build_bulk_spec_hash(
+        _resolved_bulk_spec_payload(
+            prepared,
+            input_digest=input_digest,
+            code_digest=code_digest,
+            environment_digest=environment_digest,
+        )
+    )
 
 
 async def _resolve_loaded_block(value):
@@ -273,7 +324,7 @@ def _command_args_to_user_args(command_args: dict[str, Any] | None) -> list[str]
         return None
 
     user_args: list[str] = []
-    for key, value in command_args.items():
+    for key, value in sorted(command_args.items(), key=lambda item: str(item[0])):
         option = str(key) if str(key).startswith("-") else "--" + str(key).replace("_", "-")
         if value is None or value is False:
             continue
@@ -313,6 +364,49 @@ def _ensure_registry_can_submit(*, registry: BulkJobRegistry, job_key: str) -> N
         f"Bulk job key {job_key!r} already has status {record.status.value}"
         f"{scheduler_part}. Use a fresh job_key or registry for a new scheduler job."
     )
+
+
+async def _resolve_registered_bulk_spec_hashes(
+    *,
+    jobs: list[BulkJobSpec],
+    registry: BulkJobRegistry,
+    command_block: str,
+    execution_profile_block: str,
+    hpc_profile_block: str,
+) -> list[BulkJobSpec]:
+    resolved_jobs: list[BulkJobSpec] = []
+    for job in jobs:
+        existing = registry.get_job(job.job_key)
+        if job.spec_hash is None and (existing is None or existing.spec_hash is None):
+            resolved_jobs.append(job)
+            continue
+
+        prepared = await _prepare_job_from_blocks(
+            command_block_name=command_block,
+            execution_profile_block_name=effective_execution_profile_block(
+                job,
+                execution_profile_block,
+            ),
+            hpc_profile_block_name=effective_hpc_profile_block(
+                job,
+                hpc_profile_block,
+            ),
+            work_dir=job.work_dir,
+            script_filename=job.job_key,
+            user_args=_command_args_to_user_args(job.command_args),
+        )
+        resolved_jobs.append(
+            replace(
+                job,
+                spec_hash=_resolved_bulk_spec_hash(
+                    prepared,
+                    input_digest=job.input_digest,
+                    code_digest=job.code_digest,
+                    environment_digest=job.environment_digest,
+                ),
+            )
+        )
+    return resolved_jobs
 
 
 async def _resolve_default_bulk_queue_probe(
@@ -755,6 +849,44 @@ async def _submit_native_bulk_group_from_blocks(
     hpc_profile_block: str,
     fugaku_no_check_directory: bool = False,
 ) -> str:
+    resolved_specs: list[BulkJobSpec] = []
+    for job in jobs:
+        resolved_job = await _prepare_job_from_blocks(
+            command_block_name=command_block,
+            execution_profile_block_name=execution_profile_block,
+            hpc_profile_block_name=hpc_profile_block,
+            work_dir=job.work_dir,
+            script_filename=job.job_key,
+            user_args=_command_args_to_user_args(job.command_args),
+        )
+        resolved_specs.append(
+            BulkJobSpec(
+                job_key=job.job_key,
+                work_dir=job.work_dir,
+                command_args=job.command_args,
+                wave_id=job.wave_id,
+                target_id=job.target_id,
+                stage_id=job.stage_id,
+                priority=job.priority,
+                expected_outputs=job.expected_outputs,
+                max_submit_attempts=job.max_submit_attempts,
+                execution_profile_block=job.execution_profile_block,
+                hpc_profile_block=job.hpc_profile_block,
+                spec_hash=_resolved_bulk_spec_hash(
+                    resolved_job,
+                    input_digest=job.input_digest,
+                    code_digest=job.code_digest,
+                    environment_digest=job.environment_digest,
+                ),
+                input_digest=job.input_digest,
+                code_digest=job.code_digest,
+                environment_digest=job.environment_digest,
+                job_name=job.job_name,
+                job_comment=job.job_comment,
+            )
+        )
+    registry.upsert_jobs(resolved_specs)
+
     bulk_group_key = _bulk_group_key_for_jobs(jobs)
     bulk_group_dir = registry.path.parent / "native-bulk" / bulk_group_key
     manifest_group = create_native_bulk_group_manifests(
@@ -834,6 +966,8 @@ async def _submit_native_bulk_cycle_from_blocks(
                 hpc_profile_block=hpc_profile_block,
                 fugaku_no_check_directory=fugaku_no_check_directory,
             )
+        except SpecHashMismatchError:
+            raise
         except Exception as exc:
             classified = _classify_submit_exception(exc)
             if isinstance(classified, QueueFullError | TemporarySubmitError):
@@ -865,6 +999,9 @@ async def submit_job_from_blocks(
     execution_profile_block: str | None = None,
     hpc_profile_block: str | None = None,
     command_args: dict[str, Any] | None = None,
+    input_digest: str | None = None,
+    code_digest: str | None = None,
+    environment_digest: str | None = None,
     registry: BulkJobRegistry | None = None,
     command_block_name: str | None = None,
     execution_profile_block_name: str | None = None,
@@ -896,21 +1033,6 @@ async def submit_job_from_blocks(
         label="hpc_profile_block",
     )
 
-    if registry is not None:
-        if registry.get_job(job_key) is None:
-            registry.upsert_jobs(
-                [
-                    BulkJobSpec(
-                        job_key=job_key,
-                        work_dir=Path(work_dir),
-                        command_args=dict(command_args or {}),
-                        execution_profile_block=resolved_execution_profile_block,
-                        hpc_profile_block=resolved_hpc_profile_block,
-                    )
-                ]
-            )
-        _ensure_registry_can_submit(registry=registry, job_key=job_key)
-
     prepared = await _prepare_job_from_blocks(
         command_block_name=resolved_command_block,
         execution_profile_block_name=resolved_execution_profile_block,
@@ -919,6 +1041,30 @@ async def submit_job_from_blocks(
         script_filename=job_key,
         user_args=_command_args_to_user_args(command_args),
     )
+    spec_hash = _resolved_bulk_spec_hash(
+        prepared,
+        input_digest=input_digest,
+        code_digest=code_digest,
+        environment_digest=environment_digest,
+    )
+
+    if registry is not None:
+        registry.upsert_jobs(
+            [
+                BulkJobSpec(
+                    job_key=job_key,
+                    work_dir=Path(work_dir),
+                    command_args=dict(command_args or {}),
+                    execution_profile_block=resolved_execution_profile_block,
+                    hpc_profile_block=resolved_hpc_profile_block,
+                    spec_hash=spec_hash,
+                    input_digest=input_digest,
+                    code_digest=code_digest,
+                    environment_digest=environment_digest,
+                )
+            ]
+        )
+        _ensure_registry_can_submit(registry=registry, job_key=job_key)
 
     try:
         scheduler_job_id = await _submit_prepared_job(
@@ -1415,6 +1561,13 @@ async def run_jobs_from_blocks_bulk(
         _validate_native_bulk_specs(jobs)
 
     registry = BulkJobRegistry(registry_path)
+    jobs = await _resolve_registered_bulk_spec_hashes(
+        jobs=jobs,
+        registry=registry,
+        command_block=command_block,
+        execution_profile_block=execution_profile_block,
+        hpc_profile_block=hpc_profile_block,
+    )
     registry.upsert_jobs(jobs)
     registry.refresh_completed_jobs_from_outputs()
     total_jobs = len({job.job_key for job in jobs})
@@ -1503,6 +1656,15 @@ async def run_jobs_from_blocks_bulk(
                     )
                     for job in pre_candidates[:submit_count]:
                         try:
+                            caller_digests = {
+                                key: value
+                                for key, value in {
+                                    "input_digest": job.input_digest,
+                                    "code_digest": job.code_digest,
+                                    "environment_digest": job.environment_digest,
+                                }.items()
+                                if value is not None
+                            }
                             await submit_job_from_blocks(
                                 command_block=command_block,
                                 execution_profile_block=effective_execution_profile_block(
@@ -1518,6 +1680,7 @@ async def run_jobs_from_blocks_bulk(
                                 command_args=job.command_args,
                                 registry=registry,
                                 fugaku_no_check_directory=fugaku_no_check_directory,
+                                **caller_digests,
                             )
                         except QueueFullError as exc:
                             _mark_deferred_if_needed(
@@ -1533,6 +1696,8 @@ async def run_jobs_from_blocks_bulk(
                                 error=str(exc),
                             )
                             break
+                        except SpecHashMismatchError:
+                            raise
                         except Exception as exc:
                             _mark_failed_if_needed(
                                 registry=registry,

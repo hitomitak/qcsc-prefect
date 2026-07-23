@@ -9,6 +9,7 @@ from qcsc_prefect_core.queue import QueueAwareSubmitGate, QueueCapacity, QueuePr
 from qcsc_prefect_executor.bulk.exceptions import (
     DuplicateJobKeyError,
     QueueFullError,
+    SpecHashMismatchError,
     SubmitError,
     TemporarySubmitError,
 )
@@ -27,6 +28,11 @@ from qcsc_prefect_executor.bulk.native_manifest import (
     create_native_bulk_group_manifests,
 )
 from qcsc_prefect_executor.bulk.registry import BulkJobRegistry
+from qcsc_prefect_executor.bulk.spec_hash import (
+    BULK_SPEC_HASH_SCHEMA_VERSION,
+    build_bulk_spec_hash,
+    canonical_bulk_spec_json,
+)
 
 
 async def monitor_jobs_many(*args: Any, **kwargs: Any):
@@ -53,6 +59,7 @@ async def submit_job_from_blocks(*args: Any, **kwargs: Any):
 
 
 __all__ = [
+    "BULK_SPEC_HASH_SCHEMA_VERSION",
     "BulkJobDesiredState",
     "BulkJobRecord",
     "BulkJobRegistry",
@@ -67,9 +74,12 @@ __all__ = [
     "QueueAwareSubmitGate",
     "QueueCapacity",
     "QueueProbe",
+    "SpecHashMismatchError",
     "SubmittedJob",
     "SubmitError",
     "TemporarySubmitError",
+    "build_bulk_spec_hash",
+    "canonical_bulk_spec_json",
     "create_native_bulk_group_manifests",
     "monitor_jobs_many",
     "run_jobs_from_blocks_bulk",

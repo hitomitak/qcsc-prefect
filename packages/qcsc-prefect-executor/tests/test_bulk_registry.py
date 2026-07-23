@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+from qcsc_prefect_executor.bulk.exceptions import SpecHashMismatchError
 from qcsc_prefect_executor.bulk.models import (
     BulkJobDesiredState,
     BulkJobSpec,
@@ -29,6 +31,9 @@ def _spec(
     execution_profile_block: str | None = None,
     hpc_profile_block: str | None = None,
     spec_hash: str | None = None,
+    input_digest: str | None = None,
+    code_digest: str | None = None,
+    environment_digest: str | None = None,
     job_name: str | None = None,
     job_comment: str | None = None,
 ) -> BulkJobSpec:
@@ -45,6 +50,9 @@ def _spec(
         execution_profile_block=execution_profile_block,
         hpc_profile_block=hpc_profile_block,
         spec_hash=spec_hash,
+        input_digest=input_digest,
+        code_digest=code_digest,
+        environment_digest=environment_digest,
         job_name=job_name,
         job_comment=job_comment,
     )
@@ -161,6 +169,9 @@ def test_registry_migrates_old_schema_with_resumable_submit_columns(tmp_path: Pa
         "execution_profile_block",
         "hpc_profile_block",
         "spec_hash",
+        "input_digest",
+        "code_digest",
+        "environment_digest",
         "prepared_at",
         "job_name",
         "job_comment",
@@ -188,6 +199,9 @@ def test_registry_migrates_old_schema_with_resumable_submit_columns(tmp_path: Pa
     assert record.execution_profile_block is None
     assert record.hpc_profile_block is None
     assert record.spec_hash is None
+    assert record.input_digest is None
+    assert record.code_digest is None
+    assert record.environment_digest is None
     assert record.prepared_at is None
     assert record.job_name is None
     assert record.job_comment is None
@@ -214,6 +228,9 @@ def test_new_resumable_submit_fields_default_without_changing_existing_api(tmp_p
 
     record = _only_job(registry)
     assert record.spec_hash is None
+    assert record.input_digest is None
+    assert record.code_digest is None
+    assert record.environment_digest is None
     assert record.prepared_at is None
     assert record.job_name is None
     assert record.job_comment is None
@@ -231,6 +248,9 @@ def test_resumable_submit_fields_round_trip(tmp_path: Path):
                 tmp_path,
                 "job-1",
                 spec_hash="v1:abc123",
+                input_digest="input-abc",
+                code_digest="code-abc",
+                environment_digest="environment-abc",
                 job_name="qcsc-job-abc123",
                 job_comment="qcsc-spec=v1:abc123",
             )
@@ -240,6 +260,9 @@ def test_resumable_submit_fields_round_trip(tmp_path: Path):
 
     legacy_upsert = _only_job(registry)
     assert legacy_upsert.spec_hash == "v1:abc123"
+    assert legacy_upsert.input_digest == "input-abc"
+    assert legacy_upsert.code_digest == "code-abc"
+    assert legacy_upsert.environment_digest == "environment-abc"
     assert legacy_upsert.job_name == "qcsc-job-abc123"
     assert legacy_upsert.job_comment == "qcsc-spec=v1:abc123"
 
@@ -270,6 +293,9 @@ def test_resumable_submit_fields_round_trip(tmp_path: Path):
     record = _only_job(registry)
     assert record.status == BulkJobStatus.PREPARED
     assert record.spec_hash == "v1:abc123"
+    assert record.input_digest == "input-abc"
+    assert record.code_digest == "code-abc"
+    assert record.environment_digest == "environment-abc"
     assert record.prepared_at == "2026-07-22T01:02:03+00:00"
     assert record.job_name == "qcsc-job-abc123"
     assert record.job_comment == "qcsc-spec=v1:abc123"
@@ -277,6 +303,73 @@ def test_resumable_submit_fields_round_trip(tmp_path: Path):
     assert record.cancel_requested_at == "2026-07-22T01:03:00+00:00"
     assert record.cancel_requested_by == "operator@example.invalid"
     assert record.cancel_reason == "test cancellation intent"
+
+
+def test_same_spec_hash_is_idempotent_but_mismatch_preserves_existing_row(tmp_path: Path):
+    registry = _registry(tmp_path)
+    original = _spec(
+        tmp_path,
+        "job-1",
+        command_args={"input": "original.dat"},
+        spec_hash="qcsc-prefect-bulk-spec-v1:sha256:aaa",
+        input_digest="input-original",
+    )
+    registry.upsert_jobs([original])
+    registry.upsert_jobs([original])
+
+    with pytest.raises(SpecHashMismatchError) as exc_info:
+        registry.upsert_jobs(
+            [
+                _spec(
+                    tmp_path,
+                    "job-1",
+                    command_args={"input": "changed.dat"},
+                    spec_hash="qcsc-prefect-bulk-spec-v1:sha256:bbb",
+                    input_digest="input-changed",
+                )
+            ]
+        )
+
+    record = _only_job(registry)
+    assert record.spec_hash == "qcsc-prefect-bulk-spec-v1:sha256:aaa"
+    assert record.command_args == {"input": "original.dat"}
+    assert record.input_digest == "input-original"
+    assert exc_info.value.job_key == "job-1"
+    assert "original.dat" not in str(exc_info.value)
+    assert "changed.dat" not in str(exc_info.value)
+
+
+def test_legacy_active_row_without_hash_keeps_execution_spec_immutable(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs(
+        [
+            _spec(
+                tmp_path,
+                "job-1",
+                command_args={"input": "original.dat"},
+            )
+        ]
+    )
+    registry.mark_submitted("job-1", "12345")
+
+    registry.upsert_jobs(
+        [
+            _spec(
+                tmp_path,
+                "job-1",
+                command_args={"input": "changed.dat"},
+                spec_hash="qcsc-prefect-bulk-spec-v1:sha256:new",
+                input_digest="input-changed",
+            )
+        ]
+    )
+
+    record = _only_job(registry)
+    assert record.status == BulkJobStatus.SUBMITTED
+    assert record.scheduler_job_id == "12345"
+    assert record.command_args == {"input": "original.dat"}
+    assert record.spec_hash is None
+    assert record.input_digest is None
 
 
 def test_stage_and_native_bulk_fields_round_trip(tmp_path: Path):

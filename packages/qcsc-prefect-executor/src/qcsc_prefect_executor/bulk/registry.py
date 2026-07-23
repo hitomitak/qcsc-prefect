@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from qcsc_prefect_executor.bulk.exceptions import SpecHashMismatchError
 from qcsc_prefect_executor.bulk.models import (
     ACTIVE_BULK_JOB_STATUSES,
     SUBMIT_CANDIDATE_BULK_JOB_STATUSES,
@@ -107,6 +108,9 @@ class BulkJobRegistry:
                     execution_profile_block TEXT,
                     hpc_profile_block TEXT,
                     spec_hash TEXT,
+                    input_digest TEXT,
+                    code_digest TEXT,
+                    environment_digest TEXT,
                     prepared_at TEXT,
                     job_name TEXT,
                     job_comment TEXT,
@@ -173,6 +177,9 @@ class BulkJobRegistry:
             "execution_profile_block": "execution_profile_block TEXT",
             "hpc_profile_block": "hpc_profile_block TEXT",
             "spec_hash": "spec_hash TEXT",
+            "input_digest": "input_digest TEXT",
+            "code_digest": "code_digest TEXT",
+            "environment_digest": "environment_digest TEXT",
             "prepared_at": "prepared_at TEXT",
             "job_name": "job_name TEXT",
             "job_comment": "job_comment TEXT",
@@ -197,6 +204,17 @@ class BulkJobRegistry:
                     "SELECT * FROM bulk_jobs WHERE job_key = ?",
                     (job.job_key,),
                 ).fetchone()
+                if (
+                    existing is not None
+                    and existing["spec_hash"] is not None
+                    and job.spec_hash is not None
+                    and existing["spec_hash"] != job.spec_hash
+                ):
+                    raise SpecHashMismatchError(
+                        job_key=job.job_key,
+                        stored_spec_hash=str(existing["spec_hash"]),
+                        incoming_spec_hash=job.spec_hash,
+                    )
                 if existing is not None and existing["status"] == BulkJobStatus.SUCCEEDED.value:
                     continue
 
@@ -227,6 +245,9 @@ class BulkJobRegistry:
                             execution_profile_block,
                             hpc_profile_block,
                             spec_hash,
+                            input_digest,
+                            code_digest,
+                            environment_digest,
                             job_name,
                             job_comment,
                             desired_state,
@@ -240,8 +261,8 @@ class BulkJobRegistry:
                             max_submit_attempts
                         )
                         VALUES (
-                            ?, ?, ?, ?, ?, ?, NULL, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                            NULL, NULL, NULL, ?, ?
+                            ?, ?, ?, ?, ?, ?, NULL, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, NULL, NULL, NULL, ?, ?
                         )
                         """,
                         (
@@ -256,6 +277,9 @@ class BulkJobRegistry:
                             job.execution_profile_block,
                             job.hpc_profile_block,
                             job.spec_hash,
+                            job.input_digest,
+                            job.code_digest,
+                            job.environment_digest,
                             job.job_name,
                             job.job_comment,
                             BulkJobDesiredState.RUN.value,
@@ -277,9 +301,21 @@ class BulkJobRegistry:
                             target_id = ?,
                             stage_id = ?,
                             status = ?,
-                            work_dir = ?,
-                            command_args_json = ?,
-                            expected_outputs_json = ?,
+                            work_dir = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN ?
+                                ELSE work_dir
+                            END,
+                            command_args_json = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN ?
+                                ELSE command_args_json
+                            END,
+                            expected_outputs_json = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN ?
+                                ELSE expected_outputs_json
+                            END,
                             execution_profile_block = CASE
                                 WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
                                 THEN ?
@@ -294,6 +330,21 @@ class BulkJobRegistry:
                                 WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
                                 THEN COALESCE(?, spec_hash)
                                 ELSE spec_hash
+                            END,
+                            input_digest = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN COALESCE(?, input_digest)
+                                ELSE input_digest
+                            END,
+                            code_digest = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN COALESCE(?, code_digest)
+                                ELSE code_digest
+                            END,
+                            environment_digest = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN COALESCE(?, environment_digest)
+                                ELSE environment_digest
                             END,
                             job_name = CASE
                                 WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
@@ -323,6 +374,9 @@ class BulkJobRegistry:
                             job.execution_profile_block,
                             job.hpc_profile_block,
                             job.spec_hash,
+                            job.input_digest,
+                            job.code_digest,
+                            job.environment_digest,
                             job.job_name,
                             job.job_comment,
                             now,
@@ -340,9 +394,21 @@ class BulkJobRegistry:
                             wave_id = ?,
                             target_id = ?,
                             stage_id = ?,
-                            work_dir = ?,
-                            command_args_json = ?,
-                            expected_outputs_json = ?,
+                            work_dir = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN ?
+                                ELSE work_dir
+                            END,
+                            command_args_json = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN ?
+                                ELSE command_args_json
+                            END,
+                            expected_outputs_json = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN ?
+                                ELSE expected_outputs_json
+                            END,
                             execution_profile_block = CASE
                                 WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
                                 THEN ?
@@ -357,6 +423,21 @@ class BulkJobRegistry:
                                 WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
                                 THEN COALESCE(?, spec_hash)
                                 ELSE spec_hash
+                            END,
+                            input_digest = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN COALESCE(?, input_digest)
+                                ELSE input_digest
+                            END,
+                            code_digest = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN COALESCE(?, code_digest)
+                                ELSE code_digest
+                            END,
+                            environment_digest = CASE
+                                WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
+                                THEN COALESCE(?, environment_digest)
+                                ELSE environment_digest
                             END,
                             job_name = CASE
                                 WHEN scheduler_job_id IS NULL AND scheduler_subjob_id IS NULL
@@ -383,6 +464,9 @@ class BulkJobRegistry:
                             job.execution_profile_block,
                             job.hpc_profile_block,
                             job.spec_hash,
+                            job.input_digest,
+                            job.code_digest,
+                            job.environment_digest,
                             job.job_name,
                             job.job_comment,
                             now,
@@ -886,6 +970,9 @@ def _record_from_row(row: sqlite3.Row) -> BulkJobRecord:
         execution_profile_block=row["execution_profile_block"],
         hpc_profile_block=row["hpc_profile_block"],
         spec_hash=row["spec_hash"],
+        input_digest=row["input_digest"],
+        code_digest=row["code_digest"],
+        environment_digest=row["environment_digest"],
         prepared_at=row["prepared_at"],
         job_name=row["job_name"],
         job_comment=row["job_comment"],

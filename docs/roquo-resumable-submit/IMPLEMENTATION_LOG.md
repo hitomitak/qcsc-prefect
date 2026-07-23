@@ -10,6 +10,7 @@ machine verified” is used only after a human records an actual scheduler/runti
 |---|---|---|---|---|---|---|---|---|
 | PR0 | Design gate for G1/G4/G5/G6 | approved | `docs/roquo-resumable-submit/{ATOMICITY_DECISION,IMPLEMENTATION_LOG,G_STATUS,REAL_MACHINE_RUNBOOK}.md` | Recorded storage/locking choices and the approved shared-SQLite-only direction before changing scheduler behavior. | Documentation only; no public API, schema, submit, monitor, or cancel behavior changed. | `uv run --with mkdocs-material --with 'mkdocstrings[python]' mkdocs build --strict` passed. No code tests required. | Atomicity preflight waived as a gate. Tests 1–5 remain future human gates. | No sidecar/external mutex. Revisit only if the trusted filesystem assumption fails. |
 | PR1 | Foundation for G1/G4/G5/G6 | implemented (CI) | `bulk/{__init__,models,registry}.py`, `tests/test_bulk_registry.py`, PR tracking docs | Added durable schema/model vocabulary required by later immutable-spec, submit-or-attach, hold, and cancel-intent PRs. | Existing constructors keep defaults; old databases migrate in place; submit, monitor, and cancel candidate selection is unchanged. | Registry tests, executor tests, Ruff, and strict docs build; see PR1 checks below. | Not required. | No production transition enters `PREPARED` or `AWAITING_OPERATOR` until PR4; cancel intent behavior waits for PR5. |
+| PR2 | G4 | implemented (CI) | `bulk/{spec_hash,exceptions,models,registry}.py`, `from_blocks.py`, focused tests, PR tracking docs | Added versioned canonical resolved-spec hashing and rejected reuse of a `job_key` when its stored hash differs. | Optional caller digests default to `NULL`; legacy rows remain readable; stored hashed rows become immutable before scheduler side effects. | Canonicalization/guard tests, executor tests, Ruff, format check, and strict docs build; see PR2 checks below. | Not required. | Legacy scheduler rows whose hash is `NULL` cannot be cryptographically verified; existing non-submit status guards still prevent automatic resubmission. |
 
 ## PR0 review notes
 
@@ -93,6 +94,68 @@ callers that do not pass the optional fields therefore retain their previous beh
 An earlier executor-suite attempt with only `pytest` as an injected dependency stopped
 during collection because `jinja2` was absent; no tests ran in that attempt. The successful
 suite command above injects the dependencies needed by the repository's adapter imports.
+
+## PR2 canonical spec hash and immutable guard
+
+PR2 uses schema version `qcsc-prefect-bulk-spec-v1`. A stored value has the form
+`qcsc-prefect-bulk-spec-v1:sha256:<hex>`. Canonical JSON sorts mappings, normalizes a
+`Path` like its POSIX string, treats tuples and lists as the same ordered sequence, and
+rejects non-finite floats or unsupported nondeterministic values.
+
+Every dynamic scalar and string is represented inside the canonical payload by a typed
+SHA-256 fingerprint. Command arguments, executable paths, environment values, caller
+digests, and other dynamic strings therefore do not occur as plaintext in the payload,
+stored hash, mismatch exception, or implementation log. `SpecHashMismatchError` reports
+only the `job_key`, stored hash, incoming hash, and the instruction to use a new key.
+
+### Hash field contract
+
+| Included | Excluded |
+|---|---|
+| Resolved executable and ordered command arguments | `job_key` and workflow/campaign naming rules |
+| Resolved execution profile: nodes, MPI/OMP counts, launcher/options, walltime, modules, pre-commands, environment | Registry status and scheduler job/subjob IDs |
+| Resolved scheduler target, queue/partition/resource group, account/project, and target-specific CPU/GPU/QPU/memory/resource request | `prepared_at`, submitted/started/finished timestamps, attempts, and errors |
+| Optional caller `input_digest`, `code_digest`, and `environment_digest` | Work/attempt directory and generated script filename |
+| Command key and scheduler-visible executable mapping | Derived scheduler `job_name` and `job_comment` to avoid a PR3 identity/hash cycle |
+
+The library does not infer ROQUO campaign keys. When a resource, input, code, environment,
+or command change is intentional, the caller must retain the old immutable row and issue a
+new `job_key`.
+
+### Enforcement and compatibility
+
+- `submit_job_from_blocks` resolves blocks and computes the hash before registry mutation
+  and before calling the scheduler. A deferred retry with the same hash is allowed.
+- A stored non-`NULL` hash is checked inside the same registry transaction before any row
+  update. A mismatch rolls back the whole `upsert_jobs` transaction and preserves the
+  original command arguments, digests, status, and hash.
+- Bulk resume resolves incoming specs before updating rows that already have hashes.
+  Native Fugaku bulk candidates are all resolved and registered with hashes before the
+  native bulk scheduler submission.
+- Named `command_args` are converted to CLI options in sorted-key order so mapping
+  insertion order cannot change either the command or hash.
+- `input_digest`, `code_digest`, and `environment_digest` are optional model/registry
+  fields. Old databases migrate them to `NULL`, and existing callers need not supply them.
+- A legacy submit candidate with `spec_hash=NULL` is backfilled with its resolved hash
+  before its next scheduler side effect. A legacy active or terminal row without a hash is
+  not automatically resubmitted or treated as a verified match.
+
+### PR2 automated checks
+
+The commands below were run from an exported Git-index snapshot so unrelated
+timeout/subprocess work already present in the working tree was not part of the tested PR2
+commit:
+
+- `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=packages/qcsc-prefect-core/src:packages/qcsc-prefect-adapters/src:packages/qcsc-prefect-blocks/src:packages/qcsc-prefect-executor/src uv run --with pytest --with jinja2 --with prefect --with pydantic pytest packages/qcsc-prefect-executor/tests -q`
+  — 123 passed, 2 explicitly opt-in HPC integration tests skipped.
+- `uv run --with ruff ruff check packages/qcsc-prefect-executor/src/qcsc_prefect_executor/bulk packages/qcsc-prefect-executor/src/qcsc_prefect_executor/from_blocks.py packages/qcsc-prefect-executor/tests/test_bulk_registry.py packages/qcsc-prefect-executor/tests/test_bulk_spec_hash.py`
+  — passed.
+- `uv run --with ruff ruff format --check packages/qcsc-prefect-executor/src/qcsc_prefect_executor/bulk/__init__.py packages/qcsc-prefect-executor/src/qcsc_prefect_executor/bulk/exceptions.py packages/qcsc-prefect-executor/src/qcsc_prefect_executor/bulk/models.py packages/qcsc-prefect-executor/src/qcsc_prefect_executor/bulk/registry.py packages/qcsc-prefect-executor/src/qcsc_prefect_executor/bulk/spec_hash.py packages/qcsc-prefect-executor/tests/test_bulk_registry.py packages/qcsc-prefect-executor/tests/test_bulk_spec_hash.py`
+  — 7 files already formatted. `from_blocks.py` is covered by Ruff check; its full-file
+  format check has two pre-existing formatting deltas outside PR2.
+- `PYTHONPATH=packages/qcsc-prefect-core/src:packages/qcsc-prefect-adapters/src:packages/qcsc-prefect-blocks/src:packages/qcsc-prefect-executor/src:packages/qcsc-prefect-dice/src:packages/qcsc-prefect-qiskit/src uv run --with mkdocs-material --with 'mkdocstrings[python]' mkdocs build --strict`
+  — passed. The existing informational notice that the ROQUO tracking pages and
+  `tutorials/tmp.md` are outside `nav` remains.
 
 ## Future PR entry template
 
