@@ -108,5 +108,5 @@ no scheduler ID is stored. A bulk retry that sees a hold returns immediately wit
 submission or identity search.
 
 Target-specific retention, visibility delay, name/comment preservation, account defaults,
-and clock skew remain real-cluster facts. Record them in Test 1 of
-`REAL_MACHINE_RUNBOOK.md` before treating the feature as real-machine verified.
+and clock skew remain real-cluster facts. Record them in the operator-maintained local
+runbook, outside version control, before treating the feature as real-machine verified.

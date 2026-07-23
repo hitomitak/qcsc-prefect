@@ -29,9 +29,9 @@ the shortened job-name suffix.
 The library's `DEFAULT_SLURM_JOB_NAME_MAX_LENGTH` is **64** as a conservative
 default. It is not a portable statement about Slurm's `MaxJobName` setting.
 Before a ROQUO deployment chooses a different value, an operator must record
-the target cluster's permitted job-name and comment behavior in Test 1 of
-`REAL_MACHINE_RUNBOOK.md`, including preservation in both `squeue` and
-`sacct`.
+the target cluster's permitted job-name and comment behavior, including
+preservation in both `squeue` and `sacct`, in the local runbook that is kept
+outside version control.
 
 `SlurmJobRequest.job_name` and `.comment` remain optional. With neither field,
 the rendered script is unchanged for existing callers. When supplied, both

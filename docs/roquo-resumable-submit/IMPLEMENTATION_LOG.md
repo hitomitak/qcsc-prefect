@@ -2,13 +2,14 @@
 
 This log is updated in the same pull request as each implementation increment. “Real
 machine verified” is used only after a human records an actual scheduler/runtime result in
-`REAL_MACHINE_RUNBOOK.md`.
+an operator records an actual scheduler/runtime result in the local real-machine runbook,
+which is kept outside version control.
 
 ## Progress
 
 | PR | G items | State | Changed files | What and why | Compatibility | Automated checks | Real machine | Open items |
 |---|---|---|---|---|---|---|---|---|
-| PR0 | Design gate for G1/G4/G5/G6 | approved | `docs/roquo-resumable-submit/{ATOMICITY_DECISION,IMPLEMENTATION_LOG,G_STATUS,REAL_MACHINE_RUNBOOK}.md` | Recorded storage/locking choices and the approved shared-SQLite-only direction before changing scheduler behavior. | Documentation only; no public API, schema, submit, monitor, or cancel behavior changed. | `uv run --with mkdocs-material --with 'mkdocstrings[python]' mkdocs build --strict` passed. No code tests required. | Atomicity preflight waived as a gate. Tests 1–5 remain future human gates. | No sidecar/external mutex. Revisit only if the trusted filesystem assumption fails. |
+| PR0 | Design gate for G1/G4/G5/G6 | approved | `docs/roquo-resumable-submit/{ATOMICITY_DECISION,IMPLEMENTATION_LOG,G_STATUS}.md` | Recorded storage/locking choices and the approved shared-SQLite-only direction before changing scheduler behavior. | Documentation only; no public API, schema, submit, monitor, or cancel behavior changed. | `uv run --with mkdocs-material --with 'mkdocstrings[python]' mkdocs build --strict` passed. No code tests required. | Atomicity preflight waived as a gate. Tests 1–5 remain future human gates. | No sidecar/external mutex. Revisit only if the trusted filesystem assumption fails. |
 | PR1 | Foundation for G1/G4/G5/G6 | implemented (CI) | `bulk/{__init__,models,registry}.py`, `tests/test_bulk_registry.py`, PR tracking docs | Added durable schema/model vocabulary required by later immutable-spec, submit-or-attach, hold, and cancel-intent PRs. | Existing constructors keep defaults; old databases migrate in place; submit, monitor, and cancel candidate selection is unchanged. | Registry tests, executor tests, Ruff, and strict docs build; see PR1 checks below. | Not required. | No production transition enters `PREPARED` or `AWAITING_OPERATOR` until PR4; cancel intent behavior waits for PR5. |
 | PR2 | G4 | implemented (CI) | `bulk/{spec_hash,exceptions,models,registry}.py`, `from_blocks.py`, focused tests, PR tracking docs | Added versioned canonical resolved-spec hashing and rejected reuse of a `job_key` when its stored hash differs. | Optional caller digests default to `NULL`; legacy rows remain readable; stored hashed rows become immutable before scheduler side effects. | Canonicalization/guard tests, executor tests, Ruff, format check, and strict docs build; see PR2 checks below. | Not required. | Legacy scheduler rows whose hash is `NULL` cannot be cryptographically verified; existing non-submit status guards still prevent automatic resubmission. |
 | PR3 | G2 | implemented (CI) | Slurm builder/template, adapter tests, `SLURM_IDENTITY.md`, PR tracking docs | Added deterministic, non-secret Slurm job-name/comment generation and safe optional template directives. | Existing callers that do not provide identity values render the same script. No scheduler search, registry claim, or automatic recovery behavior changes before PR4. | Adapter rendering/identity tests, Ruff, format check, and strict docs build; see PR3 checks below. | Test 1 after PR4 must verify the target cluster preserves name/comment in `squeue` and `sacct`. | Target-specific name/comment limits and accounting visibility remain operational facts to record before enabling recovery. |
@@ -218,8 +219,8 @@ alive.
 
 The registry exposes `operator_attach` and `confirm_not_submitted_and_reset`. The latter
 requires an explicit actor/reason and refuses rows with a known scheduler ID. Operational
-preconditions and the manual evidence procedure are in `SLURM_SUBMIT_OR_ATTACH.md` and
-Test 1 of `REAL_MACHINE_RUNBOOK.md`.
+preconditions are in `SLURM_SUBMIT_OR_ATTACH.md`; the manual evidence procedure belongs in
+the operator-maintained local runbook and must not be committed.
 
 ### PR4 automated checks
 

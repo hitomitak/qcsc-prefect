@@ -154,6 +154,9 @@ venv.bak/
 # mkdocs documentation
 /site
 
+# Operator-maintained real-machine procedures and records (never commit)
+docs/roquo-resumable-submit/REAL_MACHINE_RUNBOOK.md
+
 # mypy
 .mypy_cache/
 .dmypy.json
