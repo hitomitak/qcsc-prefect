@@ -11,6 +11,7 @@ machine verified” is used only after a human records an actual scheduler/runti
 | PR0 | Design gate for G1/G4/G5/G6 | approved | `docs/roquo-resumable-submit/{ATOMICITY_DECISION,IMPLEMENTATION_LOG,G_STATUS,REAL_MACHINE_RUNBOOK}.md` | Recorded storage/locking choices and the approved shared-SQLite-only direction before changing scheduler behavior. | Documentation only; no public API, schema, submit, monitor, or cancel behavior changed. | `uv run --with mkdocs-material --with 'mkdocstrings[python]' mkdocs build --strict` passed. No code tests required. | Atomicity preflight waived as a gate. Tests 1–5 remain future human gates. | No sidecar/external mutex. Revisit only if the trusted filesystem assumption fails. |
 | PR1 | Foundation for G1/G4/G5/G6 | implemented (CI) | `bulk/{__init__,models,registry}.py`, `tests/test_bulk_registry.py`, PR tracking docs | Added durable schema/model vocabulary required by later immutable-spec, submit-or-attach, hold, and cancel-intent PRs. | Existing constructors keep defaults; old databases migrate in place; submit, monitor, and cancel candidate selection is unchanged. | Registry tests, executor tests, Ruff, and strict docs build; see PR1 checks below. | Not required. | No production transition enters `PREPARED` or `AWAITING_OPERATOR` until PR4; cancel intent behavior waits for PR5. |
 | PR2 | G4 | implemented (CI) | `bulk/{spec_hash,exceptions,models,registry}.py`, `from_blocks.py`, focused tests, PR tracking docs | Added versioned canonical resolved-spec hashing and rejected reuse of a `job_key` when its stored hash differs. | Optional caller digests default to `NULL`; legacy rows remain readable; stored hashed rows become immutable before scheduler side effects. | Canonicalization/guard tests, executor tests, Ruff, format check, and strict docs build; see PR2 checks below. | Not required. | Legacy scheduler rows whose hash is `NULL` cannot be cryptographically verified; existing non-submit status guards still prevent automatic resubmission. |
+| PR3 | G2 | implemented (CI) | Slurm builder/template, adapter tests, `SLURM_IDENTITY.md`, PR tracking docs | Added deterministic, non-secret Slurm job-name/comment generation and safe optional template directives. | Existing callers that do not provide identity values render the same script. No scheduler search, registry claim, or automatic recovery behavior changes before PR4. | Adapter rendering/identity tests, Ruff, format check, and strict docs build; see PR3 checks below. | Test 1 after PR4 must verify the target cluster preserves name/comment in `squeue` and `sacct`. | Target-specific name/comment limits and accounting visibility remain operational facts to record before enabling recovery. |
 
 ## PR0 review notes
 
@@ -156,6 +157,43 @@ commit:
 - `PYTHONPATH=packages/qcsc-prefect-core/src:packages/qcsc-prefect-adapters/src:packages/qcsc-prefect-blocks/src:packages/qcsc-prefect-executor/src:packages/qcsc-prefect-dice/src:packages/qcsc-prefect-qiskit/src uv run --with mkdocs-material --with 'mkdocstrings[python]' mkdocs build --strict`
   — passed. The existing informational notice that the ROQUO tracking pages and
   `tutorials/tmp.md` are outside `nav` remains.
+
+## PR3 deterministic Slurm identity
+
+PR3 defines `build_slurm_job_identity(job_key, spec_hash)` in the Slurm adapter.
+It derives a readable, safe job name with a retained 96-bit digest suffix and a
+full SHA-256 identity digest in the Slurm comment. The full comment is the
+future recovery match key; the abbreviated job-name suffix is only a practical
+human-visible discriminator.
+
+The builder emits `#SBATCH --job-name` and `#SBATCH --comment` only when the
+new optional `SlurmJobRequest` fields are set. Values are validated as safe
+single-token directive text rather than shell-quoted, because Slurm processes
+directives before the batch shell. No existing request gains an identity
+implicitly, so ordinary script rendering remains backward compatible.
+
+The conservative default maximum name length is 64 characters. It is a library
+default, not an asserted Slurm standard; the target ROQUO cluster's effective
+limit and `squeue`/`sacct` retention must be recorded during Test 1 after PR4.
+See `SLURM_IDENTITY.md` for the complete contract.
+
+### PR3 automated checks
+
+- `PYTHONDONTWRITEBYTECODE=1 uv run --with pytest --with jinja2 pytest packages/qcsc-prefect-adapters/tests/test_slurm_builder.py -q`
+  — 7 passed.
+- `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=packages/qcsc-prefect-core/src:packages/qcsc-prefect-adapters/src:packages/qcsc-prefect-blocks/src:packages/qcsc-prefect-executor/src uv run --with pytest --with jinja2 --with prefect --with pydantic pytest packages/qcsc-prefect-executor/tests/test_run_slurm_job_local.py -q`
+  — 1 passed.
+- `uv run --with ruff ruff check packages/qcsc-prefect-adapters/src/qcsc_prefect_adapters/slurm/builder.py packages/qcsc-prefect-adapters/tests/test_slurm_builder.py`
+  — passed.
+- `uv run --with ruff ruff format --check packages/qcsc-prefect-adapters/src/qcsc_prefect_adapters/slurm/builder.py packages/qcsc-prefect-adapters/tests/test_slurm_builder.py`
+  — 2 files already formatted.
+- `PYTHONPATH=packages/qcsc-prefect-core/src:packages/qcsc-prefect-adapters/src:packages/qcsc-prefect-blocks/src:packages/qcsc-prefect-executor/src:packages/qcsc-prefect-dice/src:packages/qcsc-prefect-qiskit/src uv run --with mkdocs-material --with 'mkdocstrings[python]' mkdocs build --strict`
+  — passed. The existing informational notice that the ROQUO tracking pages and
+  `tutorials/tmp.md` are outside `nav` now also lists `SLURM_IDENTITY.md`.
+
+These focused checks exercised only the PR3 identity/rendering paths. Unrelated
+uncommitted scheduler-timeout work was present in the working tree and is not
+part of this PR3 change.
 
 ## Future PR entry template
 

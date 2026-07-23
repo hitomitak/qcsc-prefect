@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,6 +10,104 @@ from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 
 _ENV = make_env("qcsc_prefect_adapters.slurm")
 _TEMPLATE = "batch.slurm.j2"
+
+# This is intentionally a conservative library default, not a claim about every
+# Slurm installation's configured MaxJobName.  Operators must confirm their
+# cluster's limit before relying on a longer value.
+DEFAULT_SLURM_JOB_NAME_MAX_LENGTH = 64
+DEFAULT_SLURM_JOB_NAME_PREFIX = "qcsc"
+_IDENTITY_SCHEMA_VERSION = "qcsc-prefect-slurm-identity-v1"
+_IDENTITY_DIGEST_SUFFIX_LENGTH = 24
+_JOB_NAME_COMPONENT_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+_SLURM_JOB_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_SLURM_COMMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
+
+
+@dataclass(frozen=True)
+class SlurmJobIdentity:
+    """Deterministic scheduler identity used to rediscover a Slurm job.
+
+    ``job_name`` is short enough for the conservative default length while
+    preserving a digest suffix. ``comment`` holds the complete digest used for
+    later identity matching.
+    """
+
+    job_name: str
+    comment: str
+
+
+def _normalized_job_name_component(value: str) -> str:
+    normalized = _JOB_NAME_COMPONENT_RE.sub("-", value).strip(".-")
+    return normalized or "job"
+
+
+def build_slurm_job_identity(
+    *,
+    job_key: str,
+    spec_hash: str,
+    prefix: str = DEFAULT_SLURM_JOB_NAME_PREFIX,
+    max_job_name_length: int = DEFAULT_SLURM_JOB_NAME_MAX_LENGTH,
+) -> SlurmJobIdentity:
+    """Build a deterministic, scheduler-safe identity for one logical job.
+
+    The name contains readable normalized ``prefix``/``job_key`` text followed
+    by a fixed 96-bit digest suffix.  Truncation occurs before the suffix, so
+    long or similar keys cannot remove the collision-resistant portion.  The
+    comment stores the complete SHA-256 identity digest without exposing either
+    input string.
+
+    Args:
+        job_key: Stable logical job key.
+        spec_hash: Canonical immutable resolved-spec hash.
+        prefix: Human-readable name prefix.
+        max_job_name_length: Target-approved maximum job-name length. The
+            default is deliberately conservative.
+
+    Returns:
+        A scheduler-safe job name and a full-digest Slurm comment.
+
+    Raises:
+        ValueError: If an input is empty or the requested length cannot retain
+            the digest suffix.
+    """
+
+    normalized_job_key = str(job_key).strip()
+    normalized_spec_hash = str(spec_hash).strip()
+    if not normalized_job_key:
+        raise ValueError("job_key must be non-empty when building Slurm identity.")
+    if not normalized_spec_hash:
+        raise ValueError("spec_hash must be non-empty when building Slurm identity.")
+
+    max_length = int(max_job_name_length)
+    suffix_length = _IDENTITY_DIGEST_SUFFIX_LENGTH + 1
+    if max_length <= suffix_length:
+        raise ValueError(
+            "max_job_name_length must leave room for the Slurm identity digest suffix."
+        )
+
+    digest_input = "\0".join((_IDENTITY_SCHEMA_VERSION, normalized_job_key, normalized_spec_hash))
+    digest = hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
+    suffix = f"-{digest[:_IDENTITY_DIGEST_SUFFIX_LENGTH]}"
+
+    readable_prefix = "-".join(
+        (
+            _normalized_job_name_component(str(prefix)),
+            _normalized_job_name_component(normalized_job_key),
+        )
+    )
+    job_name = readable_prefix[: max_length - len(suffix)].rstrip(".-") + suffix
+    return SlurmJobIdentity(
+        job_name=job_name,
+        comment=f"{_IDENTITY_SCHEMA_VERSION}:sha256:{digest}",
+    )
+
+
+def _validated_slurm_directive_value(value: str, *, field_name: str) -> str:
+    normalized = str(value).strip()
+    pattern = _SLURM_JOB_NAME_RE if field_name == "job_name" else _SLURM_COMMENT_RE
+    if not pattern.fullmatch(normalized):
+        raise ValueError(f"Slurm {field_name} must use only safe scheduler directive characters.")
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -21,6 +121,8 @@ class SlurmJobRequest:
         qpu: Optional QPU resource selector emitted by the Slurm template.
         memory: Optional memory request passed to ``#SBATCH --mem``.
         ntasks: Optional task count passed to ``#SBATCH --ntasks``.
+        job_name: Optional scheduler-safe name passed to ``#SBATCH --job-name``.
+        comment: Optional scheduler-safe identity passed to ``#SBATCH --comment``.
     """
 
     partition: str
@@ -29,6 +131,8 @@ class SlurmJobRequest:
     qpu: str | None = None
     memory: str | None = None
     ntasks: int | None = None
+    job_name: str | None = None
+    comment: str | None = None
 
 
 def to_slurm_template_kwargs(*, exec_profile: ExecutionProfile, req: SlurmJobRequest) -> dict:
@@ -56,6 +160,16 @@ def to_slurm_template_kwargs(*, exec_profile: ExecutionProfile, req: SlurmJobReq
         kw["memory"] = req.memory
     if req.ntasks is not None:
         kw["ntasks"] = req.ntasks
+    if req.job_name is not None:
+        kw["job_name"] = _validated_slurm_directive_value(
+            req.job_name,
+            field_name="job_name",
+        )
+    if req.comment is not None:
+        kw["comment"] = _validated_slurm_directive_value(
+            req.comment,
+            field_name="comment",
+        )
     if exec_profile.mpiprocs is not None:
         kw["mpiprocs"] = exec_profile.mpiprocs
     if exec_profile.ompthreads is not None:

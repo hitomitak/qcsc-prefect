@@ -1,5 +1,11 @@
 #!/bin/bash{% if modules is defined %} -l{% endif %}
 #SBATCH --partition={{ partition }}
+{%- if job_name is defined %}
+#SBATCH --job-name={{ job_name }}
+{%- endif %}
+{%- if comment is defined %}
+#SBATCH --comment={{ comment }}
+{%- endif %}
 {%- if account is defined %}
 #SBATCH --account={{ account }}
 {%- endif %}
