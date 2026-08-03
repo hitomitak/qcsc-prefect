@@ -9,6 +9,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from qcsc_prefect_adapters.base.recovery import (
+    IdentityRecoveryNotSupportedError,
+    IdentityRecoveryRuntime,
+    SchedulerJobCandidate,
+    SchedulerJobIdentity,
+)
 from qcsc_prefect_adapters.base.subprocess import (
     DEFAULT_SCHEDULER_COMMAND_TIMEOUT_SECONDS,
 )
@@ -37,7 +43,6 @@ from qcsc_prefect_adapters.slurm.runtime import (
     CancelRejectedError as SlurmCancelRejectedError,
 )
 from qcsc_prefect_adapters.slurm.runtime import (
-    SlurmJobCandidate,
     SlurmRuntime,
 )
 from qcsc_prefect_adapters.slurm.runtime import (
@@ -111,6 +116,17 @@ def _validate_slurm_recovery_settings(
         raise ValueError("slurm_clock_skew_margin_seconds must be non-negative.")
     if scheduler_command_timeout_seconds is not None and scheduler_command_timeout_seconds <= 0:
         raise ValueError("scheduler_command_timeout_seconds must be greater than 0.")
+
+
+def resolve_identity_recovery_runtime(hpc_target: str) -> IdentityRecoveryRuntime:
+    """Resolve the optional identity-search capability for one HPC target."""
+
+    normalized_target = str(hpc_target).strip().lower()
+    if normalized_target == "slurm":
+        return SlurmRuntime()
+    raise IdentityRecoveryNotSupportedError(
+        f"hpc_target={hpc_target!r} does not implement find_candidates_by_identity()."
+    )
 
 
 @dataclass(frozen=True)
@@ -920,44 +936,6 @@ def _parse_registry_datetime(value: str | None, *, field_name: str) -> datetime:
     return parsed
 
 
-def _normalized_slurm_metadata(value: str | None) -> str:
-    normalized = str(value or "").strip()
-    if normalized.lower() in {"n/a", "none", "(null)", "unknown"}:
-        return ""
-    return normalized
-
-
-def _candidate_metadata_error(
-    candidate: SlurmJobCandidate,
-    *,
-    record: BulkJobRecord,
-    prepared: _PreparedBlockJob,
-    slurm_user: str,
-    search_start: datetime,
-    search_end: datetime,
-) -> str | None:
-    if not isinstance(prepared.req, SlurmJobRequest):
-        return "prepared request is not a SlurmJobRequest"
-    if candidate.job_name != record.job_name:
-        return f"job {candidate.job_id} name does not match"
-    if candidate.user != slurm_user:
-        return f"job {candidate.job_id} user does not match"
-    if _normalized_slurm_metadata(candidate.account) != _normalized_slurm_metadata(
-        prepared.req.account
-    ):
-        return f"job {candidate.job_id} account does not match"
-    if candidate.partition != prepared.req.partition:
-        return f"job {candidate.job_id} partition does not match"
-    if candidate.submit_time is None:
-        return f"job {candidate.job_id} has no parseable submit time"
-    candidate_submit_time = candidate.submit_time.astimezone(timezone.utc)
-    if candidate_submit_time < search_start.astimezone(timezone.utc):
-        return f"job {candidate.job_id} predates the recovery window"
-    if candidate_submit_time > search_end.astimezone(timezone.utc):
-        return f"job {candidate.job_id} is beyond the recovery clock-skew window"
-    return None
-
-
 def _raise_operator_hold(
     *,
     registry: BulkJobRegistry,
@@ -972,7 +950,7 @@ def _attach_recovered_slurm_candidate(
     *,
     registry: BulkJobRegistry,
     record: BulkJobRecord,
-    candidate: SlurmJobCandidate,
+    candidate: SchedulerJobCandidate,
 ) -> SubmittedJob:
     try:
         attached = registry.mark_submitted(record.job_key, candidate.job_id)
@@ -1058,6 +1036,12 @@ async def _reconcile_prepared_slurm_job(
             job_key=record.job_key,
             reason="PREPARED row is missing immutable spec or Slurm identity fields",
         )
+    if not isinstance(prepared.req, SlurmJobRequest):
+        _raise_operator_hold(
+            registry=registry,
+            job_key=record.job_key,
+            reason="prepared request is not a SlurmJobRequest",
+        )
 
     prepared_at = _parse_registry_datetime(record.prepared_at, field_name="prepared_at")
     current_time = now or datetime.now(timezone.utc)
@@ -1067,14 +1051,25 @@ async def _reconcile_prepared_slurm_job(
     search_start = prepared_at - skew
     search_end = current_time + skew
 
+    identity = SchedulerJobIdentity(
+        search_token=record.job_name,
+        stable_identity=record.job_comment,
+        owner=slurm_user,
+        search_start=search_start,
+        search_end=search_end,
+        metadata={
+            "account": prepared.req.account or "",
+            "partition": prepared.req.partition,
+        },
+        timeout_seconds=scheduler_command_timeout_seconds,
+    )
+
     try:
-        candidates = await SlurmRuntime().find_jobs_by_identity(
-            job_name=record.job_name,
-            user=slurm_user,
-            search_start=search_start,
-            timeout_seconds=scheduler_command_timeout_seconds,
-        )
+        recovery_runtime = resolve_identity_recovery_runtime(prepared.submission_target.hpc_target)
+        candidates = await recovery_runtime.find_candidates_by_identity(identity)
     except asyncio.CancelledError:
+        raise
+    except IdentityRecoveryNotSupportedError:
         raise
     except Exception as exc:
         registry.record_prepared_error(
@@ -1087,10 +1082,7 @@ async def _reconcile_prepared_slurm_job(
             retry_after_seconds=max(0.0, recovery_grace_seconds - elapsed),
         ) from exc
 
-    comment_mismatches = [
-        candidate for candidate in candidates if candidate.comment != record.job_comment
-    ]
-    if comment_mismatches:
+    if any(not candidate.identity_matches for candidate in candidates):
         reason = (
             "Slurm candidate comment does not match the immutable spec-derived "
             "identity; automatic attach is forbidden"
@@ -1102,19 +1094,7 @@ async def _reconcile_prepared_slurm_job(
         )
 
     metadata_errors = [
-        error
-        for candidate in candidates
-        if (
-            error := _candidate_metadata_error(
-                candidate,
-                record=record,
-                prepared=prepared,
-                slurm_user=slurm_user,
-                search_start=search_start,
-                search_end=search_end,
-            )
-        )
-        is not None
+        candidate.metadata_error for candidate in candidates if candidate.metadata_error
     ]
     if metadata_errors:
         _raise_operator_hold(

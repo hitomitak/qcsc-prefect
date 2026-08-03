@@ -7,6 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from qcsc_prefect_adapters.base.recovery import (
+    SchedulerJobCandidate,
+    SchedulerJobIdentity,
+)
 from qcsc_prefect_adapters.base.subprocess import (
     DEFAULT_SCHEDULER_COMMAND_TIMEOUT_SECONDS,
     SchedulerCommandError,
@@ -207,6 +211,38 @@ def _deduplicate_identity_candidates(
     return list(deduplicated.values())
 
 
+def _normalized_slurm_metadata(value: str | None) -> str:
+    normalized = str(value or "").strip()
+    if normalized.lower() in {"n/a", "none", "(null)", "unknown"}:
+        return ""
+    return normalized
+
+
+def _candidate_metadata_error(
+    candidate: SlurmJobCandidate,
+    *,
+    identity: SchedulerJobIdentity,
+) -> str | None:
+    if candidate.job_name != identity.search_token:
+        return f"job {candidate.job_id} name does not match"
+    if candidate.user != identity.owner:
+        return f"job {candidate.job_id} user does not match"
+    if _normalized_slurm_metadata(candidate.account) != _normalized_slurm_metadata(
+        identity.metadata.get("account")
+    ):
+        return f"job {candidate.job_id} account does not match"
+    if candidate.partition != identity.metadata.get("partition", ""):
+        return f"job {candidate.job_id} partition does not match"
+    if candidate.submit_time is None:
+        return f"job {candidate.job_id} has no parseable submit time"
+    candidate_submit_time = candidate.submit_time.astimezone(timezone.utc)
+    if candidate_submit_time < identity.search_start.astimezone(timezone.utc):
+        return f"job {candidate.job_id} predates the recovery window"
+    if candidate_submit_time > identity.search_end.astimezone(timezone.utc):
+        return f"job {candidate.job_id} is beyond the recovery clock-skew window"
+    return None
+
+
 def _sbatch_error_is_ambiguous(exc: SchedulerCommandError) -> bool:
     message = f"{exc.stdout}\n{exc.stderr}".lower()
     return any(pattern in message for pattern in _AMBIGUOUS_SBATCH_ERROR_PATTERNS)
@@ -345,6 +381,39 @@ class SlurmRuntime:
                 *parse_sacct_identity_rows(history_stdout),
             ]
         )
+
+    async def find_candidates_by_identity(
+        self,
+        identity: SchedulerJobIdentity,
+    ) -> list[SchedulerJobCandidate]:
+        """Find and validate Slurm candidates for shared recovery logic.
+
+        Scheduler commands, allocation-row parsing, metadata normalization,
+        and submission-window checks stay inside the Slurm adapter. The caller
+        remains responsible for interpreting zero, one, or multiple candidates.
+        """
+
+        if identity.owner is None or not identity.owner.strip():
+            raise ValueError("identity.owner is required for Slurm recovery.")
+        if identity.search_end.tzinfo is None:
+            raise ValueError("identity.search_end must be timezone-aware.")
+
+        candidates = await self.find_jobs_by_identity(
+            job_name=identity.search_token,
+            user=identity.owner,
+            search_start=identity.search_start,
+            timeout_seconds=identity.timeout_seconds,
+        )
+        return [
+            SchedulerJobCandidate(
+                job_id=candidate.job_id,
+                state=candidate.state,
+                source=candidate.source,
+                identity_matches=candidate.comment == identity.stable_identity,
+                metadata_error=_candidate_metadata_error(candidate, identity=identity),
+            )
+            for candidate in candidates
+        ]
 
     async def wait_final_status(
         self,

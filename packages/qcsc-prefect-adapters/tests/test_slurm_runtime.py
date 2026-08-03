@@ -142,6 +142,81 @@ def test_find_jobs_by_identity_queries_active_and_history_and_skips_non_allocati
     assert any(argument.startswith("--starttime=") for argument in calls[1])
 
 
+def test_find_candidates_by_identity_normalizes_backend_validation(monkeypatch):
+    async def fake_find_jobs_by_identity(**_kwargs: object):
+        return [
+            runtime_mod.SlurmJobCandidate(
+                job_id="123",
+                job_name="qcsc-job",
+                comment="identity-comment",
+                user="alice",
+                account="N/A",
+                partition="compute",
+                submit_time=datetime(2026, 7, 23, 1, 2, tzinfo=timezone.utc),
+                state="RUNNING",
+                source="squeue",
+            ),
+            runtime_mod.SlurmJobCandidate(
+                job_id="124",
+                job_name="qcsc-job",
+                comment="different-comment",
+                user="alice",
+                account="",
+                partition="compute",
+                submit_time=datetime(2026, 7, 23, 1, 3, tzinfo=timezone.utc),
+                state="COMPLETED",
+                source="sacct",
+            ),
+            runtime_mod.SlurmJobCandidate(
+                job_id="125",
+                job_name="qcsc-job",
+                comment="identity-comment",
+                user="alice",
+                account="",
+                partition="other",
+                submit_time=datetime(2026, 7, 23, 1, 4, tzinfo=timezone.utc),
+                state="PENDING",
+                source="squeue",
+            ),
+            runtime_mod.SlurmJobCandidate(
+                job_id="126",
+                job_name="qcsc-job",
+                comment="identity-comment",
+                user="alice",
+                account="",
+                partition="compute",
+                submit_time=datetime(2026, 7, 23, 3, 0, tzinfo=timezone.utc),
+                state="PENDING",
+                source="squeue",
+            ),
+        ]
+
+    runtime = runtime_mod.SlurmRuntime()
+    monkeypatch.setattr(runtime, "find_jobs_by_identity", fake_find_jobs_by_identity)
+    identity = runtime_mod.SchedulerJobIdentity(
+        search_token="qcsc-job",
+        stable_identity="identity-comment",
+        owner="alice",
+        search_start=datetime(2026, 7, 23, 1, 0, tzinfo=timezone.utc),
+        search_end=datetime(2026, 7, 23, 2, 0, tzinfo=timezone.utc),
+        metadata={"account": "", "partition": "compute"},
+        timeout_seconds=30,
+    )
+
+    candidates = asyncio.run(runtime.find_candidates_by_identity(identity))
+
+    assert [(candidate.job_id, candidate.identity_matches) for candidate in candidates] == [
+        ("123", True),
+        ("124", False),
+        ("125", True),
+        ("126", True),
+    ]
+    assert candidates[0].metadata_error is None
+    assert candidates[1].metadata_error is None
+    assert candidates[2].metadata_error == "job 125 partition does not match"
+    assert candidates[3].metadata_error == ("job 126 is beyond the recovery clock-skew window")
+
+
 def test_wait_timeout_bounds_hung_sacct_command(monkeypatch):
     captured_timeout: float | None = None
 

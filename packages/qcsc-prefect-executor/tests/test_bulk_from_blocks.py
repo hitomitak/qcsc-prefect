@@ -128,7 +128,7 @@ class _SubmitRuntimeStub:
         self.error = error
         self.candidates = list(candidates or [])
         self.submit_calls: list[dict[str, Any]] = []
-        self.find_calls: list[dict[str, Any]] = []
+        self.find_calls: list[Any] = []
         self.wait_calls = 0
 
     async def submit(
@@ -154,9 +154,40 @@ class _SubmitRuntimeStub:
 
         return _SubmitResult(self.job_id)
 
-    async def find_jobs_by_identity(self, **kwargs: Any) -> list[Any]:
-        self.find_calls.append(dict(kwargs))
-        return list(self.candidates)
+    async def find_candidates_by_identity(self, identity: Any) -> list[Any]:
+        self.find_calls.append(identity)
+        normalized: list[Any] = []
+        for candidate in self.candidates:
+            if isinstance(candidate, mod.SchedulerJobCandidate):
+                normalized.append(candidate)
+                continue
+
+            metadata_error = None
+            if candidate.job_name != identity.search_token:
+                metadata_error = f"job {candidate.job_id} name does not match"
+            elif candidate.user != identity.owner:
+                metadata_error = f"job {candidate.job_id} user does not match"
+            elif candidate.account != identity.metadata.get("account", ""):
+                metadata_error = f"job {candidate.job_id} account does not match"
+            elif candidate.partition != identity.metadata.get("partition", ""):
+                metadata_error = f"job {candidate.job_id} partition does not match"
+            elif candidate.submit_time is None:
+                metadata_error = f"job {candidate.job_id} has no parseable submit time"
+            elif candidate.submit_time < identity.search_start:
+                metadata_error = f"job {candidate.job_id} predates the recovery window"
+            elif candidate.submit_time > identity.search_end:
+                metadata_error = f"job {candidate.job_id} is beyond the recovery clock-skew window"
+
+            normalized.append(
+                mod.SchedulerJobCandidate(
+                    job_id=candidate.job_id,
+                    state=candidate.state,
+                    source=candidate.source,
+                    identity_matches=candidate.comment == identity.stable_identity,
+                    metadata_error=metadata_error,
+                )
+            )
+        return normalized
 
     async def wait_final_status(self, *args, **kwargs):
         self.wait_calls += 1
@@ -178,6 +209,22 @@ def _patch_fugaku_runtime(monkeypatch, runtime: _SubmitRuntimeStub) -> list[bool
     return no_check_directory_calls
 
 
+def test_identity_recovery_dispatch_selects_slurm_runtime(monkeypatch):
+    runtime = _SubmitRuntimeStub()
+    _patch_slurm_runtime(monkeypatch, runtime)
+
+    assert mod.resolve_identity_recovery_runtime("slurm") is runtime
+
+
+@pytest.mark.parametrize("hpc_target", ["local", "fugaku", "miyabi"])
+def test_identity_recovery_dispatch_rejects_unimplemented_backends(hpc_target: str):
+    with pytest.raises(
+        mod.IdentityRecoveryNotSupportedError,
+        match="does not implement find_candidates_by_identity",
+    ):
+        mod.resolve_identity_recovery_runtime(hpc_target)
+
+
 def _slurm_candidate(
     record,
     *,
@@ -189,7 +236,7 @@ def _slurm_candidate(
     partition: str = "compute",
     submit_time: datetime | None = None,
 ):
-    return mod.SlurmJobCandidate(
+    return mod.slurm_runtime.SlurmJobCandidate(
         job_id=job_id,
         job_name=str(record.job_name),
         comment=str(record.job_comment if comment is None else comment),
@@ -533,6 +580,12 @@ def test_ambiguous_submit_preserves_prepared_then_restart_attaches(
     assert attached is not None
     assert attached.scheduler_job_id == "789"
     assert attached.status == BulkJobStatus.RUNNING
+    assert len(recovery_runtime.find_calls) == 1
+    identity = recovery_runtime.find_calls[0]
+    assert identity.search_token == prepared.job_name
+    assert identity.stable_identity == prepared.job_comment
+    assert identity.owner == "alice"
+    assert identity.metadata == {"account": "", "partition": "compute"}
 
 
 def test_ambiguous_submit_after_grace_enters_operator_hold(tmp_path: Path, monkeypatch):
