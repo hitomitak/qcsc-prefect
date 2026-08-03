@@ -11,7 +11,12 @@ def test_native_qiskit_integration_module_imports():
     assert module.QiskitRuntimeConfigError.__name__ == "QiskitRuntimeConfigError"
     assert module.QiskitEstimatorTaskError.__name__ == "QiskitEstimatorTaskError"
     assert module.QiskitJobFetchTaskError.__name__ == "QiskitJobFetchTaskError"
+    assert module.QiskitJobReference.__name__ == "QiskitJobReference"
+    assert module.QiskitOperatorActionRequired.__name__ == "QiskitOperatorActionRequired"
+    assert module.QiskitRecoveryPending.__name__ == "QiskitRecoveryPending"
     assert module.QiskitSamplerTaskError.__name__ == "QiskitSamplerTaskError"
+    assert module.QiskitSpecHashMismatchError.__name__ == "QiskitSpecHashMismatchError"
+    assert module.QiskitSubmissionJournal.__name__ == "QiskitSubmissionJournal"
     assert callable(module.build_cached_fetch_qiskit_job_result_task)
     assert callable(module.build_qiskit_cache_payload)
     assert module.QCSCEstimatorV2.__name__ == "QCSCEstimatorV2"
@@ -24,6 +29,7 @@ def test_native_qiskit_integration_module_imports():
     assert callable(module.create_qiskit_estimator_result_artifact)
     assert callable(module.build_qiskit_input_digest_payload)
     assert callable(module.build_qiskit_sampler_input_digest)
+    assert callable(module.build_qiskit_submission_tag)
     assert callable(module.create_qiskit_sampler_metadata_artifact)
     assert callable(module.extract_estimator_result_summary)
     assert callable(module.extract_sampler_result_summary)
@@ -56,6 +62,7 @@ def test_native_qiskit_placeholder_submodules_import():
         "artifacts",
         "blocks",
         "cache",
+        "durable",
         "input_digest",
         "metadata",
         "result_summaries",

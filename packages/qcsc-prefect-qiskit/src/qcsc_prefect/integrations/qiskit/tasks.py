@@ -5,6 +5,8 @@ from __future__ import annotations
 import inspect
 import logging
 from collections.abc import Iterable, Mapping
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, TypedDict
 
 from anyio.to_thread import run_sync
@@ -20,6 +22,17 @@ from qcsc_prefect.integrations.qiskit.blocks import QiskitRuntimeConfig
 from qcsc_prefect.integrations.qiskit.cache import (
     build_qiskit_cache_payload,
     qiskit_result_fetch_cache_key,
+)
+from qcsc_prefect.integrations.qiskit.durable import (
+    QiskitIdentityRecoveryRuntime,
+    QiskitJobIdentity,
+    QiskitOperatorActionRequired,
+    QiskitRecoveryPending,
+    QiskitSubmissionJournal,
+    QiskitSubmissionRecord,
+    QiskitSubmissionStatus,
+    build_qiskit_submission_tag,
+    with_qiskit_submission_tags,
 )
 from qcsc_prefect.integrations.qiskit.metadata import collect_qiskit_execution_metadata
 
@@ -60,6 +73,10 @@ class QiskitJobReference(TypedDict, total=False):
     precision: float
     input_digest: str
     options: dict[str, Any]
+    submission_key: str
+    spec_hash: str
+    job_tags: list[str]
+    journal_path: str
 
 
 async def _resolve_loaded_block(value: Any) -> Any:
@@ -181,6 +198,10 @@ def _job_reference(
     precision: float | None = None,
     input_digest: str | None = None,
     options: Mapping[str, Any] | None = None,
+    submission_key: str | None = None,
+    spec_hash: str | None = None,
+    job_tags: Iterable[str] | None = None,
+    journal_path: str | Path | None = None,
 ) -> QiskitJobReference:
     """Create a serializable job reference."""
 
@@ -197,6 +218,14 @@ def _job_reference(
         reference["precision"] = precision
     if input_digest is not None:
         reference["input_digest"] = input_digest
+    if submission_key is not None:
+        reference["submission_key"] = submission_key
+    if spec_hash is not None:
+        reference["spec_hash"] = spec_hash
+    if job_tags is not None:
+        reference["job_tags"] = list(job_tags)
+    if journal_path is not None:
+        reference["journal_path"] = str(journal_path)
     options_summary = _options_summary(options)
     if options_summary is not None:
         reference["options"] = options_summary
@@ -468,6 +497,172 @@ async def _create_result_artifacts(
     await create_qiskit_execution_markdown_artifact(metadata, key=key)
 
 
+def _durable_submission_enabled(
+    *,
+    submission_key: str | None,
+    spec_hash: str | None,
+    journal_path: str | Path | None,
+    submission_tags: Iterable[str] | None,
+) -> bool:
+    values = (submission_key, spec_hash, journal_path)
+    if all(value is None for value in values):
+        if submission_tags is not None:
+            raise ValueError(
+                "submission_tags requires submission_key, spec_hash, and journal_path."
+            )
+        return False
+    if any(value is None for value in values):
+        raise ValueError(
+            "Durable Qiskit submission requires submission_key, spec_hash, and journal_path."
+        )
+    return True
+
+
+def _durable_job_tags(options: Mapping[str, Any]) -> list[str]:
+    environment = options.get("environment")
+    if not isinstance(environment, Mapping):
+        return []
+    tags = environment.get("job_tags")
+    if tags is None or isinstance(tags, str | bytes):
+        return []
+    return [str(tag) for tag in tags]
+
+
+def _reference_from_journal_record(
+    record: QiskitSubmissionRecord,
+) -> QiskitJobReference:
+    if record.job_id is None or record.job_reference is None:
+        raise QiskitOperatorActionRequired(
+            submission_key=record.submission_key,
+            reason="SUBMITTED journal row is missing its durable job reference",
+        )
+    reference: QiskitJobReference = dict(record.job_reference)
+    if str(reference.get("job_id", "")) != record.job_id:
+        raise QiskitOperatorActionRequired(
+            submission_key=record.submission_key,
+            reason="journal job ID and durable job reference do not match",
+        )
+    return reference
+
+
+def _raise_qiskit_operator_hold(
+    *,
+    journal: QiskitSubmissionJournal,
+    submission_key: str,
+    reason: str,
+) -> None:
+    journal.mark_awaiting_operator(submission_key, reason)
+    raise QiskitOperatorActionRequired(
+        submission_key=submission_key,
+        reason=reason,
+    )
+
+
+def _recover_qiskit_submission(
+    *,
+    journal: QiskitSubmissionJournal,
+    record: QiskitSubmissionRecord,
+    service: Any,
+    backend_name: str,
+    recovery_grace_seconds: float,
+    recovery_clock_skew_margin_seconds: float,
+    reference_factory: Any,
+    now: datetime | None = None,
+) -> QiskitJobReference:
+    if record.status == QiskitSubmissionStatus.SUBMITTED:
+        return _reference_from_journal_record(record)
+    if record.status == QiskitSubmissionStatus.AWAITING_OPERATOR:
+        raise QiskitOperatorActionRequired(
+            submission_key=record.submission_key,
+            reason=record.last_error or "journal row is in durable operator hold",
+        )
+
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        raise ValueError("Qiskit recovery current time must be timezone-aware.")
+    skew = timedelta(seconds=recovery_clock_skew_margin_seconds)
+    identity = QiskitJobIdentity(
+        stable_tag=record.stable_tag,
+        backend_name=backend_name,
+        search_start=record.prepared_at - skew,
+        search_end=current_time + skew,
+    )
+    elapsed = max(0.0, (current_time - record.prepared_at).total_seconds())
+
+    try:
+        candidates = QiskitIdentityRecoveryRuntime(service).find_candidates_by_identity(identity)
+    except Exception as exc:
+        reason = (
+            f"Qiskit Runtime identity search failed; PREPARED is preserved: {type(exc).__name__}"
+        )
+        journal.record_prepared_error(record.submission_key, reason)
+        if elapsed >= recovery_grace_seconds:
+            _raise_qiskit_operator_hold(
+                journal=journal,
+                submission_key=record.submission_key,
+                reason=reason,
+            )
+        raise QiskitRecoveryPending(
+            submission_key=record.submission_key,
+            retry_after_seconds=recovery_grace_seconds - elapsed,
+        ) from exc
+
+    if any(not candidate.identity_matches for candidate in candidates):
+        _raise_qiskit_operator_hold(
+            journal=journal,
+            submission_key=record.submission_key,
+            reason=("Qiskit Runtime candidate does not carry the immutable spec-derived tag"),
+        )
+
+    metadata_errors = [
+        candidate.metadata_error for candidate in candidates if candidate.metadata_error
+    ]
+    if metadata_errors:
+        _raise_qiskit_operator_hold(
+            journal=journal,
+            submission_key=record.submission_key,
+            reason="; ".join(metadata_errors),
+        )
+
+    if len(candidates) > 1:
+        _raise_qiskit_operator_hold(
+            journal=journal,
+            submission_key=record.submission_key,
+            reason=(
+                f"Found {len(candidates)} matching Qiskit Runtime jobs; automatic "
+                "selection is forbidden"
+            ),
+        )
+    if len(candidates) == 1:
+        candidate = candidates[0]
+        reference = reference_factory(candidate.job_id)
+        journal.mark_submitted(
+            submission_key=record.submission_key,
+            spec_hash=record.spec_hash,
+            job_id=candidate.job_id,
+            job_reference=reference,
+        )
+        return reference
+
+    if elapsed < recovery_grace_seconds:
+        remaining = max(0.0, recovery_grace_seconds - elapsed)
+        journal.record_prepared_error(
+            record.submission_key,
+            "No Qiskit Runtime identity candidate is visible yet; PREPARED is preserved "
+            f"for {remaining:g} more grace seconds.",
+        )
+        raise QiskitRecoveryPending(
+            submission_key=record.submission_key,
+            retry_after_seconds=remaining,
+        )
+
+    _raise_qiskit_operator_hold(
+        journal=journal,
+        submission_key=record.submission_key,
+        reason=("No matching Qiskit Runtime job was found after the visibility grace period"),
+    )
+
+
 async def _submit_primitive_job_reference(
     *,
     runtime_block_name: str | None,
@@ -481,46 +676,183 @@ async def _submit_primitive_job_reference(
     shots: int | None = None,
     precision: float | None = None,
     input_digest: str | None = None,
+    submission_key: str | None = None,
+    spec_hash: str | None = None,
+    journal_path: str | Path | None = None,
+    submission_tags: Iterable[str] | None = None,
+    recovery_grace_seconds: float = 120.0,
+    recovery_clock_skew_margin_seconds: float = 60.0,
 ) -> QiskitJobReference:
     """Submit a primitive job and return a serializable job reference."""
 
     logger = _logger()
-    _, backend, backend_name = await _load_runtime_backend(
+    durable_enabled = _durable_submission_enabled(
+        submission_key=submission_key,
+        spec_hash=spec_hash,
+        journal_path=journal_path,
+        submission_tags=submission_tags,
+    )
+    if recovery_grace_seconds < 0:
+        raise ValueError("recovery_grace_seconds must be non-negative.")
+    if recovery_clock_skew_margin_seconds < 0:
+        raise ValueError("recovery_clock_skew_margin_seconds must be non-negative.")
+
+    effective_options = options
+    journal: QiskitSubmissionJournal | None = None
+    record: QiskitSubmissionRecord | None = None
+    claimed = False
+    stable_tag: str | None = None
+    if durable_enabled:
+        assert submission_key is not None
+        assert spec_hash is not None
+        assert journal_path is not None
+        stable_tag = build_qiskit_submission_tag(
+            submission_key=submission_key,
+            spec_hash=spec_hash,
+        )
+        effective_options = with_qiskit_submission_tags(
+            options,
+            stable_tag=stable_tag,
+            submission_tags=submission_tags,
+        )
+        journal = QiskitSubmissionJournal(journal_path)
+        record, claimed = journal.prepare(
+            submission_key=submission_key,
+            spec_hash=spec_hash,
+            stable_tag=stable_tag,
+        )
+        if record.status == QiskitSubmissionStatus.SUBMITTED:
+            return _reference_from_journal_record(record)
+        if record.status == QiskitSubmissionStatus.AWAITING_OPERATOR:
+            raise QiskitOperatorActionRequired(
+                submission_key=submission_key,
+                reason=record.last_error or "journal row is in durable operator hold",
+            )
+
+    resolved_runtime_config, backend, backend_name = await _load_runtime_backend(
         runtime_block_name,
         runtime_config=runtime_config,
         error_cls=error_cls,
     )
 
-    primitive = create_primitive_fn(backend=backend, backend_name=backend_name, options=options)
-    pub_list = list(pubs)
-    job = _run_primitive_job(
-        primitive=primitive,
-        pubs=pub_list,
-        primitive_name=primitive_name,
-        error_cls=error_cls,
+    def reference_factory(job_id: str) -> QiskitJobReference:
+        reference_kwargs: dict[str, Any] = {
+            "program_type": primitive_type,
+            "backend_name": backend_name,
+            "job_id": job_id,
+            "runtime_block_name": runtime_block_name,
+            "input_digest": input_digest,
+            "options": effective_options,
+        }
+        if shots is not None:
+            reference_kwargs["shots"] = shots
+        if precision is not None:
+            reference_kwargs["precision"] = precision
+        if durable_enabled:
+            reference_kwargs.update(
+                {
+                    "submission_key": submission_key,
+                    "spec_hash": spec_hash,
+                    "job_tags": _durable_job_tags(effective_options or {}),
+                    "journal_path": journal_path,
+                }
+            )
+        return _job_reference(**reference_kwargs)
+
+    if durable_enabled and not claimed:
+        assert journal is not None
+        assert record is not None
+        service = _get_service(
+            resolved_runtime_config,
+            runtime_block_name=runtime_block_name,
+        )
+        return _recover_qiskit_submission(
+            journal=journal,
+            record=record,
+            service=service,
+            backend_name=backend_name,
+            recovery_grace_seconds=recovery_grace_seconds,
+            recovery_clock_skew_margin_seconds=recovery_clock_skew_margin_seconds,
+            reference_factory=reference_factory,
+        )
+
+    primitive = create_primitive_fn(
+        backend=backend,
         backend_name=backend_name,
-        shots=shots,
-        precision=precision,
-        include_shots=primitive_type == "sampler",
-        include_precision=primitive_type == "estimator",
+        options=effective_options,
     )
+    pub_list = list(pubs)
+    try:
+        job = _run_primitive_job(
+            primitive=primitive,
+            pubs=pub_list,
+            primitive_name=primitive_name,
+            error_cls=error_cls,
+            backend_name=backend_name,
+            shots=shots,
+            precision=precision,
+            include_shots=primitive_type == "sampler",
+            include_precision=primitive_type == "estimator",
+        )
+    except Exception as exc:
+        if not durable_enabled:
+            raise
+        assert journal is not None
+        assert record is not None
+        journal.record_prepared_error(
+            record.submission_key,
+            "Qiskit Runtime submission outcome is unknown; automatic resubmit is "
+            f"forbidden: {type(exc).__name__}",
+        )
+        service = _get_service(
+            resolved_runtime_config,
+            runtime_block_name=runtime_block_name,
+        )
+        return _recover_qiskit_submission(
+            journal=journal,
+            record=record,
+            service=service,
+            backend_name=backend_name,
+            recovery_grace_seconds=recovery_grace_seconds,
+            recovery_clock_skew_margin_seconds=recovery_clock_skew_margin_seconds,
+            reference_factory=reference_factory,
+        )
+
     job_id = _require_job_id(job, primitive_name=primitive_name, error_cls=error_cls)
     logger.info("Submitted Qiskit %s job %s to backend %s.", primitive_name, job_id, backend_name)
+    reference = reference_factory(job_id)
+    if not durable_enabled:
+        return reference
 
-    reference_kwargs: dict[str, Any] = {
-        "program_type": primitive_type,
-        "backend_name": backend_name,
-        "job_id": job_id,
-        "runtime_block_name": runtime_block_name,
-        "input_digest": input_digest,
-        "options": options,
-    }
-    if shots is not None:
-        reference_kwargs["shots"] = shots
-    if precision is not None:
-        reference_kwargs["precision"] = precision
-
-    return _job_reference(**reference_kwargs)
+    assert journal is not None
+    assert record is not None
+    try:
+        journal.mark_submitted(
+            submission_key=record.submission_key,
+            spec_hash=record.spec_hash,
+            job_id=job_id,
+            job_reference=reference,
+        )
+    except Exception as exc:
+        journal.record_prepared_error(
+            record.submission_key,
+            "Qiskit Runtime returned a job ID, but journal persistence failed; "
+            f"automatic resubmit is forbidden: {type(exc).__name__}",
+        )
+        service = _get_service(
+            resolved_runtime_config,
+            runtime_block_name=runtime_block_name,
+        )
+        return _recover_qiskit_submission(
+            journal=journal,
+            record=record,
+            service=service,
+            backend_name=backend_name,
+            recovery_grace_seconds=recovery_grace_seconds,
+            recovery_clock_skew_margin_seconds=recovery_clock_skew_margin_seconds,
+            reference_factory=reference_factory,
+        )
+    return reference
 
 
 @task(name="submit-qiskit-sampler-job")
@@ -532,6 +864,12 @@ async def submit_sampler_job_task(
     runtime_config: QiskitRuntimeConfig | None = None,
     *,
     input_digest: str | None = None,
+    submission_key: str | None = None,
+    spec_hash: str | None = None,
+    journal_path: str | Path | None = None,
+    submission_tags: Iterable[str] | None = None,
+    recovery_grace_seconds: float = 120.0,
+    recovery_clock_skew_margin_seconds: float = 60.0,
 ) -> QiskitJobReference:
     """Submit a native Qiskit Runtime ``SamplerV2`` job without waiting.
 
@@ -543,6 +881,12 @@ async def submit_sampler_job_task(
         runtime_config: Inline runtime configuration. Mutually exclusive with
             ``runtime_block_name``.
         input_digest: Optional stable digest used by submit cache helpers.
+        submission_key: Stable caller-defined key that enables durable mode.
+        spec_hash: Immutable resolved-spec hash for ``submission_key``.
+        journal_path: Shared-filesystem SQLite journal path.
+        submission_tags: Optional additional non-secret Runtime job tags.
+        recovery_grace_seconds: Visibility grace before zero matches enter hold.
+        recovery_clock_skew_margin_seconds: Search-window clock-skew margin.
 
     Returns:
         A serializable job reference containing primitive, backend, job ID and
@@ -559,6 +903,12 @@ async def submit_sampler_job_task(
         options=options,
         shots=shots,
         input_digest=input_digest,
+        submission_key=submission_key,
+        spec_hash=spec_hash,
+        journal_path=journal_path,
+        submission_tags=submission_tags,
+        recovery_grace_seconds=recovery_grace_seconds,
+        recovery_clock_skew_margin_seconds=recovery_clock_skew_margin_seconds,
     )
 
 
@@ -571,6 +921,12 @@ async def submit_estimator_job_task(
     runtime_config: QiskitRuntimeConfig | None = None,
     *,
     input_digest: str | None = None,
+    submission_key: str | None = None,
+    spec_hash: str | None = None,
+    journal_path: str | Path | None = None,
+    submission_tags: Iterable[str] | None = None,
+    recovery_grace_seconds: float = 120.0,
+    recovery_clock_skew_margin_seconds: float = 60.0,
 ) -> QiskitJobReference:
     """Submit a native Qiskit Runtime ``EstimatorV2`` job without waiting.
 
@@ -582,6 +938,12 @@ async def submit_estimator_job_task(
         runtime_config: Inline runtime configuration. Mutually exclusive with
             ``runtime_block_name``.
         input_digest: Optional stable digest used by submit cache helpers.
+        submission_key: Stable caller-defined key that enables durable mode.
+        spec_hash: Immutable resolved-spec hash for ``submission_key``.
+        journal_path: Shared-filesystem SQLite journal path.
+        submission_tags: Optional additional non-secret Runtime job tags.
+        recovery_grace_seconds: Visibility grace before zero matches enter hold.
+        recovery_clock_skew_margin_seconds: Search-window clock-skew margin.
 
     Returns:
         A serializable job reference containing primitive, backend, job ID and
@@ -598,6 +960,12 @@ async def submit_estimator_job_task(
         options=options,
         precision=precision,
         input_digest=input_digest,
+        submission_key=submission_key,
+        spec_hash=spec_hash,
+        journal_path=journal_path,
+        submission_tags=submission_tags,
+        recovery_grace_seconds=recovery_grace_seconds,
+        recovery_clock_skew_margin_seconds=recovery_clock_skew_margin_seconds,
     )
 
 

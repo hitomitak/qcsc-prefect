@@ -67,6 +67,8 @@ def qiskit_cache_key_from_payload(payload: Mapping[str, Any]) -> str:
 def qiskit_sampler_submit_cache_key(_context: Any, parameters: Mapping[str, Any]) -> str | None:
     """Prefect ``cache_key_fn`` helper for native Sampler submit tasks."""
 
+    if _durable_submission_parameters_present(parameters):
+        return None
     input_digest = _parameter(parameters, "input_digest")
     if not input_digest:
         return None
@@ -88,6 +90,8 @@ def qiskit_sampler_submit_cache_key(_context: Any, parameters: Mapping[str, Any]
 def qiskit_estimator_submit_cache_key(_context: Any, parameters: Mapping[str, Any]) -> str | None:
     """Prefect ``cache_key_fn`` helper for native Estimator submit tasks."""
 
+    if _durable_submission_parameters_present(parameters):
+        return None
     input_digest = _parameter(parameters, "input_digest")
     if not input_digest:
         return None
@@ -190,3 +194,10 @@ def _reference_parameter(reference: Any, key: str) -> Any | None:
     if isinstance(reference, Mapping):
         return reference.get(key)
     return None
+
+
+def _durable_submission_parameters_present(parameters: Mapping[str, Any]) -> bool:
+    return any(
+        _parameter(parameters, key) is not None
+        for key in ("submission_key", "spec_hash", "journal_path")
+    )

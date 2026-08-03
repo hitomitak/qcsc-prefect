@@ -166,10 +166,21 @@ def test_missing_input_digest_returns_none_for_submit_cache_helpers():
     assert qiskit_estimator_submit_cache_key(None, {"precision": 0.01}) is None
 
 
+def test_durable_submit_disables_prefect_submit_cache():
+    parameters = {
+        "input_digest": "digest-abc",
+        "submission_key": "submission-1",
+        "spec_hash": "spec-v1:abc",
+        "journal_path": "/shared/journal.sqlite",
+    }
+
+    assert qiskit_sampler_submit_cache_key(None, parameters) is None
+    assert qiskit_estimator_submit_cache_key(None, parameters) is None
+
+
 def test_missing_job_id_returns_none_for_fetch_cache_helper():
     assert (
-        qiskit_result_fetch_cache_key(None, {"job_reference": {"program_type": "sampler"}})
-        is None
+        qiskit_result_fetch_cache_key(None, {"job_reference": {"program_type": "sampler"}}) is None
     )
 
 
