@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from qcsc_prefect_executor import from_blocks as mod
 from qcsc_prefect_executor.bulk.exceptions import (
+    CancellationRequestedError,
     OperatorActionRequired,
     QueueFullError,
     RecoveryPending,
@@ -826,6 +827,33 @@ def test_cancelled_submit_preserves_prepared(tmp_path: Path, monkeypatch):
     record = registry.get_job("job-1")
     assert record is not None
     assert record.status == BulkJobStatus.PREPARED
+
+
+def test_cancel_intent_prevents_new_slurm_submit(tmp_path: Path, monkeypatch):
+    _patch_block_loading(monkeypatch)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    registry.upsert_jobs([BulkJobSpec(job_key="job-1", work_dir=tmp_path / "job-1")])
+    registry.request_cancel("job-1", requested_by="operator", reason="do not submit")
+    runtime = _SubmitRuntimeStub(job_id="must-not-submit")
+    _patch_slurm_runtime(monkeypatch, runtime)
+
+    with pytest.raises(CancellationRequestedError, match="submission is forbidden"):
+        asyncio.run(
+            mod.submit_job_from_blocks(
+                command_block="cmd",
+                execution_profile_block="exec",
+                hpc_profile_block="hpc",
+                work_dir=tmp_path / "job-1",
+                job_key="job-1",
+                registry=registry,
+                slurm_user="alice",
+            )
+        )
+
+    assert runtime.submit_calls == []
+    record = registry.get_job("job-1")
+    assert record is not None
+    assert record.status == BulkJobStatus.PENDING
 
 
 def test_concurrent_submit_callers_invoke_scheduler_once(tmp_path: Path, monkeypatch):

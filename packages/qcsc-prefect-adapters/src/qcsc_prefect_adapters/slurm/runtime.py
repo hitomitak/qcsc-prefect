@@ -39,6 +39,22 @@ class CancelError(RuntimeError):
     """Raised when job cancellation fails."""
 
 
+class CancelIntentRequiredError(CancelError):
+    """Raised when low-level cancellation lacks a durable-intent confirmation."""
+
+
+class CancelNotFoundError(CancelError):
+    """Raised when Slurm proves that the requested allocation is not present."""
+
+
+class TemporaryCancelError(CancelError):
+    """Raised when Slurm cancellation failed for a potentially transient reason."""
+
+
+class CancelRejectedError(CancelError):
+    """Raised when Slurm rejects a cancellation for a non-transient reason."""
+
+
 async def run_command(
     *args: str,
     cwd: Path | None = None,
@@ -106,6 +122,14 @@ _AMBIGUOUS_SBATCH_ERROR_PATTERNS = (
     "unable to contact",
     "communication",
     "slurmctld",
+)
+_TEMPORARY_CANCEL_ERROR_PATTERNS = _AMBIGUOUS_SBATCH_ERROR_PATTERNS
+_CANCEL_NOT_FOUND_ERROR_PATTERNS = (
+    "invalid job id specified",
+    "invalid job id",
+    "unknown job id",
+    "job not found",
+    "job does not exist",
 )
 _SQUEUE_IDENTITY_FORMAT = "%i|%j|%k|%u|%a|%P|%V|%T"
 _SACCT_IDENTITY_FORMAT = "JobIDRaw,JobName,Comment,User,Account,Partition,Submit,State"
@@ -349,70 +373,94 @@ class SlurmRuntime:
         """
 
         start = asyncio.get_running_loop().time()
-        try:
-            while True:
-                command_timeout = DEFAULT_SCHEDULER_COMMAND_TIMEOUT_SECONDS
-                wait_deadline_limits_command = False
-                if timeout_seconds is not None:
-                    now = asyncio.get_running_loop().time()
-                    remaining = timeout_seconds - (now - start)
-                    if remaining <= 0:
-                        raise WaitTimeout(f"timeout waiting for job_id={job_id}")
-                    if remaining <= command_timeout:
-                        command_timeout = remaining
-                        wait_deadline_limits_command = True
+        while True:
+            command_timeout = DEFAULT_SCHEDULER_COMMAND_TIMEOUT_SECONDS
+            wait_deadline_limits_command = False
+            if timeout_seconds is not None:
+                now = asyncio.get_running_loop().time()
+                remaining = timeout_seconds - (now - start)
+                if remaining <= 0:
+                    raise WaitTimeout(f"timeout waiting for job_id={job_id}")
+                if remaining <= command_timeout:
+                    command_timeout = remaining
+                    wait_deadline_limits_command = True
 
-                try:
-                    stdout = await run_command(
-                        "sacct",
-                        "-j",
-                        job_id,
-                        "--format=JobID,State,ExitCode,Elapsed,AllocCPUS,NodeList",
-                        "--parsable2",
-                        "--noheader",
-                        timeout_seconds=command_timeout,
-                    )
-                except SchedulerCommandTimeout as exc:
-                    if wait_deadline_limits_command:
-                        raise WaitTimeout(f"timeout waiting for job_id={job_id}") from exc
-                    raise
+            try:
+                stdout = await run_command(
+                    "sacct",
+                    "-j",
+                    job_id,
+                    "--format=JobID,State,ExitCode,Elapsed,AllocCPUS,NodeList",
+                    "--parsable2",
+                    "--noheader",
+                    timeout_seconds=command_timeout,
+                )
+            except SchedulerCommandTimeout as exc:
+                if wait_deadline_limits_command:
+                    raise WaitTimeout(f"timeout waiting for job_id={job_id}") from exc
+                raise
 
-                for line in stdout.splitlines():
-                    fields = line.split("|")
-                    if len(fields) < 6:
-                        continue
-                    job_id_field = fields[0].strip()
-                    if not job_id_field or job_id_field != job_id:
-                        continue
-                    state = fields[1].strip()
-                    out = {
-                        "JobID": job_id_field,
-                        "State": state,
-                        "ExitCode": fields[2].strip(),
-                        "Elapsed": fields[3].strip(),
-                        "AllocCPUS": fields[4].strip(),
-                        "NodeList": fields[5].strip(),
-                    }
-                    if _is_terminal_state(state):
-                        return out
+            for line in stdout.splitlines():
+                fields = line.split("|")
+                if len(fields) < 6:
+                    continue
+                job_id_field = fields[0].strip()
+                if not job_id_field or job_id_field != job_id:
+                    continue
+                state = fields[1].strip()
+                out = {
+                    "JobID": job_id_field,
+                    "State": state,
+                    "ExitCode": fields[2].strip(),
+                    "Elapsed": fields[3].strip(),
+                    "AllocCPUS": fields[4].strip(),
+                    "NodeList": fields[5].strip(),
+                }
+                if _is_terminal_state(state):
+                    return out
 
-                await asyncio.sleep(watch_poll_interval)
+            await asyncio.sleep(watch_poll_interval)
 
-        except asyncio.CancelledError:
-            await run_command("scancel", job_id)
-            return {}
-
-    async def cancel(self, job_id: str) -> None:
+    async def cancel(
+        self,
+        job_id: str,
+        *,
+        intent_confirmed: bool = False,
+        timeout_seconds: float | None = DEFAULT_SCHEDULER_COMMAND_TIMEOUT_SECONDS,
+    ) -> None:
         """Cancel a Slurm job using ``scancel``.
 
         Args:
             job_id: Target Slurm job id.
 
         Raises:
-            CancelError: If ``scancel`` exits with an error.
+            CancelIntentRequiredError: If durable cancellation intent was not
+                confirmed before calling this low-level scheduler primitive.
+            CancelNotFoundError: If Slurm reports that the allocation is absent.
+            TemporaryCancelError: If controller communication may be retried by
+                an explicit operator decision.
+            CancelRejectedError: If Slurm rejects the request definitively.
         """
 
+        if not intent_confirmed:
+            raise CancelIntentRequiredError(
+                "scancel requires a durable CANCEL_REQUESTED registry intent"
+            )
+
         try:
-            await run_command("scancel", job_id)
-        except Exception as e:
-            raise CancelError(f"scancel failed for job_id={job_id}") from e
+            await run_command("scancel", job_id, timeout_seconds=timeout_seconds)
+        except asyncio.CancelledError:
+            raise
+        except SchedulerCommandTimeout as exc:
+            raise TemporaryCancelError(f"scancel timed out for job_id={job_id}") from exc
+        except SchedulerCommandError as exc:
+            message = f"{exc.stdout}\n{exc.stderr}".lower()
+            if any(pattern in message for pattern in _CANCEL_NOT_FOUND_ERROR_PATTERNS):
+                raise CancelNotFoundError(f"Slurm job_id={job_id} was not found") from exc
+            if any(pattern in message for pattern in _TEMPORARY_CANCEL_ERROR_PATTERNS):
+                raise TemporaryCancelError(
+                    f"scancel temporarily failed for job_id={job_id}"
+                ) from exc
+            raise CancelRejectedError(f"scancel rejected job_id={job_id}") from exc
+        except Exception as exc:
+            raise CancelError(f"scancel failed for job_id={job_id}") from exc

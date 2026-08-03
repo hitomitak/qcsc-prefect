@@ -168,16 +168,88 @@ def test_wait_timeout_bounds_hung_sacct_command(monkeypatch):
     assert 0 < captured_timeout <= 2.0
 
 
-def test_cancel_invokes_scancel(monkeypatch):
+def test_wait_cancellation_propagates_without_scancel(monkeypatch):
     calls: list[tuple[str, ...]] = []
 
-    async def fake_run_command(*args: str, cwd: Path | None = None) -> str:
+    async def fake_run_command(*args: str, **_kwargs: object) -> str:
+        calls.append(args)
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(runtime_mod, "run_command", fake_run_command)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(runtime_mod.SlurmRuntime().wait_final_status("12345"))
+
+    assert calls == [
+        (
+            "sacct",
+            "-j",
+            "12345",
+            "--format=JobID,State,ExitCode,Elapsed,AllocCPUS,NodeList",
+            "--parsable2",
+            "--noheader",
+        )
+    ]
+
+
+def test_cancel_requires_durable_intent_confirmation(monkeypatch):
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_run_command(*args: str, **_kwargs: object) -> str:
+        calls.append(args)
+        return ""
+
+    monkeypatch.setattr(runtime_mod, "run_command", fake_run_command)
+
+    with pytest.raises(runtime_mod.CancelIntentRequiredError, match="durable"):
+        asyncio.run(runtime_mod.SlurmRuntime().cancel("12345"))
+
+    assert calls == []
+
+
+def test_confirmed_cancel_invokes_scancel(monkeypatch):
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_run_command(*args: str, **_kwargs: object) -> str:
         calls.append(args)
         return ""
 
     monkeypatch.setattr(runtime_mod, "run_command", fake_run_command)
     rt = runtime_mod.SlurmRuntime()
 
-    asyncio.run(rt.cancel("12345"))
+    asyncio.run(rt.cancel("12345", intent_confirmed=True))
 
     assert calls == [("scancel", "12345")]
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected_error"),
+    [
+        ("scancel: error: Invalid job id specified", runtime_mod.CancelNotFoundError),
+        ("Unable to contact slurm controller", runtime_mod.TemporaryCancelError),
+        ("Access/permission denied", runtime_mod.CancelRejectedError),
+    ],
+)
+def test_cancel_classifies_scheduler_responses(monkeypatch, stderr, expected_error):
+    async def fake_run_command(*args: str, **_kwargs: object) -> str:
+        raise runtime_mod.SchedulerCommandError(
+            args=tuple(args),
+            returncode=1,
+            stdout="",
+            stderr=stderr,
+        )
+
+    monkeypatch.setattr(runtime_mod, "run_command", fake_run_command)
+
+    with pytest.raises(expected_error):
+        asyncio.run(runtime_mod.SlurmRuntime().cancel("12345", intent_confirmed=True))
+
+
+def test_cancel_timeout_is_temporary(monkeypatch):
+    async def fake_run_command(*_args: str, **_kwargs: object) -> str:
+        raise runtime_mod.SchedulerCommandTimeout("timeout")
+
+    monkeypatch.setattr(runtime_mod, "run_command", fake_run_command)
+
+    with pytest.raises(runtime_mod.TemporaryCancelError):
+        asyncio.run(runtime_mod.SlurmRuntime().cancel("12345", intent_confirmed=True))

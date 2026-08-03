@@ -27,12 +27,28 @@ from qcsc_prefect_adapters.slurm.builder import (
     SlurmJobRequest,
     build_slurm_job_identity,
 )
-from qcsc_prefect_adapters.slurm.runtime import SlurmJobCandidate, SlurmRuntime
+from qcsc_prefect_adapters.slurm.runtime import (
+    CancelError as SlurmCancelError,
+)
+from qcsc_prefect_adapters.slurm.runtime import (
+    CancelNotFoundError as SlurmCancelNotFoundError,
+)
+from qcsc_prefect_adapters.slurm.runtime import (
+    CancelRejectedError as SlurmCancelRejectedError,
+)
+from qcsc_prefect_adapters.slurm.runtime import (
+    SlurmJobCandidate,
+    SlurmRuntime,
+)
+from qcsc_prefect_adapters.slurm.runtime import (
+    TemporaryCancelError as SlurmTemporaryCancelError,
+)
 from qcsc_prefect_blocks.common.blocks import CommandBlock, ExecutionProfileBlock, HPCProfileBlock
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 from qcsc_prefect_core.queue import QueueAwareSubmitGate, QueueProbe
 
 from qcsc_prefect_executor.bulk.exceptions import (
+    CancellationRequestedError,
     DuplicateJobKeyError,
     OperatorActionRequired,
     QueueFullError,
@@ -44,6 +60,8 @@ from qcsc_prefect_executor.bulk.exceptions import (
     TemporarySubmitError,
 )
 from qcsc_prefect_executor.bulk.models import (
+    BulkCancelOutcome,
+    BulkJobDesiredState,
     BulkJobRecord,
     BulkJobSpec,
     BulkJobStatus,
@@ -407,6 +425,8 @@ def _ensure_registry_can_submit(*, registry: BulkJobRegistry, job_key: str) -> N
     record = registry.get_job(job_key)
     if record is None:
         return
+    if record.desired_state == BulkJobDesiredState.CANCEL_REQUESTED:
+        raise CancellationRequestedError(job_key=job_key)
     if record.status.is_submit_candidate:
         return
 
@@ -502,11 +522,12 @@ def _build_bulk_run_result(
         for record in registry.get_all_jobs()
         if record.status == BulkJobStatus.FAILED
     ]
-    operator_action_required_jobs = [
-        record.job_key
-        for record in registry.get_all_jobs()
-        if record.status == BulkJobStatus.AWAITING_OPERATOR
-    ]
+    operator_action_required_jobs = list(
+        dict.fromkeys(
+            [record.job_key for record in registry.get_awaiting_operator_jobs()]
+            + [record.job_key for record in registry.get_ambiguous_cancel_dispatches()]
+        )
+    )
     return BulkRunResult(
         total_jobs=total_jobs,
         status_counts=counts,
@@ -528,7 +549,7 @@ def _has_failed_jobs(registry: BulkJobRegistry) -> bool:
 
 
 def _has_operator_holds(registry: BulkJobRegistry) -> bool:
-    return registry.status_counts().get(BulkJobStatus.AWAITING_OPERATOR.value, 0) > 0
+    return bool(registry.get_awaiting_operator_jobs() or registry.get_ambiguous_cancel_dispatches())
 
 
 def _safe_bulk_group_key(value: str) -> str:
@@ -2091,6 +2112,141 @@ async def monitor_jobs_many(
     return results
 
 
+async def execute_cancel_request(
+    *,
+    registry: BulkJobRegistry,
+    job_key: str,
+    hpc_profile_block: str,
+    scheduler_command_timeout_seconds: float | None = (DEFAULT_SCHEDULER_COMMAND_TIMEOUT_SECONDS),
+) -> BulkCancelOutcome | None:
+    """Execute one durable Slurm cancellation intent at most once.
+
+    No scheduler command is issued unless ``request_cancel()`` has persisted
+    ``CANCEL_REQUESTED`` and the registry contains a scheduler job ID. The
+    dispatch claim is durable, so a cancelled/crashed executor leaves
+    ``DISPATCHING`` for operator reconciliation instead of calling ``scancel``
+    again automatically.
+    """
+
+    record = registry.get_job(job_key)
+    if record is None:
+        raise KeyError(f"Unknown bulk job key {job_key!r}.")
+    if record.desired_state != BulkJobDesiredState.CANCEL_REQUESTED:
+        return None
+    if record.cancel_outcome is not None:
+        return record.cancel_outcome
+
+    if record.status.is_terminal:
+        registry.record_terminal_cancel_outcome(job_key)
+        updated = registry.get_job(job_key)
+        return updated.cancel_outcome if updated is not None else None
+
+    scheduler_job_id = record.effective_scheduler_job_id
+    if scheduler_job_id is None:
+        if registry.cancel_without_scheduler_submission(job_key):
+            return BulkCancelOutcome.NOT_SUBMITTED
+        # PREPARED without an ID may already have caused an external submit.
+        # Reconciliation must establish the ID before cancellation can run.
+        return None
+
+    if scheduler_command_timeout_seconds is not None and scheduler_command_timeout_seconds <= 0:
+        raise ValueError("scheduler_command_timeout_seconds must be greater than 0.")
+
+    hpc_target = await resolve_hpc_target(hpc_profile_block_name=hpc_profile_block)
+    if hpc_target != "slurm":
+        raise NotImplementedError(
+            "Durable cancel execution is implemented only for hpc_target='slurm'."
+        )
+
+    try:
+        scheduler_rows = await _query_scheduler_statuses(
+            hpc_target="slurm",
+            scheduler_job_ids=[str(scheduler_job_id)],
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        scheduler_rows = {}
+
+    scheduler_row = scheduler_rows.get(str(scheduler_job_id))
+    if scheduler_row is not None:
+        scheduler_status = _bulk_status_from_scheduler_row("slurm", scheduler_row)
+        if scheduler_status.is_terminal:
+            recorded_terminal = registry.record_terminal_cancel_outcome(job_key)
+            status, error = _monitor_status_from_scheduler_row(
+                hpc_target="slurm",
+                row=scheduler_row,
+                record=record,
+            )
+            _update_registry_for_monitor_status(
+                registry=registry,
+                job_key=job_key,
+                status=status,
+                error=error,
+            )
+            if recorded_terminal:
+                return BulkCancelOutcome.ALREADY_TERMINAL
+            updated = registry.get_job(job_key)
+            return updated.cancel_outcome if updated is not None else None
+
+    if not registry.claim_cancel_dispatch(job_key):
+        updated = registry.get_job(job_key)
+        return updated.cancel_outcome if updated is not None else None
+
+    runtime = SlurmRuntime()
+    try:
+        await runtime.cancel(
+            str(scheduler_job_id),
+            intent_confirmed=True,
+            timeout_seconds=scheduler_command_timeout_seconds,
+        )
+    except asyncio.CancelledError:
+        # The remote outcome is ambiguous. Keep DISPATCHING so no automatic
+        # retry can issue another scheduler side effect.
+        raise
+    except SlurmCancelNotFoundError as exc:
+        outcome = BulkCancelOutcome.NOT_FOUND
+        registry.record_cancel_outcome(job_key, outcome, error=str(exc))
+        registry.mark_awaiting_operator(job_key, str(exc))
+        return outcome
+    except SlurmTemporaryCancelError as exc:
+        outcome = BulkCancelOutcome.TEMPORARY_FAILURE
+        registry.record_cancel_outcome(job_key, outcome, error=str(exc))
+        registry.mark_awaiting_operator(job_key, str(exc))
+        return outcome
+    except (SlurmCancelRejectedError, SlurmCancelError) as exc:
+        outcome = BulkCancelOutcome.REJECTED
+        registry.record_cancel_outcome(job_key, outcome, error=str(exc))
+        registry.mark_awaiting_operator(job_key, str(exc))
+        return outcome
+
+    if not registry.record_cancel_outcome(job_key, BulkCancelOutcome.REQUEST_ACCEPTED):
+        raise RuntimeError(
+            f"scancel accepted job {scheduler_job_id}, but its durable outcome "
+            f"could not be recorded for {job_key!r}."
+        )
+    return BulkCancelOutcome.REQUEST_ACCEPTED
+
+
+async def execute_cancel_requests(
+    *,
+    registry: BulkJobRegistry,
+    hpc_profile_block: str,
+    scheduler_command_timeout_seconds: float | None = (DEFAULT_SCHEDULER_COMMAND_TIMEOUT_SECONDS),
+) -> dict[str, BulkCancelOutcome | None]:
+    """Process each unclaimed durable cancellation intent once."""
+
+    results: dict[str, BulkCancelOutcome | None] = {}
+    for record in registry.get_pending_cancel_requests():
+        results[record.job_key] = await execute_cancel_request(
+            registry=registry,
+            job_key=record.job_key,
+            hpc_profile_block=effective_hpc_profile_block(record, hpc_profile_block),
+            scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+        )
+    return results
+
+
 async def _reconcile_bulk_prepared_jobs(
     *,
     registry: BulkJobRegistry,
@@ -2213,6 +2369,12 @@ async def run_jobs_from_blocks_bulk(
     registry.refresh_completed_jobs_from_outputs()
     total_jobs = len({job.job_key for job in jobs})
 
+    await execute_cancel_requests(
+        registry=registry,
+        hpc_profile_block=hpc_profile_block,
+        scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+    )
+
     if (
         registry.all_terminal()
         or _has_operator_holds(registry)
@@ -2231,6 +2393,11 @@ async def run_jobs_from_blocks_bulk(
         scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
     )
     registry.refresh_completed_jobs_from_outputs()
+    await execute_cancel_requests(
+        registry=registry,
+        hpc_profile_block=hpc_profile_block,
+        scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+    )
     if recovery_pending or _has_operator_holds(registry) or registry.all_terminal():
         return _build_bulk_run_result(registry=registry, total_jobs=total_jobs)
 
@@ -2262,6 +2429,14 @@ async def run_jobs_from_blocks_bulk(
     next_refill_at = 0.0
 
     while not registry.all_terminal():
+        await execute_cancel_requests(
+            registry=registry,
+            hpc_profile_block=hpc_profile_block,
+            scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+        )
+        if _has_operator_holds(registry) or registry.all_terminal():
+            return _build_bulk_run_result(registry=registry, total_jobs=total_jobs)
+
         monitorable_jobs = [
             job for job in registry.get_monitorable_jobs() if job.effective_scheduler_job_id
         ]
@@ -2374,6 +2549,19 @@ async def run_jobs_from_blocks_bulk(
                             break
                         except SpecHashMismatchError:
                             raise
+                        except CancellationRequestedError:
+                            await execute_cancel_request(
+                                registry=registry,
+                                job_key=job.job_key,
+                                hpc_profile_block=effective_hpc_profile_block(
+                                    job,
+                                    hpc_profile_block,
+                                ),
+                                scheduler_command_timeout_seconds=(
+                                    scheduler_command_timeout_seconds
+                                ),
+                            )
+                            continue
                         except Exception as exc:
                             _mark_failed_if_needed(
                                 registry=registry,

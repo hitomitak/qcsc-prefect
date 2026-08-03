@@ -53,6 +53,18 @@ class BulkJobDesiredState(str, Enum):
     CANCEL_REQUESTED = "CANCEL_REQUESTED"
 
 
+class BulkCancelOutcome(str, Enum):
+    """Durable outcome of processing one explicit cancellation request."""
+
+    NOT_SUBMITTED = "NOT_SUBMITTED"
+    DISPATCHING = "DISPATCHING"
+    REQUEST_ACCEPTED = "REQUEST_ACCEPTED"
+    ALREADY_TERMINAL = "ALREADY_TERMINAL"
+    NOT_FOUND = "NOT_FOUND"
+    TEMPORARY_FAILURE = "TEMPORARY_FAILURE"
+    REJECTED = "REJECTED"
+
+
 TERMINAL_BULK_JOB_STATUSES = frozenset(
     {
         BulkJobStatus.SUCCEEDED,
@@ -183,6 +195,11 @@ class BulkJobRecord:
     cancel_requested_at: str | None = None
     cancel_requested_by: str | None = None
     cancel_reason: str | None = None
+    cancel_attempts: int = 0
+    cancel_dispatch_started_at: str | None = None
+    cancel_outcome: BulkCancelOutcome | None = None
+    cancel_outcome_at: str | None = None
+    cancel_last_error: str | None = None
 
     @property
     def is_terminal(self) -> bool:

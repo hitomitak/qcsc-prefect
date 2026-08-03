@@ -15,6 +15,7 @@ from qcsc_prefect_executor.bulk.models import (
     ACTIVE_BULK_JOB_STATUSES,
     SUBMIT_CANDIDATE_BULK_JOB_STATUSES,
     TERMINAL_BULK_JOB_STATUSES,
+    BulkCancelOutcome,
     BulkJobDesiredState,
     BulkJobRecord,
     BulkJobSpec,
@@ -43,6 +44,15 @@ def _coerce_desired_state(value: object) -> BulkJobDesiredState:
         return BulkJobDesiredState(str(value))
     except ValueError:
         return BulkJobDesiredState.RUN
+
+
+def _coerce_cancel_outcome(value: object) -> BulkCancelOutcome | None:
+    if value is None:
+        return None
+    try:
+        return BulkCancelOutcome(str(value))
+    except ValueError:
+        return None
 
 
 def _json_dumps(value: Any) -> str:
@@ -121,6 +131,11 @@ class BulkJobRegistry:
                     cancel_requested_at TEXT,
                     cancel_requested_by TEXT,
                     cancel_reason TEXT,
+                    cancel_attempts INTEGER NOT NULL DEFAULT 0,
+                    cancel_dispatch_started_at TEXT,
+                    cancel_outcome TEXT,
+                    cancel_outcome_at TEXT,
+                    cancel_last_error TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     submitted_at TEXT,
@@ -190,6 +205,11 @@ class BulkJobRegistry:
             "cancel_requested_at": "cancel_requested_at TEXT",
             "cancel_requested_by": "cancel_requested_by TEXT",
             "cancel_reason": "cancel_reason TEXT",
+            "cancel_attempts": "cancel_attempts INTEGER NOT NULL DEFAULT 0",
+            "cancel_dispatch_started_at": "cancel_dispatch_started_at TEXT",
+            "cancel_outcome": "cancel_outcome TEXT",
+            "cancel_outcome_at": "cancel_outcome_at TEXT",
+            "cancel_last_error": "cancel_last_error TEXT",
         }
         for column_name, column_def in column_defs.items():
             if column_name not in existing_columns:
@@ -534,11 +554,12 @@ class BulkJobRegistry:
 
         statuses = _status_values(tuple(SUBMIT_CANDIDATE_BULK_JOB_STATUSES))
         where = (
-            f"status IN ({self._placeholders(statuses)}) AND submit_attempts < max_submit_attempts"
+            f"status IN ({self._placeholders(statuses)}) "
+            "AND submit_attempts < max_submit_attempts AND desired_state = ?"
         )
         return self._fetch_records(
             where,
-            [*statuses, int(limit)],
+            [*statuses, BulkJobDesiredState.RUN.value, int(limit)],
             "priority DESC, created_at, job_key LIMIT ?",
         )
 
@@ -548,16 +569,16 @@ class BulkJobRegistry:
 
         statuses = _status_values(tuple(SUBMIT_CANDIDATE_BULK_JOB_STATUSES))
         return self._fetch_records(
-            f"status IN ({self._placeholders(statuses)})",
-            [*statuses, int(limit)],
+            f"status IN ({self._placeholders(statuses)}) AND desired_state = ?",
+            [*statuses, BulkJobDesiredState.RUN.value, int(limit)],
             "created_at ASC, rowid ASC, job_key ASC LIMIT ?",
         )
 
     def count_submit_candidates(self) -> int:
         statuses = _status_values(tuple(SUBMIT_CANDIDATE_BULK_JOB_STATUSES))
         return self._count_records(
-            f"status IN ({self._placeholders(statuses)})",
-            statuses,
+            f"status IN ({self._placeholders(statuses)}) AND desired_state = ?",
+            [*statuses, BulkJobDesiredState.RUN.value],
         )
 
     def count_active_jobs(self) -> int:
@@ -604,6 +625,217 @@ class BulkJobRegistry:
             "updated_at, job_key",
         )
 
+    def get_pending_cancel_requests(self) -> list[BulkJobRecord]:
+        """Return explicit cancellation intents not yet claimed by an executor."""
+
+        return self._fetch_records(
+            "desired_state = ? AND cancel_outcome IS NULL",
+            [BulkJobDesiredState.CANCEL_REQUESTED.value],
+            "cancel_requested_at, created_at, job_key",
+        )
+
+    def get_ambiguous_cancel_dispatches(self) -> list[BulkJobRecord]:
+        """Return cancellation claims whose remote outcome may be unknown."""
+
+        return self._fetch_records(
+            "desired_state = ? AND cancel_outcome = ?",
+            [
+                BulkJobDesiredState.CANCEL_REQUESTED.value,
+                BulkCancelOutcome.DISPATCHING.value,
+            ],
+            "cancel_dispatch_started_at, job_key",
+        )
+
+    def request_cancel(self, job_key: str, *, requested_by: str, reason: str) -> bool:
+        """Persist one explicit cancellation intent atomically and idempotently.
+
+        The first caller records the operator identity and reason. Later calls
+        preserve that original audit record and return ``False``.
+        """
+
+        normalized_actor = str(requested_by).strip()
+        normalized_reason = str(reason).strip()
+        if not normalized_actor or not normalized_reason:
+            raise ValueError("requested_by and reason must be non-empty.")
+
+        now = _utcnow_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE bulk_jobs
+                SET
+                    desired_state = ?,
+                    cancel_requested_at = ?,
+                    cancel_requested_by = ?,
+                    cancel_reason = ?,
+                    updated_at = ?
+                WHERE job_key = ? AND desired_state = ?
+                """,
+                (
+                    BulkJobDesiredState.CANCEL_REQUESTED.value,
+                    now,
+                    normalized_actor,
+                    normalized_reason,
+                    now,
+                    job_key,
+                    BulkJobDesiredState.RUN.value,
+                ),
+            )
+            if int(cursor.rowcount) == 1:
+                return True
+            existing = conn.execute(
+                "SELECT desired_state FROM bulk_jobs WHERE job_key = ?",
+                (job_key,),
+            ).fetchone()
+        if existing is None:
+            raise KeyError(f"Unknown bulk job key {job_key!r}.")
+        return False
+
+    def cancel_without_scheduler_submission(self, job_key: str) -> bool:
+        """Cancel a pending logical job that provably has no scheduler side effect."""
+
+        now = _utcnow_iso()
+        allowed_statuses = (
+            BulkJobStatus.PENDING.value,
+            BulkJobStatus.SUBMIT_DEFERRED.value,
+        )
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE bulk_jobs
+                SET
+                    status = ?,
+                    finished_at = COALESCE(finished_at, ?),
+                    cancel_outcome = ?,
+                    cancel_outcome_at = ?,
+                    cancel_last_error = NULL,
+                    updated_at = ?,
+                    last_error = ?
+                WHERE
+                    job_key = ?
+                    AND desired_state = ?
+                    AND scheduler_job_id IS NULL
+                    AND scheduler_subjob_id IS NULL
+                    AND status IN ({self._placeholders(allowed_statuses)})
+                """,
+                (
+                    BulkJobStatus.CANCELLED.value,
+                    now,
+                    BulkCancelOutcome.NOT_SUBMITTED.value,
+                    now,
+                    now,
+                    "Cancelled before scheduler submission by explicit durable intent",
+                    job_key,
+                    BulkJobDesiredState.CANCEL_REQUESTED.value,
+                    *allowed_statuses,
+                ),
+            )
+        return int(cursor.rowcount) == 1
+
+    def claim_cancel_dispatch(self, job_key: str) -> bool:
+        """Claim the sole allowed scheduler cancellation side effect."""
+
+        now = _utcnow_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE bulk_jobs
+                SET
+                    cancel_attempts = cancel_attempts + 1,
+                    cancel_dispatch_started_at = ?,
+                    cancel_outcome = ?,
+                    cancel_outcome_at = NULL,
+                    cancel_last_error = NULL,
+                    updated_at = ?
+                WHERE
+                    job_key = ?
+                    AND desired_state = ?
+                    AND cancel_outcome IS NULL
+                    AND (scheduler_job_id IS NOT NULL OR scheduler_subjob_id IS NOT NULL)
+                """,
+                (
+                    now,
+                    BulkCancelOutcome.DISPATCHING.value,
+                    now,
+                    job_key,
+                    BulkJobDesiredState.CANCEL_REQUESTED.value,
+                ),
+            )
+        return int(cursor.rowcount) == 1
+
+    def record_cancel_outcome(
+        self,
+        job_key: str,
+        outcome: BulkCancelOutcome,
+        *,
+        error: str | None = None,
+    ) -> bool:
+        """Record the auditable result of a claimed scheduler cancellation."""
+
+        if outcome in {BulkCancelOutcome.DISPATCHING, BulkCancelOutcome.ALREADY_TERMINAL}:
+            raise ValueError(f"Cannot record {outcome.value} as a dispatched outcome.")
+        now = _utcnow_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE bulk_jobs
+                SET
+                    cancel_outcome = ?,
+                    cancel_outcome_at = ?,
+                    cancel_last_error = ?,
+                    updated_at = ?
+                WHERE
+                    job_key = ?
+                    AND desired_state = ?
+                    AND cancel_outcome = ?
+                """,
+                (
+                    outcome.value,
+                    now,
+                    None if error is None else str(error),
+                    now,
+                    job_key,
+                    BulkJobDesiredState.CANCEL_REQUESTED.value,
+                    BulkCancelOutcome.DISPATCHING.value,
+                ),
+            )
+        return int(cursor.rowcount) == 1
+
+    def record_terminal_cancel_outcome(self, job_key: str) -> bool:
+        """Record scheduler evidence that a requested job is already terminal."""
+
+        now = _utcnow_iso()
+        terminal_statuses = _status_values(tuple(TERMINAL_BULK_JOB_STATUSES))
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE bulk_jobs
+                SET
+                    cancel_outcome = ?,
+                    cancel_outcome_at = ?,
+                    cancel_last_error = NULL,
+                    updated_at = ?
+                WHERE
+                    job_key = ?
+                    AND desired_state = ?
+                    AND cancel_outcome IS NULL
+                    AND (
+                        scheduler_job_id IS NOT NULL
+                        OR scheduler_subjob_id IS NOT NULL
+                        OR status IN ({self._placeholders(terminal_statuses)})
+                    )
+                """,
+                (
+                    BulkCancelOutcome.ALREADY_TERMINAL.value,
+                    now,
+                    now,
+                    job_key,
+                    BulkJobDesiredState.CANCEL_REQUESTED.value,
+                    *terminal_statuses,
+                ),
+            )
+        return int(cursor.rowcount) == 1
+
     def claim_prepared(
         self,
         *,
@@ -632,6 +864,7 @@ class BulkJobRegistry:
                 WHERE
                     job_key = ?
                     AND status IN ({self._placeholders(submit_statuses)})
+                    AND desired_state = ?
                     AND spec_hash = ?
                     AND job_name = ?
                     AND job_comment = ?
@@ -644,6 +877,7 @@ class BulkJobRegistry:
                     now,
                     job_key,
                     *submit_statuses,
+                    BulkJobDesiredState.RUN.value,
                     spec_hash,
                     job_name,
                     job_comment,
@@ -1253,4 +1487,9 @@ def _record_from_row(row: sqlite3.Row) -> BulkJobRecord:
         cancel_requested_at=row["cancel_requested_at"],
         cancel_requested_by=row["cancel_requested_by"],
         cancel_reason=row["cancel_reason"],
+        cancel_attempts=int(row["cancel_attempts"]),
+        cancel_dispatch_started_at=row["cancel_dispatch_started_at"],
+        cancel_outcome=_coerce_cancel_outcome(row["cancel_outcome"]),
+        cancel_outcome_at=row["cancel_outcome_at"],
+        cancel_last_error=row["cancel_last_error"],
     )

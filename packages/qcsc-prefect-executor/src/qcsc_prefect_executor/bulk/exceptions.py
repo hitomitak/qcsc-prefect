@@ -37,6 +37,17 @@ class TemporarySubmitError(SubmitError):
     """Raised when a scheduler submission failure should be retried later."""
 
 
+class CancellationRequestedError(SubmitError):
+    """Raised when a durable cancellation intent forbids a new submission."""
+
+    def __init__(self, *, job_key: str) -> None:
+        self.job_key = str(job_key)
+        super().__init__(
+            f"Bulk job {self.job_key!r} has a durable cancellation request; "
+            "scheduler submission is forbidden."
+        )
+
+
 class SubmitOutcomeUnknownError(SubmitError):
     """Raised when submission may have succeeded and must not be repeated."""
 

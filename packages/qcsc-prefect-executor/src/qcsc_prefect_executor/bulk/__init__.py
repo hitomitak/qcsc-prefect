@@ -7,6 +7,7 @@ from typing import Any
 from qcsc_prefect_core.queue import QueueAwareSubmitGate, QueueCapacity, QueueProbe
 
 from qcsc_prefect_executor.bulk.exceptions import (
+    CancellationRequestedError,
     DuplicateJobKeyError,
     OperatorActionRequired,
     QueueFullError,
@@ -19,6 +20,7 @@ from qcsc_prefect_executor.bulk.exceptions import (
 )
 from qcsc_prefect_executor.bulk.global_fugaku_runner import GlobalFugakuBulkRunner
 from qcsc_prefect_executor.bulk.models import (
+    BulkCancelOutcome,
     BulkJobDesiredState,
     BulkJobRecord,
     BulkJobSpec,
@@ -55,6 +57,20 @@ async def run_jobs_from_blocks_bulk(*args: Any, **kwargs: Any):
     return await _run_jobs_from_blocks_bulk(*args, **kwargs)
 
 
+async def execute_cancel_requests(*args: Any, **kwargs: Any):
+    from qcsc_prefect_executor.from_blocks import (
+        execute_cancel_requests as _execute_cancel_requests,
+    )
+
+    return await _execute_cancel_requests(*args, **kwargs)
+
+
+async def execute_cancel_request(*args: Any, **kwargs: Any):
+    from qcsc_prefect_executor.from_blocks import execute_cancel_request as _execute_cancel_request
+
+    return await _execute_cancel_request(*args, **kwargs)
+
+
 async def submit_job_from_blocks(*args: Any, **kwargs: Any):
     # Lazy import keeps this package importable while from_blocks imports bulk modules.
     from qcsc_prefect_executor.from_blocks import submit_job_from_blocks as _submit_job_from_blocks
@@ -64,6 +80,7 @@ async def submit_job_from_blocks(*args: Any, **kwargs: Any):
 
 __all__ = [
     "BULK_SPEC_HASH_SCHEMA_VERSION",
+    "BulkCancelOutcome",
     "BulkJobDesiredState",
     "BulkJobRecord",
     "BulkJobRegistry",
@@ -71,6 +88,7 @@ __all__ = [
     "BulkJobStatus",
     "BulkRunResult",
     "BulkTickResult",
+    "CancellationRequestedError",
     "DuplicateJobKeyError",
     "GlobalFugakuBulkRunner",
     "NativeBulkManifestGroup",
@@ -89,6 +107,8 @@ __all__ = [
     "build_bulk_spec_hash",
     "canonical_bulk_spec_json",
     "create_native_bulk_group_manifests",
+    "execute_cancel_request",
+    "execute_cancel_requests",
     "monitor_jobs_many",
     "run_jobs_from_blocks_bulk",
     "submit_job_from_blocks",

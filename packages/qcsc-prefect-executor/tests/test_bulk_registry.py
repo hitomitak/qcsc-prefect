@@ -10,6 +10,7 @@ from qcsc_prefect_executor.bulk.exceptions import (
     SpecHashMismatchError,
 )
 from qcsc_prefect_executor.bulk.models import (
+    BulkCancelOutcome,
     BulkJobDesiredState,
     BulkJobSpec,
     BulkJobStatus,
@@ -183,6 +184,11 @@ def test_registry_migrates_old_schema_with_resumable_submit_columns(tmp_path: Pa
         "cancel_requested_at",
         "cancel_requested_by",
         "cancel_reason",
+        "cancel_attempts",
+        "cancel_dispatch_started_at",
+        "cancel_outcome",
+        "cancel_outcome_at",
+        "cancel_last_error",
     } <= columns
     assert {
         "idx_bulk_jobs_status",
@@ -213,6 +219,11 @@ def test_registry_migrates_old_schema_with_resumable_submit_columns(tmp_path: Pa
     assert record.cancel_requested_at is None
     assert record.cancel_requested_by is None
     assert record.cancel_reason is None
+    assert record.cancel_attempts == 0
+    assert record.cancel_dispatch_started_at is None
+    assert record.cancel_outcome is None
+    assert record.cancel_outcome_at is None
+    assert record.cancel_last_error is None
     assert record.effective_scheduler_job_id == "43607196"
 
 
@@ -242,6 +253,11 @@ def test_new_resumable_submit_fields_default_without_changing_existing_api(tmp_p
     assert record.cancel_requested_at is None
     assert record.cancel_requested_by is None
     assert record.cancel_reason is None
+    assert record.cancel_attempts == 0
+    assert record.cancel_dispatch_started_at is None
+    assert record.cancel_outcome is None
+    assert record.cancel_outcome_at is None
+    assert record.cancel_last_error is None
 
 
 def test_resumable_submit_fields_round_trip(tmp_path: Path):
@@ -307,6 +323,83 @@ def test_resumable_submit_fields_round_trip(tmp_path: Path):
     assert record.cancel_requested_at == "2026-07-22T01:03:00+00:00"
     assert record.cancel_requested_by == "operator@example.invalid"
     assert record.cancel_reason == "test cancellation intent"
+
+
+def test_request_cancel_is_atomic_idempotent_and_excludes_submit_candidate(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs([_spec(tmp_path, "job-1")])
+
+    def request(index: int) -> bool:
+        return registry.request_cancel(
+            "job-1",
+            requested_by=f"operator-{index}",
+            reason=f"reason-{index}",
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(request, range(8)))
+
+    assert sum(results) == 1
+    record = registry.get_job("job-1")
+    assert record is not None
+    assert record.desired_state == BulkJobDesiredState.CANCEL_REQUESTED
+    assert record.cancel_requested_at is not None
+    assert record.cancel_requested_by is not None
+    assert record.cancel_reason is not None
+    assert registry.get_submit_candidates(limit=10) == []
+    assert [job.job_key for job in registry.get_pending_cancel_requests()] == ["job-1"]
+
+
+def test_request_cancel_validates_audit_fields_and_job_key(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs([_spec(tmp_path, "job-1")])
+
+    with pytest.raises(ValueError, match="non-empty"):
+        registry.request_cancel("job-1", requested_by="", reason="reason")
+    with pytest.raises(ValueError, match="non-empty"):
+        registry.request_cancel("job-1", requested_by="operator", reason=" ")
+    with pytest.raises(KeyError, match="missing"):
+        registry.request_cancel("missing", requested_by="operator", reason="reason")
+
+
+def test_pending_cancel_completes_without_scheduler_side_effect(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs([_spec(tmp_path, "job-1")])
+    assert registry.request_cancel("job-1", requested_by="operator", reason="no longer needed")
+
+    assert registry.cancel_without_scheduler_submission("job-1")
+    assert not registry.cancel_without_scheduler_submission("job-1")
+
+    record = registry.get_job("job-1")
+    assert record is not None
+    assert record.status == BulkJobStatus.CANCELLED
+    assert record.cancel_outcome == BulkCancelOutcome.NOT_SUBMITTED
+    assert record.cancel_attempts == 0
+    assert record.finished_at is not None
+
+
+def test_cancel_dispatch_claim_has_one_winner_and_records_outcome(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs([_spec(tmp_path, "job-1")])
+    registry.mark_submitted("job-1", "12345")
+    registry.request_cancel("job-1", requested_by="operator", reason="stop")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _index: registry.claim_cancel_dispatch("job-1"), range(8)))
+
+    assert sum(results) == 1
+    claimed = registry.get_job("job-1")
+    assert claimed is not None
+    assert claimed.cancel_attempts == 1
+    assert claimed.cancel_dispatch_started_at is not None
+    assert claimed.cancel_outcome == BulkCancelOutcome.DISPATCHING
+
+    assert registry.record_cancel_outcome("job-1", BulkCancelOutcome.REQUEST_ACCEPTED)
+    assert not registry.record_cancel_outcome("job-1", BulkCancelOutcome.REQUEST_ACCEPTED)
+    completed = registry.get_job("job-1")
+    assert completed is not None
+    assert completed.cancel_outcome == BulkCancelOutcome.REQUEST_ACCEPTED
+    assert completed.cancel_outcome_at is not None
 
 
 def test_same_spec_hash_is_idempotent_but_mismatch_preserves_existing_row(tmp_path: Path):

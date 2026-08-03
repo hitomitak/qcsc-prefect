@@ -33,3 +33,35 @@ process starts.
 single-submit bulk paths use these effective blocks for submission and group
 monitoring by effective `hpc_profile_block`; native PJM bulk mode rejects per-job
 block overrides because one generated script/profile is shared by all subjobs.
+
+### Explicit Slurm cancellation
+
+Stopping a Prefect run or cancelling its waiting coroutine does not cancel the
+external Slurm allocation. Persist an explicit operator intent in the bulk
+registry, then run the cancel executor:
+
+```python
+from pathlib import Path
+
+from qcsc_prefect_executor.bulk import BulkJobRegistry, execute_cancel_requests
+
+registry = BulkJobRegistry(Path("/shared/work/bulk.sqlite"))
+registry.request_cancel(
+    "logical-job-key",
+    requested_by="operator-identity",
+    reason="operator-approved cancellation",
+)
+await execute_cancel_requests(
+    registry=registry,
+    hpc_profile_block="hpc-slurm",
+)
+```
+
+`request_cancel()` is atomic and idempotent: the first request preserves its
+actor, timestamp, and reason. A pending job with no scheduler side effect is
+cancelled locally. For a known Slurm job ID, a durable dispatch claim permits
+at most one automatic `scancel` call. Accepted, already-terminal, not-found,
+temporary-failure, and rejected outcomes are recorded separately. Ambiguous
+`DISPATCHING` outcomes are not retried automatically. The low-level
+`SlurmRuntime.cancel()` primitive rejects calls that do not explicitly confirm
+that durable intent has already been recorded.
