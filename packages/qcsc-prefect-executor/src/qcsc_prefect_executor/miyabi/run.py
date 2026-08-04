@@ -17,16 +17,26 @@ from qcsc_prefect_adapters.miyabi.builder import (
 from qcsc_prefect_adapters.miyabi.runtime import MiyabiPBSRuntime
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 
-MAX_LOG_SIZE = 10_000  # mirror existing behavior
+from qcsc_prefect_executor.cloud_logs import (
+    MAX_CLOUD_LOG_CHARS,
+    CloudJobSummary,
+    CloudLogPolicy,
+    emit_cloud_job_logs,
+    read_log_text,
+    resolve_cloud_log_policy,
+)
+from qcsc_prefect_executor.cloud_logs import (
+    truncate_log as _truncate_cloud_log,
+)
+
+MAX_LOG_SIZE = MAX_CLOUD_LOG_CHARS
 
 
 def truncate_log(text: str) -> str:
     """
     Mirror existing truncate behavior to avoid 422 Unprocessable Entity.
     """
-    if len(text) > MAX_LOG_SIZE:
-        return text[:MAX_LOG_SIZE] + f"... (truncated {len(text) - MAX_LOG_SIZE} chars)"
-    return text
+    return _truncate_cloud_log(text)
 
 
 def _create_job_artifact(*, job_id: str, job_status: dict[str, str]) -> dict[str, Any]:
@@ -102,7 +112,7 @@ def _read_text_if_exists(path: str | Path | None) -> str:
     file_path = _resolve_log_file_path(path)
     if not file_path or not os.path.exists(file_path):
         return ""
-    return Path(file_path).read_text(errors="replace")
+    return read_log_text(file_path)
 
 
 @dataclass(frozen=True)
@@ -129,6 +139,7 @@ async def run_miyabi_job(
     watch_poll_interval: float = 10.0,
     timeout_seconds: float | None = None,
     metrics_artifact_key: str = "miyabi-job-metrics",
+    cloud_log_policy: CloudLogPolicy | None = None,
 ) -> MiyabiRunResult:
     """Execute a Miyabi job end-to-end from runtime models.
 
@@ -145,19 +156,23 @@ async def run_miyabi_job(
         watch_poll_interval: Poll interval in seconds for job status checks.
         timeout_seconds: Optional timeout for waiting final status.
         metrics_artifact_key: Prefect artifact key for job metrics table.
+        cloud_log_policy: Prefect Cloud output and artifact policy. Omission
+            preserves the historical logging and artifact behavior.
 
     Returns:
         `MiyabiRunResult` containing job id, exit status, and final
         scheduler status payload.
     """
     logger = get_run_logger()
+    policy = resolve_cloud_log_policy(cloud_log_policy)
 
     # 1) build script
     script_text = render_script(work_dir=work_dir, exec_profile=exec_profile, req=req)
     script_path = write_script_file(work_dir=work_dir, filename=script_filename, text=script_text)
 
     # 2) submit & wait
-    logger.info(f"Create Script file in {script_path}")
+    if policy.mode == "legacy":
+        logger.info(f"Create Script file in {script_path}")
     rt = MiyabiPBSRuntime()
     submit = await rt.submit(script_path, cwd=work_dir)
     job_id = submit.job_id
@@ -175,20 +190,33 @@ async def run_miyabi_job(
     out_path = final_status.get("Output_Path")
     err_path = final_status.get("Error_Path")
 
-    stdout = truncate_log(_read_text_if_exists(out_path))
-    stderr = truncate_log(_read_text_if_exists(err_path))
-
-    if stdout:
-        logger.info(stdout)
-    if stderr:
-        logger.error(stderr)
+    stdout_file = _resolve_log_file_path(out_path)
+    stderr_file = _resolve_log_file_path(err_path)
+    stdout = _read_text_if_exists(out_path)
+    stderr = _read_text_if_exists(err_path)
+    emit_cloud_job_logs(
+        logger=logger,
+        policy=policy,
+        summary=CloudJobSummary(
+            job_id=job_id,
+            state=final_status.get("job_state") or final_status.get("state"),
+            exit_code=final_status.get("Exit_status"),
+            elapsed=final_status.get("resources_used.walltime"),
+            node=final_status.get("exec_host") or final_status.get("exec_vnode"),
+            stdout_path=stdout_file or None,
+            stderr_path=stderr_file or None,
+        ),
+        stdout=stdout,
+        stderr=stderr,
+    )
 
     # 4) metrics artifact (table) (same shape as existing code)
     art_dict = _create_job_artifact(job_id=job_id, job_status=final_status)
-    await create_table_artifact(
-        table=[list(art_dict.keys()), list(art_dict.values())],
-        key=metrics_artifact_key,
-    )
+    if policy.should_create_artifact(legacy_default=True):
+        await create_table_artifact(
+            table=[list(art_dict.keys()), list(art_dict.values())],
+            key=metrics_artifact_key,
+        )
 
     # existing behavior returns Exit_status as int
     exit_status = int(final_status.get("Exit_status", "0") or "0")

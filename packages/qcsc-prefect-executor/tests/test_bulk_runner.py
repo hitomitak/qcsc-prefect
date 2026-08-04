@@ -11,6 +11,7 @@ from qcsc_prefect_executor import from_blocks as mod
 from qcsc_prefect_executor.bulk.exceptions import QueueFullError, TemporarySubmitError
 from qcsc_prefect_executor.bulk.models import BulkJobSpec, BulkJobStatus, SubmittedJob
 from qcsc_prefect_executor.bulk.registry import BulkJobRegistry
+from qcsc_prefect_executor.cloud_logs import CloudLogPolicy
 
 
 class _RegistryCapacityProbe:
@@ -361,6 +362,58 @@ def test_run_jobs_from_blocks_bulk_submits_only_up_to_queue_capacity(tmp_path: P
     assert max(active_counts) == 1
     assert submitted == ["job-0", "job-1", "job-2"]
     assert result.succeeded == 3
+
+
+def test_run_jobs_from_blocks_bulk_propagates_cloud_log_policy(tmp_path: Path, monkeypatch):
+    registry_path = tmp_path / "bulk.sqlite"
+    policy = CloudLogPolicy(mode="summary", tail_lines=3)
+    calls: list[str] = []
+
+    async def fake_submit_job_from_blocks(**kwargs: Any) -> SubmittedJob:
+        assert kwargs["cloud_log_policy"] is policy
+        registry = kwargs["registry"]
+        registry.mark_submitted(kwargs["job_key"], "sched-job-1")
+        calls.append("submit")
+        return SubmittedJob(
+            job_key=kwargs["job_key"],
+            scheduler_job_id="sched-job-1",
+            status=BulkJobStatus.SUBMITTED,
+            work_dir=kwargs["work_dir"],
+        )
+
+    async def fake_monitor_jobs_many(
+        *,
+        hpc_profile_block: str,
+        scheduler_job_ids: list[str],
+        registry: BulkJobRegistry,
+        cloud_log_policy: CloudLogPolicy,
+    ) -> dict[str, BulkJobStatus]:
+        assert cloud_log_policy is policy
+        assert scheduler_job_ids == ["sched-job-1"]
+        registry.mark_succeeded("job-1")
+        calls.append("monitor")
+        return {"sched-job-1": BulkJobStatus.SUCCEEDED}
+
+    monkeypatch.setattr(mod, "submit_job_from_blocks", fake_submit_job_from_blocks)
+    monkeypatch.setattr(mod, "monitor_jobs_many", fake_monitor_jobs_many)
+
+    result = asyncio.run(
+        mod.run_jobs_from_blocks_bulk(
+            jobs=[_spec(tmp_path, "job-1")],
+            command_block="cmd",
+            execution_profile_block="exec",
+            hpc_profile_block="hpc",
+            registry_path=registry_path,
+            queue_probe=_RegistryCapacityProbe(registry_path, max_active_jobs=1),
+            safety_margin=0,
+            poll_interval_seconds=0,
+            refill_interval_seconds=0,
+            cloud_log_policy=policy,
+        )
+    )
+
+    assert result.succeeded == 1
+    assert calls == ["submit", "monitor"]
 
 
 def test_run_jobs_from_blocks_bulk_uses_default_probe_when_omitted(

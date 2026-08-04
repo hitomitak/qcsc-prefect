@@ -17,6 +17,7 @@ from qcsc_prefect_executor.bulk.models import (
     effective_hpc_profile_block,
 )
 from qcsc_prefect_executor.bulk.registry import BulkJobRegistry
+from qcsc_prefect_executor.cloud_logs import CloudLogPolicy
 
 
 def _exception_text(exc: Exception) -> str:
@@ -128,6 +129,7 @@ class GlobalFugakuBulkRunner:
     target_active_jobs: int | None = None
     no_check_directory: bool = False
     submit_workers: int = 8
+    cloud_log_policy: CloudLogPolicy | None = None
 
     def __post_init__(self) -> None:
         self.registry_path = Path(self.registry_path).expanduser()
@@ -193,12 +195,16 @@ class GlobalFugakuBulkRunner:
             )
 
         results: dict[str, BulkJobStatus] = {}
+        cloud_policy_kwargs = (
+            {"cloud_log_policy": self.cloud_log_policy} if self.cloud_log_policy is not None else {}
+        )
         for hpc_profile_block, scheduler_job_ids in grouped_scheduler_ids.items():
             results.update(
                 await monitor_jobs_many(
                     hpc_profile_block=hpc_profile_block,
                     scheduler_job_ids=scheduler_job_ids,
                     registry=self.registry,
+                    **cloud_policy_kwargs,
                 )
             )
         return results
@@ -215,6 +221,9 @@ class GlobalFugakuBulkRunner:
             return []
 
         semaphore = asyncio.Semaphore(self.submit_workers)
+        cloud_policy_kwargs = (
+            {"cloud_log_policy": self.cloud_log_policy} if self.cloud_log_policy is not None else {}
+        )
 
         async def _attempt(
             job: BulkJobRecord,
@@ -236,6 +245,7 @@ class GlobalFugakuBulkRunner:
                         command_args=job.command_args,
                         registry=self.registry,
                         fugaku_no_check_directory=self.no_check_directory,
+                        **cloud_policy_kwargs,
                     )
                 except (QueueFullError, TemporarySubmitError) as exc:
                     return ("deferred", job, str(exc))
@@ -280,9 +290,7 @@ class GlobalFugakuBulkRunner:
             ),
         ]
         if self.target_active_jobs is not None:
-            limits.append(
-                max(0, int(self.target_active_jobs) - self.registry.count_active_jobs())
-            )
+            limits.append(max(0, int(self.target_active_jobs) - self.registry.count_active_jobs()))
         return max(0, min(limits))
 
     async def _resolved_queue_probe(self) -> QueueProbe:

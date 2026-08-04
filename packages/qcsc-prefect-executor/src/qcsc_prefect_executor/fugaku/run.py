@@ -10,15 +10,25 @@ from qcsc_prefect_adapters.fugaku.builder import FugakuJobRequest, render_script
 from qcsc_prefect_adapters.fugaku.runtime import FugakuPJMRuntime
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 
-MAX_LOG_SIZE = 10_000
+from qcsc_prefect_executor.cloud_logs import (
+    MAX_CLOUD_LOG_CHARS,
+    CloudJobSummary,
+    CloudLogPolicy,
+    emit_cloud_job_logs,
+    read_log_text,
+    resolve_cloud_log_policy,
+)
+from qcsc_prefect_executor.cloud_logs import (
+    truncate_log as _truncate_cloud_log,
+)
+
+MAX_LOG_SIZE = MAX_CLOUD_LOG_CHARS
 
 
 def truncate_log(text: str) -> str:
     """Truncate large log text to the configured maximum length."""
 
-    if len(text) > MAX_LOG_SIZE:
-        return text[:MAX_LOG_SIZE] + f"... (truncated {len(text) - MAX_LOG_SIZE} chars)"
-    return text
+    return _truncate_cloud_log(text)
 
 
 def _parse_stats_file(stats_file: Path | None) -> dict[str, str]:
@@ -40,9 +50,7 @@ def _parse_stats_file(stats_file: Path | None) -> dict[str, str]:
 
 
 def _read_text_if_exists(path: Path) -> str:
-    if not path.exists():
-        return ""
-    return path.read_text(errors="replace")
+    return read_log_text(path)
 
 
 @dataclass(frozen=True)
@@ -71,6 +79,7 @@ async def run_fugaku_job(
     watch_poll_interval: float = 10.0,
     timeout_seconds: float | None = None,
     metrics_artifact_key: str = "fugaku-job-metrics",
+    cloud_log_policy: CloudLogPolicy | None = None,
 ) -> FugakuRunResult:
     """Execute a Fugaku job end-to-end from runtime models.
 
@@ -87,6 +96,8 @@ async def run_fugaku_job(
         watch_poll_interval: Poll interval in seconds for job status checks.
         timeout_seconds: Optional timeout for waiting final status.
         metrics_artifact_key: Prefect artifact key for job metrics table.
+        cloud_log_policy: Prefect Cloud output and artifact policy. Omission
+            preserves the historical logging and artifact behavior.
 
     Returns:
         `FugakuRunResult` containing job id, exit status, state, and
@@ -94,6 +105,7 @@ async def run_fugaku_job(
     """
 
     logger = get_run_logger()
+    policy = resolve_cloud_log_policy(cloud_log_policy)
 
     script_basename = Path(script_filename).name
     script_text = render_script(
@@ -116,10 +128,24 @@ async def run_fugaku_job(
     err_file = work_dir / f"{script_basename}.{req.job_name}.err"
     stats_file = work_dir / f"{script_basename}.{req.job_name}.stats"
 
-    if logs := _read_text_if_exists(out_file):
-        logger.info(truncate_log(logs))
-    if logs := _read_text_if_exists(err_file):
-        logger.error(truncate_log(logs))
+    stdout = _read_text_if_exists(out_file)
+    stderr = _read_text_if_exists(err_file)
+    stats = _parse_stats_file(stats_file)
+    emit_cloud_job_logs(
+        logger=logger,
+        policy=policy,
+        summary=CloudJobSummary(
+            job_id=submit.job_id,
+            state=str(final_status.get("ST", "")),
+            exit_code=final_status.get("EC"),
+            elapsed=final_status.get("ELAPSE") or final_status.get("ELAPSED"),
+            node=stats.get("stats.host_name"),
+            stdout_path=out_file,
+            stderr_path=err_file,
+        ),
+        stdout=stdout,
+        stderr=stderr,
+    )
 
     artifact: dict[str, Any] = {
         "job_id": submit.job_id,
@@ -129,12 +155,13 @@ async def run_fugaku_job(
         "stderr_file": str(err_file) if err_file.exists() else None,
         "stats_file": str(stats_file) if stats_file.exists() else None,
     }
-    artifact.update(_parse_stats_file(stats_file))
+    artifact.update(stats)
 
-    await create_table_artifact(
-        table=[list(artifact.keys()), list(artifact.values())],
-        key=metrics_artifact_key,
-    )
+    if policy.should_create_artifact(legacy_default=True):
+        await create_table_artifact(
+            table=[list(artifact.keys()), list(artifact.values())],
+            key=metrics_artifact_key,
+        )
 
     exit_code_text = str(final_status.get("EC", "")).strip()
     if exit_code_text.isdigit():

@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from prefect.artifacts import create_table_artifact
+from prefect.logging import get_run_logger
 from qcsc_prefect_adapters.base.recovery import (
     IdentityRecoveryNotSupportedError,
     IdentityRecoveryRuntime,
@@ -78,6 +80,13 @@ from qcsc_prefect_executor.bulk.models import (
 from qcsc_prefect_executor.bulk.native_manifest import create_native_bulk_group_manifests
 from qcsc_prefect_executor.bulk.registry import BulkJobRegistry
 from qcsc_prefect_executor.bulk.spec_hash import build_bulk_spec_hash
+from qcsc_prefect_executor.cloud_logs import (
+    CloudJobSummary,
+    CloudLogPolicy,
+    emit_cloud_job_logs,
+    read_log_text,
+    resolve_cloud_log_policy,
+)
 from qcsc_prefect_executor.fugaku.run import run_fugaku_job
 from qcsc_prefect_executor.local.run import run_local_job
 from qcsc_prefect_executor.miyabi.run import run_miyabi_job
@@ -1456,6 +1465,7 @@ async def submit_job_from_blocks(
     slurm_recovery_grace_seconds: float = DEFAULT_SLURM_RECOVERY_GRACE_SECONDS,
     slurm_clock_skew_margin_seconds: float = DEFAULT_SLURM_CLOCK_SKEW_MARGIN_SECONDS,
     scheduler_command_timeout_seconds: float | None = (DEFAULT_SCHEDULER_COMMAND_TIMEOUT_SECONDS),
+    cloud_log_policy: CloudLogPolicy | None = None,
 ) -> SubmittedJob:
     """Submit one block-defined HPC job without waiting for completion.
 
@@ -1470,6 +1480,10 @@ async def submit_job_from_blocks(
     Ambiguous submission outcomes remain ``PREPARED`` and are reconciled by
     deterministic scheduler identity. They are never changed into an automatic
     resubmit candidate.
+
+    An explicit non-legacy ``cloud_log_policy`` is also applied to submission
+    and recovery outcomes. The omitted policy preserves the old silent bulk
+    submission behavior.
     """
 
     _validate_slurm_recovery_settings(
@@ -1517,6 +1531,33 @@ async def submit_job_from_blocks(
             spec_hash=spec_hash,
         )
 
+    async def publish_submitted(result: SubmittedJob) -> SubmittedJob:
+        record = registry.get_job(job_key) if registry is not None else None
+        await _publish_bulk_cloud_result(
+            cloud_log_policy=cloud_log_policy,
+            hpc_target=prepared.submission_target.hpc_target,
+            scheduler_job_id=result.scheduler_job_id,
+            status=result.status,
+            row=None,
+            record=record,
+        )
+        return result
+
+    async def publish_recovery_state() -> None:
+        if registry is None:
+            return
+        record = registry.get_job(job_key)
+        if record is None:
+            return
+        await _publish_bulk_cloud_result(
+            cloud_log_policy=cloud_log_policy,
+            hpc_target=prepared.submission_target.hpc_target,
+            scheduler_job_id=str(record.effective_scheduler_job_id or "unknown"),
+            status=record.status,
+            row=None,
+            record=record,
+        )
+
     if registry is not None:
         existing_record = registry.get_job(job_key)
         registry.upsert_jobs(
@@ -1562,11 +1603,13 @@ async def submit_job_from_blocks(
                     reason=record.last_error or "the registry row is in durable operator hold",
                 )
             if record.scheduler_job_id:
-                return SubmittedJob(
-                    job_key=job_key,
-                    scheduler_job_id=record.scheduler_job_id,
-                    status=record.status,
-                    work_dir=record.work_dir,
+                return await publish_submitted(
+                    SubmittedJob(
+                        job_key=job_key,
+                        scheduler_job_id=record.scheduler_job_id,
+                        status=record.status,
+                        work_dir=record.work_dir,
+                    )
                 )
             if record.status == BulkJobStatus.UNKNOWN:
                 _raise_operator_hold(
@@ -1575,15 +1618,25 @@ async def submit_job_from_blocks(
                     reason="UNKNOWN Slurm row has no scheduler job id",
                 )
             if record.status == BulkJobStatus.PREPARED:
-                return await _reconcile_prepared_slurm_job(
-                    registry=registry,
-                    record=record,
-                    prepared=prepared,
-                    slurm_user=resolved_slurm_user,
-                    recovery_grace_seconds=slurm_recovery_grace_seconds,
-                    clock_skew_margin_seconds=slurm_clock_skew_margin_seconds,
-                    scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
-                )
+                try:
+                    recovered = await _reconcile_prepared_slurm_job(
+                        registry=registry,
+                        record=record,
+                        prepared=prepared,
+                        slurm_user=resolved_slurm_user,
+                        recovery_grace_seconds=slurm_recovery_grace_seconds,
+                        clock_skew_margin_seconds=slurm_clock_skew_margin_seconds,
+                        scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+                    )
+                except (
+                    OperatorActionRequired,
+                    RecoveryPending,
+                    SchedulerIdentityMismatchError,
+                    SubmitOutcomeUnknownError,
+                ):
+                    await publish_recovery_state()
+                    raise
+                return await publish_submitted(recovered)
 
             _ensure_registry_can_submit(registry=registry, job_key=job_key)
             claimed = registry.claim_prepared(
@@ -1605,36 +1658,58 @@ async def submit_job_from_blocks(
                         ),
                     )
                 if claimed_record.scheduler_job_id:
-                    return SubmittedJob(
-                        job_key=job_key,
-                        scheduler_job_id=claimed_record.scheduler_job_id,
-                        status=claimed_record.status,
-                        work_dir=claimed_record.work_dir,
+                    return await publish_submitted(
+                        SubmittedJob(
+                            job_key=job_key,
+                            scheduler_job_id=claimed_record.scheduler_job_id,
+                            status=claimed_record.status,
+                            work_dir=claimed_record.work_dir,
+                        )
                     )
                 if claimed_record.status == BulkJobStatus.PREPARED:
-                    return await _reconcile_prepared_slurm_job(
-                        registry=registry,
-                        record=claimed_record,
-                        prepared=prepared,
-                        slurm_user=resolved_slurm_user,
-                        recovery_grace_seconds=slurm_recovery_grace_seconds,
-                        clock_skew_margin_seconds=slurm_clock_skew_margin_seconds,
-                        scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
-                    )
+                    try:
+                        recovered = await _reconcile_prepared_slurm_job(
+                            registry=registry,
+                            record=claimed_record,
+                            prepared=prepared,
+                            slurm_user=resolved_slurm_user,
+                            recovery_grace_seconds=slurm_recovery_grace_seconds,
+                            clock_skew_margin_seconds=slurm_clock_skew_margin_seconds,
+                            scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+                        )
+                    except (
+                        OperatorActionRequired,
+                        RecoveryPending,
+                        SchedulerIdentityMismatchError,
+                        SubmitOutcomeUnknownError,
+                    ):
+                        await publish_recovery_state()
+                        raise
+                    return await publish_submitted(recovered)
                 _ensure_registry_can_submit(registry=registry, job_key=job_key)
                 raise DuplicateJobKeyError(
                     f"Bulk job key {job_key!r} lost the PREPARED claim race."
                 )
 
-            return await _submit_claimed_slurm_job(
-                registry=registry,
-                record=claimed_record,
-                prepared=prepared,
-                slurm_user=resolved_slurm_user,
-                recovery_grace_seconds=slurm_recovery_grace_seconds,
-                clock_skew_margin_seconds=slurm_clock_skew_margin_seconds,
-                scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
-            )
+            try:
+                submitted = await _submit_claimed_slurm_job(
+                    registry=registry,
+                    record=claimed_record,
+                    prepared=prepared,
+                    slurm_user=resolved_slurm_user,
+                    recovery_grace_seconds=slurm_recovery_grace_seconds,
+                    clock_skew_margin_seconds=slurm_clock_skew_margin_seconds,
+                    scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+                )
+            except (
+                OperatorActionRequired,
+                RecoveryPending,
+                SchedulerIdentityMismatchError,
+                SubmitOutcomeUnknownError,
+            ):
+                await publish_recovery_state()
+                raise
+            return await publish_submitted(submitted)
 
         _ensure_registry_can_submit(registry=registry, job_key=job_key)
 
@@ -1656,11 +1731,13 @@ async def submit_job_from_blocks(
     if registry is not None:
         registry.mark_submitted(job_key, scheduler_job_id)
 
-    return SubmittedJob(
-        job_key=job_key,
-        scheduler_job_id=scheduler_job_id,
-        status=BulkJobStatus.SUBMITTED,
-        work_dir=prepared.work_dir,
+    return await publish_submitted(
+        SubmittedJob(
+            job_key=job_key,
+            scheduler_job_id=scheduler_job_id,
+            status=BulkJobStatus.SUBMITTED,
+            work_dir=prepared.work_dir,
+        )
     )
 
 
@@ -2011,6 +2088,142 @@ def _records_by_scheduler_id(
     return records_by_scheduler_id
 
 
+def _local_scheduler_path(value: object | None) -> Path | None:
+    if value is None:
+        return None
+    raw = str(value).strip().strip('"').strip("'")
+    if not raw:
+        return None
+    if ":" in raw:
+        _, raw = raw.split(":", 1)
+    return Path(raw) if raw else None
+
+
+def _one_log_candidate(work_dir: Path, suffix: str) -> Path | None:
+    candidates = sorted(path for path in work_dir.glob(f"*{suffix}") if path.is_file())
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _bulk_log_paths(
+    *,
+    hpc_target: str,
+    row: dict[str, Any] | None,
+    record: BulkJobRecord | None,
+) -> tuple[Path | None, Path | None]:
+    row = row or {}
+    if hpc_target == "miyabi":
+        return (
+            _local_scheduler_path(row.get("Output_Path")),
+            _local_scheduler_path(row.get("Error_Path")),
+        )
+    if record is None:
+        return None, None
+    if hpc_target == "slurm":
+        return record.work_dir / "output.out", record.work_dir / "output.err"
+    if hpc_target == "fugaku":
+        stdout_path = _local_scheduler_path(
+            row.get("Output_Path") or row.get("OUT") or row.get("STDOUT")
+        )
+        stderr_path = _local_scheduler_path(
+            row.get("Error_Path") or row.get("ERR") or row.get("STDERR")
+        )
+        return (
+            stdout_path or _one_log_candidate(record.work_dir, ".out"),
+            stderr_path or _one_log_candidate(record.work_dir, ".err"),
+        )
+    return None, None
+
+
+def _bulk_summary(
+    *,
+    scheduler_job_id: str,
+    hpc_target: str,
+    status: BulkJobStatus,
+    row: dict[str, Any] | None,
+    stdout_path: Path | None,
+    stderr_path: Path | None,
+) -> CloudJobSummary:
+    row = row or {}
+    if hpc_target == "slurm":
+        exit_code = str(row.get("ExitCode", "")).partition(":")[0] or None
+        elapsed = row.get("Elapsed")
+        node = row.get("NodeList")
+    elif hpc_target == "miyabi":
+        exit_code = row.get("Exit_status")
+        elapsed = row.get("resources_used.walltime")
+        node = row.get("exec_host") or row.get("exec_vnode")
+    else:
+        exit_code = row.get("EC")
+        elapsed = row.get("ELAPSE") or row.get("ELAPSED")
+        node = row.get("NODE") or row.get("HOST")
+    return CloudJobSummary(
+        job_id=scheduler_job_id,
+        state=status.value,
+        exit_code=exit_code,
+        elapsed=elapsed,
+        node=node,
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+    )
+
+
+def _bulk_artifact_key(record: BulkJobRecord | None, scheduler_job_id: str) -> str:
+    source = record.job_key if record is not None else scheduler_job_id
+    safe = re.sub(r"[^a-z0-9-]+", "-", source.lower()).strip("-")
+    return f"hpc-job-summary-{safe or 'job'}"[:200].rstrip("-")
+
+
+async def _publish_bulk_cloud_result(
+    *,
+    cloud_log_policy: CloudLogPolicy | None,
+    hpc_target: str,
+    scheduler_job_id: str,
+    status: BulkJobStatus,
+    row: dict[str, Any] | None,
+    record: BulkJobRecord | None,
+) -> None:
+    policy = resolve_cloud_log_policy(cloud_log_policy)
+    # Bulk historically emitted neither scheduler output nor artifacts.
+    if policy.mode == "legacy":
+        return
+
+    stdout_path, stderr_path = _bulk_log_paths(
+        hpc_target=hpc_target,
+        row=row,
+        record=record,
+    )
+    summary = _bulk_summary(
+        scheduler_job_id=scheduler_job_id,
+        hpc_target=hpc_target,
+        status=status,
+        row=row,
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+    )
+    if policy.mode != "none":
+        emit_cloud_job_logs(
+            logger=get_run_logger(),
+            policy=policy,
+            summary=summary,
+            stdout=read_log_text(stdout_path),
+            stderr=read_log_text(stderr_path),
+        )
+    if policy.should_create_artifact(legacy_default=False):
+        artifact = {
+            "job_id": summary.job_id,
+            "state": summary.state,
+            "exit_code": summary.exit_code,
+            "elapsed": summary.elapsed,
+            "node": summary.node,
+            "stdout_path": str(stdout_path) if stdout_path is not None else None,
+            "stderr_path": str(stderr_path) if stderr_path is not None else None,
+        }
+        await create_table_artifact(
+            table=[list(artifact.keys()), list(artifact.values())],
+            key=_bulk_artifact_key(record, scheduler_job_id),
+        )
+
+
 def _update_registry_for_monitor_status(
     *,
     registry: BulkJobRegistry,
@@ -2050,8 +2263,9 @@ async def monitor_jobs_many(
     hpc_profile_block: str | None = None,
     registry: BulkJobRegistry | None = None,
     hpc_profile_block_name: str | None = None,
+    cloud_log_policy: CloudLogPolicy | None = None,
 ) -> dict[str, BulkJobStatus]:
-    """Monitor many scheduler jobs with one aggregated scheduler query per target."""
+    """Monitor many jobs with one query and optional bounded Cloud summaries."""
 
     resolved_hpc_profile_block = _resolve_named_argument(
         preferred=hpc_profile_block,
@@ -2097,12 +2311,22 @@ async def monitor_jobs_many(
             error = query_error or "job was not found in scheduler output"
 
         results[scheduler_job_id] = status
+        previous_status = record.status if record is not None else None
         if registry is not None and record is not None:
             _update_registry_for_monitor_status(
                 registry=registry,
                 job_key=record.job_key,
                 status=status,
                 error=error,
+            )
+        if record is None or previous_status != status:
+            await _publish_bulk_cloud_result(
+                cloud_log_policy=cloud_log_policy,
+                hpc_target=hpc_target,
+                scheduler_job_id=scheduler_job_id,
+                status=status,
+                row=row,
+                record=record,
             )
 
     return results
@@ -2253,6 +2477,7 @@ async def _reconcile_bulk_prepared_jobs(
     slurm_recovery_grace_seconds: float,
     slurm_clock_skew_margin_seconds: float,
     scheduler_command_timeout_seconds: float | None,
+    cloud_log_policy: CloudLogPolicy | None = None,
 ) -> bool:
     """Reconcile durable Slurm claims once and report whether a later retry is needed."""
 
@@ -2277,6 +2502,9 @@ async def _reconcile_bulk_prepared_jobs(
             if value is not None
         }
         try:
+            cloud_policy_kwargs = (
+                {"cloud_log_policy": cloud_log_policy} if cloud_log_policy is not None else {}
+            )
             await submit_job_from_blocks(
                 command_block=command_block,
                 execution_profile_block=effective_execution_profile_block(
@@ -2296,6 +2524,7 @@ async def _reconcile_bulk_prepared_jobs(
                 slurm_clock_skew_margin_seconds=slurm_clock_skew_margin_seconds,
                 scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
                 **caller_digests,
+                **cloud_policy_kwargs,
             )
         except (
             OperatorActionRequired,
@@ -2330,6 +2559,7 @@ async def run_jobs_from_blocks_bulk(
     slurm_recovery_grace_seconds: float = DEFAULT_SLURM_RECOVERY_GRACE_SECONDS,
     slurm_clock_skew_margin_seconds: float = DEFAULT_SLURM_CLOCK_SKEW_MARGIN_SECONDS,
     scheduler_command_timeout_seconds: float | None = (DEFAULT_SCHEDULER_COMMAND_TIMEOUT_SECONDS),
+    cloud_log_policy: CloudLogPolicy | None = None,
 ) -> BulkRunResult:
     """Run many block-defined HPC jobs through one queue-aware bulk loop.
 
@@ -2341,6 +2571,10 @@ async def run_jobs_from_blocks_bulk(
     an explicit opt-in path via ``submit_mode="native_bulk"``. Set
     ``fugaku_no_check_directory`` to opt into ``pjsub --no-check-directory`` for
     Fugaku submissions only.
+
+    ``cloud_log_policy`` defaults to ``legacy``, which preserves the existing
+    bulk behavior of emitting no per-job result logs or artifacts. Select
+    ``summary`` explicitly to emit one bounded message per status transition.
     """
 
     if submit_mode not in {"single", "native_bulk"}:
@@ -2349,6 +2583,9 @@ async def run_jobs_from_blocks_bulk(
         recovery_grace_seconds=slurm_recovery_grace_seconds,
         clock_skew_margin_seconds=slurm_clock_skew_margin_seconds,
         scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+    )
+    cloud_policy_kwargs = (
+        {"cloud_log_policy": cloud_log_policy} if cloud_log_policy is not None else {}
     )
     if submit_mode == "native_bulk":
         _validate_native_bulk_specs(jobs)
@@ -2387,6 +2624,7 @@ async def run_jobs_from_blocks_bulk(
         slurm_recovery_grace_seconds=slurm_recovery_grace_seconds,
         slurm_clock_skew_margin_seconds=slurm_clock_skew_margin_seconds,
         scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
+        cloud_log_policy=cloud_log_policy,
     )
     registry.refresh_completed_jobs_from_outputs()
     await execute_cancel_requests(
@@ -2450,6 +2688,7 @@ async def run_jobs_from_blocks_bulk(
                     hpc_profile_block=effective_hpc_block,
                     scheduler_job_ids=scheduler_job_ids,
                     registry=registry,
+                    **cloud_policy_kwargs,
                 )
 
         registry.refresh_completed_jobs_from_outputs()
@@ -2522,6 +2761,7 @@ async def run_jobs_from_blocks_bulk(
                                     scheduler_command_timeout_seconds
                                 ),
                                 **caller_digests,
+                                **cloud_policy_kwargs,
                             )
                         except (
                             OperatorActionRequired,
@@ -2606,6 +2846,7 @@ async def run_job_from_blocks(
     watch_poll_interval: float = 10.0,
     timeout_seconds: float | None = None,
     metrics_artifact_key: str = "hpc-job-metrics",
+    cloud_log_policy: CloudLogPolicy | None = None,
     fugaku_job_name: str | None = None,
     execution_profile_overrides: dict[str, Any] | None = None,
 ) -> Any:
@@ -2632,6 +2873,8 @@ async def run_job_from_blocks(
         watch_poll_interval: Seconds to wait between scheduler status polls.
         timeout_seconds: Optional maximum wait time for terminal job status.
         metrics_artifact_key: Prefect artifact key used for job metrics.
+        cloud_log_policy: Prefect Cloud output and artifact policy. Omission
+            preserves historical target-specific behavior.
         fugaku_job_name: Optional Fugaku PJM job name. When omitted, a safe name
             is derived from the command name.
         execution_profile_overrides: Optional runtime overrides for selected
@@ -2668,6 +2911,7 @@ async def run_job_from_blocks(
             req=prepared.req,
             timeout_seconds=timeout_seconds,
             metrics_artifact_key=metrics_artifact_key,
+            cloud_log_policy=cloud_log_policy,
         )
 
     if prepared.submission_target.hpc_target == "miyabi":
@@ -2679,6 +2923,7 @@ async def run_job_from_blocks(
             watch_poll_interval=watch_poll_interval,
             timeout_seconds=timeout_seconds,
             metrics_artifact_key=metrics_artifact_key,
+            cloud_log_policy=cloud_log_policy,
         )
 
     if prepared.submission_target.hpc_target == "fugaku":
@@ -2690,6 +2935,7 @@ async def run_job_from_blocks(
             watch_poll_interval=watch_poll_interval,
             timeout_seconds=timeout_seconds,
             metrics_artifact_key=metrics_artifact_key,
+            cloud_log_policy=cloud_log_policy,
         )
 
     if prepared.submission_target.hpc_target == "slurm":
@@ -2701,6 +2947,7 @@ async def run_job_from_blocks(
             watch_poll_interval=watch_poll_interval,
             timeout_seconds=timeout_seconds,
             metrics_artifact_key=metrics_artifact_key,
+            cloud_log_policy=cloud_log_policy,
         )
 
     raise NotImplementedError(

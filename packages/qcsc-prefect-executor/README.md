@@ -26,6 +26,58 @@ passed literally without shell expansion. `modules` and `pre_commands` are
 explicitly unsupported for local execution and cause `ValueError` before the
 process starts.
 
+## Prefect Cloud log policy
+
+Use `CloudLogPolicy` to control how scheduler stdout/stderr and metrics
+artifacts are sent to Prefect Cloud. Scheduler log files remain in the job's
+shared-filesystem working directory; the policy only changes Cloud output.
+
+| Mode | Cloud logs | Default artifact behavior |
+| --- | --- | --- |
+| `legacy` | Historical first 10,000 characters of each stream | Preserves each API's historical behavior |
+| `none` | No job result logs | Disabled |
+| `summary` | Job ID, state, exit code, elapsed time, node, log paths, and bounded tails | Disabled |
+| `tail` | The final `tail_lines` of each stream | Disabled |
+| `full` | Complete stdout/stderr | Disabled |
+
+`legacy` is the library default for backward compatibility. For single-job
+APIs it retains the existing metrics artifact; for bulk APIs it retains the
+existing behavior of producing no per-job logs or artifacts. Set
+`create_artifact=True` to opt a non-legacy policy into an artifact, or set it to
+`False` to suppress a legacy artifact.
+
+Prefect Cloud counts logs and artifact-related events against workspace plan
+limits. `summary` is the recommended explicit choice for a high-volume Hobby
+workflow because it sends at most one compact summary and one stderr-tail log
+per status transition. Repeated bulk polls of an unchanged state emit nothing.
+`full` should be reserved for small diagnostic jobs; keep the authoritative
+complete logs on the shared filesystem.
+
+ROQUO callers should select `summary` explicitly rather than relying on a
+future library default:
+
+```python
+from qcsc_prefect_executor import CloudLogPolicy, run_jobs_from_blocks_bulk
+
+cloud_logs = CloudLogPolicy(
+    mode="summary",
+    tail_lines=20,
+    create_artifact=False,
+)
+
+result = await run_jobs_from_blocks_bulk(
+    jobs=jobs,
+    command_block="command-block",
+    execution_profile_block="slurm-cpu",
+    hpc_profile_block="roquo-slurm",
+    registry_path=registry_path,
+    cloud_log_policy=cloud_logs,
+)
+```
+
+The same `cloud_log_policy` argument is accepted by `run_job_from_blocks`,
+`submit_job_from_blocks`, `monitor_jobs_many`, and `GlobalFugakuBulkRunner`.
+
 ## Bulk execution
 
 `BulkJobSpec` supports optional per-job `execution_profile_block` and

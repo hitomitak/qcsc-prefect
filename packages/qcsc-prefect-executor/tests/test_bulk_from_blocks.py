@@ -19,6 +19,7 @@ from qcsc_prefect_executor.bulk.exceptions import (
 )
 from qcsc_prefect_executor.bulk.models import BulkJobSpec, BulkJobStatus
 from qcsc_prefect_executor.bulk.registry import BulkJobRegistry
+from qcsc_prefect_executor.cloud_logs import CloudLogPolicy
 
 FUGAKU_HISTORY_VERBOSE_OUTPUT = (
     "JOB_ID     JOB_NAME   MD ST  USER     GROUP    START_DATE      "
@@ -34,6 +35,18 @@ FUGAKU_HISTORY_VERBOSE_OUTPUT = (
     "-            -     -     bychip    RNO 0   11  24 127 "
     "06/01 15:22:16 small    ELAPSE LIMIT EXC\n"
 )
+
+
+class _LoggerStub:
+    def __init__(self) -> None:
+        self.info_lines: list[str] = []
+        self.error_lines: list[str] = []
+
+    def info(self, message: str) -> None:
+        self.info_lines.append(message)
+
+    def error(self, message: str) -> None:
+        self.error_lines.append(message)
 
 
 class _CommandBlockStub:
@@ -813,6 +826,8 @@ def test_terminal_recovery_requires_output_evidence(tmp_path: Path, monkeypatch)
         candidates=[_slurm_candidate(prepared, job_id="222", state="COMPLETED")]
     )
     _patch_slurm_runtime(monkeypatch, recovery_runtime)
+    logger = _LoggerStub()
+    monkeypatch.setattr(mod, "get_run_logger", lambda: logger)
 
     result = asyncio.run(
         mod.submit_job_from_blocks(
@@ -823,10 +838,14 @@ def test_terminal_recovery_requires_output_evidence(tmp_path: Path, monkeypatch)
             job_key="job-1",
             registry=registry,
             slurm_user="alice",
+            cloud_log_policy=CloudLogPolicy(mode="summary", tail_lines=1),
         )
     )
     assert result.status == BulkJobStatus.SUCCEEDED
     assert registry.get_job("job-1").status == BulkJobStatus.SUCCEEDED
+    assert len(logger.info_lines) == 1
+    assert "job_id=222" in logger.info_lines[0]
+    assert "state=SUCCEEDED" in logger.info_lines[0]
 
 
 def test_terminal_recovery_without_output_enters_hold(tmp_path: Path, monkeypatch):
@@ -1310,6 +1329,86 @@ def test_monitor_jobs_many_updates_registry_if_provided(tmp_path: Path, monkeypa
     assert job_2 is not None
     assert job_1.status == BulkJobStatus.RUNNING
     assert job_2.status == BulkJobStatus.SUCCEEDED
+
+
+def test_monitor_jobs_many_summary_emits_transition_tail_and_optional_artifact(
+    tmp_path: Path, monkeypatch
+):
+    _patch_block_loading(monkeypatch)
+    work_dir = tmp_path / "job-1"
+    work_dir.mkdir()
+    (work_dir / "output.out").write_text("old line\nlast line\n")
+    (work_dir / "output.err").write_bytes(b"old error\ninvalid \xff error\n")
+
+    async def fake_query_scheduler_statuses(*, hpc_target: str, scheduler_job_ids: list[str]):
+        return {
+            "1": {
+                "State": "COMPLETED",
+                "ExitCode": "0:0",
+                "Elapsed": "00:00:09",
+                "NodeList": "node007",
+            }
+        }
+
+    monkeypatch.setattr(mod, "_query_scheduler_statuses", fake_query_scheduler_statuses)
+    registry = BulkJobRegistry(tmp_path / "bulk.sqlite")
+    registry.upsert_jobs(
+        [
+            BulkJobSpec(
+                job_key="job-1",
+                work_dir=work_dir,
+                expected_outputs=[Path("done.txt")],
+            )
+        ]
+    )
+    registry.mark_submitted("job-1", "1")
+    (work_dir / "done.txt").write_text("ok")
+    logger = _LoggerStub()
+    artifacts: list[dict[str, Any]] = []
+    monkeypatch.setattr(mod, "get_run_logger", lambda: logger)
+
+    async def fake_create_table_artifact(*, table: list[list[Any]], key: str) -> None:
+        artifacts.append({"table": table, "key": key})
+
+    monkeypatch.setattr(mod, "create_table_artifact", fake_create_table_artifact)
+
+    statuses = asyncio.run(
+        mod.monitor_jobs_many(
+            hpc_profile_block="hpc",
+            scheduler_job_ids=["1"],
+            registry=registry,
+            cloud_log_policy=CloudLogPolicy(
+                mode="summary",
+                tail_lines=1,
+                create_artifact=True,
+            ),
+        )
+    )
+
+    assert statuses == {"1": BulkJobStatus.SUCCEEDED}
+    assert len(logger.info_lines) == 1
+    assert "state=SUCCEEDED" in logger.info_lines[0]
+    assert "last line" in logger.info_lines[0]
+    assert "old line" not in logger.info_lines[0]
+    assert logger.error_lines == ["HPC job stderr tail (job_id=1):\ninvalid � error\n"]
+    assert len(artifacts) == 1
+    assert artifacts[0]["key"] == "hpc-job-summary-job-1"
+
+    # An unchanged terminal status does not create another log or artifact event.
+    asyncio.run(
+        mod.monitor_jobs_many(
+            hpc_profile_block="hpc",
+            scheduler_job_ids=["1"],
+            registry=registry,
+            cloud_log_policy=CloudLogPolicy(
+                mode="summary",
+                tail_lines=1,
+                create_artifact=True,
+            ),
+        )
+    )
+    assert len(logger.info_lines) == 1
+    assert len(artifacts) == 1
 
 
 def test_monitor_jobs_many_updates_unknown_registry_record(tmp_path: Path, monkeypatch):

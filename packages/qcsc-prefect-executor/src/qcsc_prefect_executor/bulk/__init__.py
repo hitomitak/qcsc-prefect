@@ -39,6 +39,7 @@ from qcsc_prefect_executor.bulk.spec_hash import (
     build_bulk_spec_hash,
     canonical_bulk_spec_json,
 )
+from qcsc_prefect_executor.cloud_logs import CloudLogPolicy
 
 
 async def monitor_jobs_many(*args: Any, **kwargs: Any):
@@ -89,6 +90,7 @@ __all__ = [
     "BulkRunResult",
     "BulkTickResult",
     "CancellationRequestedError",
+    "CloudLogPolicy",
     "DuplicateJobKeyError",
     "GlobalFugakuBulkRunner",
     "NativeBulkManifestGroup",

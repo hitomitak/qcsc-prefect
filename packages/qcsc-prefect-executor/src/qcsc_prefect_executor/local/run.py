@@ -13,13 +13,20 @@ from qcsc_prefect_adapters.local.runtime import (
 )
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 
-MAX_LOG_SIZE = 10_000
+from qcsc_prefect_executor.cloud_logs import (
+    MAX_CLOUD_LOG_CHARS,
+    CloudJobSummary,
+    CloudLogPolicy,
+    emit_cloud_job_logs,
+    resolve_cloud_log_policy,
+    truncate_log,
+)
+
+MAX_LOG_SIZE = MAX_CLOUD_LOG_CHARS
 
 
 def _truncate_log(text: str) -> str:
-    if len(text) > MAX_LOG_SIZE:
-        return text[:MAX_LOG_SIZE] + f"... (truncated {len(text) - MAX_LOG_SIZE} chars)"
-    return text
+    return truncate_log(text)
 
 
 @dataclass(frozen=True)
@@ -39,6 +46,7 @@ async def run_local_job(
     req: LocalJobRequest,
     timeout_seconds: float | None = None,
     metrics_artifact_key: str = "local-job-metrics",
+    cloud_log_policy: CloudLogPolicy | None = None,
 ) -> LocalRunResult:
     """Execute a command directly without generating or submitting a job script."""
 
@@ -46,6 +54,7 @@ async def run_local_job(
     work_dir.mkdir(parents=True, exist_ok=True)
 
     logger = get_run_logger()
+    policy = resolve_cloud_log_policy(cloud_log_policy)
     process_result = await LocalRuntime().execute(
         command,
         cwd=work_dir,
@@ -53,22 +62,31 @@ async def run_local_job(
         timeout_seconds=timeout_seconds,
     )
 
-    if process_result.stdout:
-        logger.info(_truncate_log(process_result.stdout))
-    if process_result.stderr:
-        logger.error(_truncate_log(process_result.stderr))
-
     job_id = f"local-{process_result.pid}"
+    emit_cloud_job_logs(
+        logger=logger,
+        policy=policy,
+        summary=CloudJobSummary(
+            job_id=job_id,
+            state="SUCCEEDED" if process_result.exit_status == 0 else "FAILED",
+            exit_code=process_result.exit_status,
+            node="local",
+        ),
+        stdout=process_result.stdout,
+        stderr=process_result.stderr,
+    )
+
     artifact = {
         "job_id": job_id,
         "exit_status": process_result.exit_status,
         "command": shlex.join(command),
         "work_dir": str(work_dir),
     }
-    await create_table_artifact(
-        table=[list(artifact.keys()), list(artifact.values())],
-        key=metrics_artifact_key,
-    )
+    if policy.should_create_artifact(legacy_default=True):
+        await create_table_artifact(
+            table=[list(artifact.keys()), list(artifact.values())],
+            key=metrics_artifact_key,
+        )
 
     return LocalRunResult(
         job_id=job_id,

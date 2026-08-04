@@ -4,6 +4,7 @@ from pathlib import Path
 
 from qcsc_prefect_blocks.common.blocks import HPCProfileBlock
 
+from qcsc_prefect_executor.cloud_logs import CloudLogPolicy
 from qcsc_prefect_executor.from_blocks import run_job_from_blocks
 from qcsc_prefect_executor.miyabi.run import MiyabiRunResult
 
@@ -19,6 +20,7 @@ async def run_miyabi_job_from_blocks(
     watch_poll_interval: float = 10.0,
     timeout_seconds: float | None = None,
     metrics_artifact_key: str = "miyabi-job-metrics",
+    cloud_log_policy: CloudLogPolicy | None = None,
 ) -> MiyabiRunResult:
     """
     Backward-compatible wrapper around `run_job_from_blocks`.
@@ -40,5 +42,6 @@ async def run_miyabi_job_from_blocks(
         watch_poll_interval=watch_poll_interval,
         timeout_seconds=timeout_seconds,
         metrics_artifact_key=metrics_artifact_key,
+        cloud_log_policy=cloud_log_policy,
     )
     return result

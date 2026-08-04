@@ -10,21 +10,29 @@ from qcsc_prefect_adapters.slurm.builder import SlurmJobRequest, render_script, 
 from qcsc_prefect_adapters.slurm.runtime import SlurmRuntime
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 
-MAX_LOG_SIZE = 10_000
+from qcsc_prefect_executor.cloud_logs import (
+    MAX_CLOUD_LOG_CHARS,
+    CloudJobSummary,
+    CloudLogPolicy,
+    emit_cloud_job_logs,
+    read_log_text,
+    resolve_cloud_log_policy,
+)
+from qcsc_prefect_executor.cloud_logs import (
+    truncate_log as _truncate_cloud_log,
+)
+
+MAX_LOG_SIZE = MAX_CLOUD_LOG_CHARS
 
 
 def truncate_log(text: str) -> str:
     """Truncate large log text to the configured maximum length."""
 
-    if len(text) > MAX_LOG_SIZE:
-        return text[:MAX_LOG_SIZE] + f"... (truncated {len(text) - MAX_LOG_SIZE} chars)"
-    return text
+    return _truncate_cloud_log(text)
 
 
 def _read_text_if_exists(path: Path) -> str:
-    if not path.exists():
-        return ""
-    return path.read_text(errors="replace")
+    return read_log_text(path)
 
 
 def _create_job_artifact(
@@ -75,6 +83,7 @@ async def run_slurm_job(
     watch_poll_interval: float = 10.0,
     timeout_seconds: float | None = None,
     metrics_artifact_key: str = "slurm-job-metrics",
+    cloud_log_policy: CloudLogPolicy | None = None,
 ) -> SlurmRunResult:
     """Execute a Slurm job end-to-end from runtime models.
 
@@ -90,6 +99,8 @@ async def run_slurm_job(
         watch_poll_interval: Poll interval in seconds for job status checks.
         timeout_seconds: Optional timeout for waiting final status.
         metrics_artifact_key: Prefect artifact key for job metrics table.
+        cloud_log_policy: Prefect Cloud output and artifact policy. Omission
+            preserves the historical logging and artifact behavior.
 
     Returns:
         `SlurmRunResult` containing job id, exit status, state, and
@@ -97,6 +108,7 @@ async def run_slurm_job(
     """
 
     logger = get_run_logger()
+    policy = resolve_cloud_log_policy(cloud_log_policy)
 
     script_text = render_script(work_dir=work_dir, exec_profile=exec_profile, req=req)
     script_path = write_script_file(work_dir=work_dir, filename=script_filename, text=script_text)
@@ -112,12 +124,26 @@ async def run_slurm_job(
     stdout_file = work_dir / "output.out"
     stderr_file = work_dir / "output.err"
 
-    if logs := _read_text_if_exists(stdout_file):
-        logger.info(truncate_log(logs))
-    if logs := _read_text_if_exists(stderr_file):
-        logger.error(truncate_log(logs))
+    stdout = _read_text_if_exists(stdout_file)
+    stderr = _read_text_if_exists(stderr_file)
+    exit_code_text = str(final_status.get("ExitCode", "-1:0"))
+    emit_cloud_job_logs(
+        logger=logger,
+        policy=policy,
+        summary=CloudJobSummary(
+            job_id=submit.job_id,
+            state=str(final_status.get("State", "")),
+            exit_code=exit_code_text.partition(":")[0],
+            elapsed=final_status.get("Elapsed"),
+            node=final_status.get("NodeList"),
+            stdout_path=stdout_file,
+            stderr_path=stderr_file,
+        ),
+        stdout=stdout,
+        stderr=stderr,
+    )
 
-    if final_status:
+    if final_status and policy.should_create_artifact(legacy_default=True):
         artifact = _create_job_artifact(
             job_id=submit.job_id,
             job_status=final_status,
@@ -129,7 +155,7 @@ async def run_slurm_job(
             key=metrics_artifact_key,
         )
 
-    exit_code_text = str(final_status.get("ExitCode", "-1:0")).split(":", 1)[0]
+    exit_code_text = exit_code_text.split(":", 1)[0]
     exit_status = int(exit_code_text) if exit_code_text.isdigit() else -1
 
     return SlurmRunResult(

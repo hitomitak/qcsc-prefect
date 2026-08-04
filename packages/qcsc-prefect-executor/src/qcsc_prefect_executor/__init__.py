@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .cloud_logs import CloudLogPolicy
+
 
 async def run_job_from_blocks(*args: Any, **kwargs: Any):
     # Lazy import prevents circular initialization across package __init__.py files.
@@ -23,4 +25,4 @@ async def run_jobs_from_blocks_bulk(*args: Any, **kwargs: Any):
     return await _run_jobs_from_blocks_bulk(*args, **kwargs)
 
 
-__all__ = ["run_job_from_blocks", "run_jobs_from_blocks_bulk"]
+__all__ = ["CloudLogPolicy", "run_job_from_blocks", "run_jobs_from_blocks_bulk"]
