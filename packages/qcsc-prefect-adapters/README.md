@@ -28,3 +28,19 @@ normalized candidate without choosing one, and add adapter tests for active,
 historical, duplicate, step/array, metadata, and time-window behavior. The
 shared executor can then dispatch to that runtime without reimplementing its
 attach and hold state machine.
+
+## Slurm queue capacity
+
+`qcsc_prefect_adapters.slurm.queue.SlurmQueueProbe` counts active `squeue`
+rows in an explicit user scope, with optional account and partition filters.
+Array elements are expanded before counting. The probe does not infer a site
+quota from `squeue`; its `max_active_jobs` is a caller-configured workflow
+ceiling. It returns:
+
+```text
+available_slots = max(0, max_active_jobs - current_active_jobs)
+```
+
+The executor's generic queue gate then subtracts `safety_margin` and applies
+`max_submit_per_refill`. A command failure, timeout, or malformed non-empty row
+returns zero capacity so the current refill submits nothing.

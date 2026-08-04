@@ -363,6 +363,60 @@ def test_run_jobs_from_blocks_bulk_submits_only_up_to_queue_capacity(tmp_path: P
     assert result.succeeded == 3
 
 
+def test_run_jobs_from_blocks_bulk_uses_default_probe_when_omitted(
+    tmp_path: Path,
+    monkeypatch,
+):
+    registry_path = tmp_path / "bulk.sqlite"
+    submitted: list[str] = []
+    active_counts: list[int] = []
+    resolver_calls: list[dict[str, Any]] = []
+    probe = _RegistryCapacityProbe(registry_path, max_active_jobs=1)
+    _install_fake_submit_and_monitor(
+        monkeypatch,
+        submitted=submitted,
+        active_counts_after_submit=active_counts,
+    )
+
+    async def resolve_default_probe(**kwargs: Any):
+        resolver_calls.append(dict(kwargs))
+        return probe
+
+    monkeypatch.setattr(mod, "_resolve_default_bulk_queue_probe", resolve_default_probe)
+
+    result = asyncio.run(
+        mod.run_jobs_from_blocks_bulk(
+            jobs=[_spec(tmp_path, f"job-{index}") for index in range(3)],
+            command_block="cmd",
+            execution_profile_block="exec",
+            hpc_profile_block="hpc-slurm",
+            registry_path=registry_path,
+            max_active_jobs=1,
+            safety_margin=0,
+            max_submit_per_refill=10,
+            poll_interval_seconds=0,
+            refill_interval_seconds=0,
+            slurm_user="alice",
+            scheduler_command_timeout_seconds=12.5,
+        )
+    )
+
+    assert resolver_calls == [
+        {
+            "hpc_profile_block": "hpc-slurm",
+            "execution_profile_block": "exec",
+            "max_active_jobs": 1,
+            "safety_margin": 0,
+            "submit_mode": "single",
+            "slurm_user": "alice",
+            "scheduler_command_timeout_seconds": 12.5,
+        }
+    ]
+    assert max(active_counts) == 1
+    assert submitted == ["job-0", "job-1", "job-2"]
+    assert result.succeeded == 3
+
+
 def test_run_jobs_from_blocks_bulk_respects_max_submit_per_refill(tmp_path: Path, monkeypatch):
     registry_path = tmp_path / "bulk.sqlite"
     submitted: list[str] = []

@@ -505,6 +505,8 @@ async def _resolve_default_bulk_queue_probe(
     max_active_jobs: int,
     safety_margin: int,
     submit_mode: Literal["single", "native_bulk"] = "single",
+    slurm_user: str | None = None,
+    scheduler_command_timeout_seconds: float | None = (DEFAULT_SCHEDULER_COMMAND_TIMEOUT_SECONDS),
 ) -> QueueProbe:
     submission_target = await resolve_submission_target(
         hpc_profile_block_name=hpc_profile_block,
@@ -519,6 +521,20 @@ async def _resolve_default_bulk_queue_probe(
             project=submission_target.project,
             queue=submission_target.queue_name,
             capacity_mode="native_bulk" if submit_mode == "native_bulk" else "single",
+        )
+
+    if submission_target.hpc_target == "slurm":
+        from qcsc_prefect_adapters.slurm.queue import SlurmQueueProbe
+
+        resolved_user = str(slurm_user or getpass.getuser()).strip()
+        if not resolved_user:
+            raise ValueError("slurm_user must be non-empty for the default queue probe.")
+        return SlurmQueueProbe(
+            max_active_jobs=max_active_jobs,
+            user=resolved_user,
+            account=submission_target.project,
+            partition=submission_target.queue_name,
+            scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
         )
 
     raise ValueError(
@@ -2397,6 +2413,8 @@ async def run_jobs_from_blocks_bulk(
         max_active_jobs=max_active_jobs,
         safety_margin=safety_margin,
         submit_mode=submit_mode,
+        slurm_user=slurm_user,
+        scheduler_command_timeout_seconds=scheduler_command_timeout_seconds,
     )
     submit_gate = QueueAwareSubmitGate(
         queue_probe=resolved_queue_probe,

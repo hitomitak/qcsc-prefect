@@ -225,6 +225,60 @@ def test_identity_recovery_dispatch_rejects_unimplemented_backends(hpc_target: s
         mod.resolve_identity_recovery_runtime(hpc_target)
 
 
+def test_default_bulk_queue_probe_resolves_slurm_scope(monkeypatch):
+    async def fake_resolve_submission_target(**_kwargs: object):
+        return mod.SubmissionTarget(
+            hpc_target="slurm",
+            queue_name="compute",
+            project="project-a",
+        )
+
+    monkeypatch.setattr(mod, "resolve_submission_target", fake_resolve_submission_target)
+
+    probe = asyncio.run(
+        mod._resolve_default_bulk_queue_probe(
+            hpc_profile_block="hpc-slurm",
+            execution_profile_block="exec-cpu",
+            max_active_jobs=25,
+            safety_margin=3,
+            slurm_user="alice",
+            scheduler_command_timeout_seconds=12.5,
+        )
+    )
+
+    assert type(probe).__name__ == "SlurmQueueProbe"
+    assert probe.max_active_jobs == 25
+    assert probe.user == "alice"
+    assert probe.account == "project-a"
+    assert probe.partition == "compute"
+    assert probe.scheduler_command_timeout_seconds == 12.5
+
+
+def test_default_bulk_queue_probe_uses_process_user_for_slurm(monkeypatch):
+    async def fake_resolve_submission_target(**_kwargs: object):
+        return mod.SubmissionTarget(
+            hpc_target="slurm",
+            queue_name="compute",
+            project="",
+        )
+
+    monkeypatch.setattr(mod, "resolve_submission_target", fake_resolve_submission_target)
+    monkeypatch.setattr(mod.getpass, "getuser", lambda: "login-user")
+
+    probe = asyncio.run(
+        mod._resolve_default_bulk_queue_probe(
+            hpc_profile_block="hpc-slurm",
+            execution_profile_block="exec-cpu",
+            max_active_jobs=25,
+            safety_margin=3,
+        )
+    )
+
+    assert probe.user == "login-user"
+    assert probe.account is None
+    assert probe.partition == "compute"
+
+
 def _slurm_candidate(
     record,
     *,

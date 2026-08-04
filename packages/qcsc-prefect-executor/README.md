@@ -34,6 +34,44 @@ single-submit bulk paths use these effective blocks for submission and group
 monitoring by effective `hpc_profile_block`; native PJM bulk mode rejects per-job
 block overrides because one generated script/profile is shared by all subjobs.
 
+### Bounded Slurm submission
+
+For a Slurm runner using one common HPC/execution profile scope,
+`run_jobs_from_blocks_bulk` creates its Slurm queue probe when `queue_probe` is
+omitted:
+
+```python
+result = await run_jobs_from_blocks_bulk(
+    jobs=jobs,
+    command_block="command-block",
+    execution_profile_block="slurm-cpu",
+    hpc_profile_block="slurm-site",
+    registry_path=registry_path,
+    max_active_jobs=50,
+    safety_margin=5,
+    max_submit_per_refill=10,
+    slurm_user="scheduler-user",
+)
+```
+
+`max_active_jobs` is the configured workflow ceiling; it is not a Slurm quota
+discovered from `squeue`. The default probe filters by `slurm_user` (or the
+current process user), account/project, and partition resolved from the blocks.
+For each refill, the effective allowance is:
+
+```text
+min(
+    configured_max_active_jobs - scoped_current_active_jobs - safety_margin,
+    max_submit_per_refill,
+    remaining_submit_candidates,
+)
+```
+
+Negative allowance is clamped to zero. Scheduler errors, timeouts, and malformed
+probe output fail closed with zero submissions for that refill. If per-job block
+overrides span different user/account/partition scopes, pass an explicit
+composite `QueueProbe` whose capacity contract covers those scopes.
+
 ### Explicit Slurm cancellation
 
 Stopping a Prefect run or cancelling its waiting coroutine does not cancel the
