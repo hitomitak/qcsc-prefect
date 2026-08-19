@@ -811,6 +811,8 @@ async def _prepare_job_from_blocks(
             qpu=hpc_block.slurm_qpu,
             memory=getattr(hpc_block, "slurm_memory", None),
             ntasks=getattr(hpc_block, "slurm_ntasks", None),
+            reservation=getattr(hpc_block, "slurm_reservation", None),
+            gres=getattr(hpc_block, "slurm_gres", None),
         )
     else:
         raise NotImplementedError(

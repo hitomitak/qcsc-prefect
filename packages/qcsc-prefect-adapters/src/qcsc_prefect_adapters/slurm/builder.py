@@ -21,6 +21,9 @@ _IDENTITY_DIGEST_SUFFIX_LENGTH = 24
 _JOB_NAME_COMPONENT_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 _SLURM_JOB_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _SLURM_COMMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
+# Generic resource selectors are ``name[:type]:count`` and may be comma-joined,
+# for example ``gpu:1``, ``gpu:a100:2``, or ``gpu:1,mps:100``.
+_SLURM_GRES_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:,-]*$")
 
 
 @dataclass(frozen=True)
@@ -104,7 +107,12 @@ def build_slurm_job_identity(
 
 def _validated_slurm_directive_value(value: str, *, field_name: str) -> str:
     normalized = str(value).strip()
-    pattern = _SLURM_JOB_NAME_RE if field_name == "job_name" else _SLURM_COMMENT_RE
+    if field_name in ("job_name", "reservation"):
+        pattern = _SLURM_JOB_NAME_RE
+    elif field_name == "gres":
+        pattern = _SLURM_GRES_RE
+    else:
+        pattern = _SLURM_COMMENT_RE
     if not pattern.fullmatch(normalized):
         raise ValueError(f"Slurm {field_name} must use only safe scheduler directive characters.")
     return normalized
@@ -123,6 +131,9 @@ class SlurmJobRequest:
         ntasks: Optional task count passed to ``#SBATCH --ntasks``.
         job_name: Optional scheduler-safe name passed to ``#SBATCH --job-name``.
         comment: Optional scheduler-safe identity passed to ``#SBATCH --comment``.
+        reservation: Optional reservation name passed to ``#SBATCH --reservation``.
+        gres: Optional generic resource selector passed to ``#SBATCH --gres``,
+            for example ``gpu:1``.
     """
 
     partition: str
@@ -133,6 +144,8 @@ class SlurmJobRequest:
     ntasks: int | None = None
     job_name: str | None = None
     comment: str | None = None
+    reservation: str | None = None
+    gres: str | None = None
 
 
 def to_slurm_template_kwargs(*, exec_profile: ExecutionProfile, req: SlurmJobRequest) -> dict:
@@ -170,6 +183,13 @@ def to_slurm_template_kwargs(*, exec_profile: ExecutionProfile, req: SlurmJobReq
             req.comment,
             field_name="comment",
         )
+    if req.reservation is not None:
+        kw["reservation"] = _validated_slurm_directive_value(
+            req.reservation,
+            field_name="reservation",
+        )
+    if req.gres is not None:
+        kw["gres"] = _validated_slurm_directive_value(req.gres, field_name="gres")
     if exec_profile.mpiprocs is not None:
         kw["mpiprocs"] = exec_profile.mpiprocs
     if exec_profile.ompthreads is not None:

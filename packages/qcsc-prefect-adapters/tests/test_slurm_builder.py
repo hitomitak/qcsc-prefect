@@ -77,6 +77,54 @@ def test_render_slurm_script_omits_optional_directives(tmp_path: Path):
     assert "#SBATCH --qpu" not in text
     assert "#SBATCH --job-name" not in text
     assert "#SBATCH --comment" not in text
+    assert "#SBATCH --reservation" not in text
+    assert "#SBATCH --gres" not in text
+
+
+def test_render_slurm_script_renders_reservation_and_gres(tmp_path: Path) -> None:
+    profile = ExecutionProfile(command_key="hello", num_nodes=1, launcher="single")
+    req = SlurmJobRequest(
+        partition="roquo",
+        executable="hello",
+        reservation="gb-doi",
+        gres="gpu:1",
+    )
+
+    text = render_script(work_dir=tmp_path, exec_profile=profile, req=req)
+
+    assert "#SBATCH --reservation=gb-doi" in text
+    assert "#SBATCH --gres=gpu:1" in text
+
+
+@pytest.mark.parametrize("value", ["gpu:1", "gpu:a100:2", "gpu:1,mps:100"])
+def test_render_slurm_script_accepts_gres_resource_forms(tmp_path: Path, value: str) -> None:
+    profile = ExecutionProfile(command_key="hello", num_nodes=1, launcher="single")
+    req = SlurmJobRequest(partition="roquo", executable="hello", gres=value)
+
+    text = render_script(work_dir=tmp_path, exec_profile=profile, req=req)
+
+    assert f"#SBATCH --gres={value}" in text
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("reservation", "gb doi"),
+        ("reservation", "gb-doi\n#SBATCH --gres=gpu:8"),
+        ("gres", "gpu:1; rm -rf /"),
+        ("gres", "gpu:1\n#SBATCH --account=other"),
+    ],
+)
+def test_render_slurm_script_rejects_unsafe_resource_directives(
+    tmp_path: Path,
+    field_name: str,
+    value: str,
+) -> None:
+    profile = ExecutionProfile(command_key="hello", num_nodes=1, launcher="single")
+    req = SlurmJobRequest(partition="compute", executable="hello", **{field_name: value})
+
+    with pytest.raises(ValueError, match="safe scheduler directive characters"):
+        render_script(work_dir=tmp_path, exec_profile=profile, req=req)
 
 
 def test_build_slurm_job_identity_is_deterministic_and_spec_specific() -> None:
