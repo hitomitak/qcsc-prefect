@@ -94,7 +94,7 @@ async def _resolve_default_bulk_queue_probe(*args, **kwargs) -> QueueProbe:
     return await _resolve_queue_probe(*args, **kwargs)
 
 
-def _pending_fifo_candidates(
+def _submit_fifo_candidates(
     registry: BulkJobRegistry,
     *,
     limit: int,
@@ -102,9 +102,7 @@ def _pending_fifo_candidates(
     if limit <= 0:
         return []
 
-    records = registry.get_submit_candidates_fifo(limit=registry.count_submit_candidates())
-    pending = [record for record in records if record.status == BulkJobStatus.PENDING]
-    return pending[:limit]
+    return registry.get_submit_candidates_fifo(limit=limit)
 
 
 @dataclass
@@ -113,8 +111,8 @@ class GlobalFugakuBulkRunner:
 
     The runner uses the existing single-submit path. Native PJM bulk submission
     remains an explicit experimental mode elsewhere and is not used here.
-    Within one tick, selected pending jobs are submitted concurrently up to
-    ``submit_workers`` without increasing the queue-aware batch size.
+    Within one tick, selected pending or deferred jobs are submitted concurrently
+    up to ``submit_workers`` without increasing the queue-aware batch size.
     """
 
     command_block: str
@@ -148,7 +146,9 @@ class GlobalFugakuBulkRunner:
         """Run one monitor/refill cycle without waiting for terminal completion."""
 
         monitored = await self._monitor_once()
-        self.registry.refresh_completed_jobs_from_outputs()
+        self.registry.refresh_completed_jobs_from_outputs(
+            include_awaiting_operator=True,
+        )
         submitted = await self._submit_once()
         return BulkTickResult(
             submitted=submitted,
@@ -210,13 +210,14 @@ class GlobalFugakuBulkRunner:
         return results
 
     async def _submit_once(self) -> list[SubmittedJob]:
+        self._fail_exhausted_deferred_jobs()
         submit_limit = _submit_limit_for_cycle(
             registry=self.registry,
             initial_submit_count=self.initial_submit_count,
             max_submit_per_refill=self.max_submit_per_refill,
         )
         submit_count = await self._submit_count(submit_limit=submit_limit)
-        candidates = _pending_fifo_candidates(self.registry, limit=submit_count)
+        candidates = _submit_fifo_candidates(self.registry, limit=submit_count)
         if not candidates:
             return []
 
@@ -275,7 +276,23 @@ class GlobalFugakuBulkRunner:
                 error=str(payload),
             )
 
+        self._fail_exhausted_deferred_jobs()
         return submitted
+
+    def _fail_exhausted_deferred_jobs(self) -> None:
+        for record in self.registry.get_all_jobs():
+            if record.status != BulkJobStatus.SUBMIT_DEFERRED:
+                continue
+            if record.submit_attempts < record.max_submit_attempts:
+                continue
+            detail = record.last_error or "scheduler submission remained deferred"
+            self.registry.mark_failed(
+                record.job_key,
+                error=(
+                    "Scheduler submission retry limit exhausted "
+                    f"after {record.submit_attempts} attempt(s): {detail}"
+                ),
+            )
 
     async def _submit_count(self, *, submit_limit: int) -> int:
         queue_probe = await self._resolved_queue_probe()
@@ -283,7 +300,7 @@ class GlobalFugakuBulkRunner:
             max(0, int(submit_limit)),
             _queue_available_slots(queue_probe),
             len(
-                _pending_fifo_candidates(
+                _submit_fifo_candidates(
                     self.registry,
                     limit=self.registry.count_submit_candidates(),
                 )

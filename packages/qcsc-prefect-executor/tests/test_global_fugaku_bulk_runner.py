@@ -40,6 +40,7 @@ def _spec(
     expected_outputs: list[Path] | None = None,
     execution_profile_block: str | None = None,
     hpc_profile_block: str | None = None,
+    max_submit_attempts: int = 5,
 ) -> BulkJobSpec:
     return BulkJobSpec(
         job_key=job_key,
@@ -49,6 +50,7 @@ def _spec(
         expected_outputs=expected_outputs or [],
         execution_profile_block=execution_profile_block,
         hpc_profile_block=hpc_profile_block,
+        max_submit_attempts=max_submit_attempts,
     )
 
 
@@ -76,7 +78,10 @@ def _install_single_submit_fakes(
         fugaku_no_check_directory: bool = False,
     ) -> SubmittedJob:
         if job_key in submit_failures:
-            raise submit_failures[job_key]
+            failure = submit_failures[job_key]
+            if registry is not None and isinstance(failure, QueueFullError):
+                registry.mark_submit_deferred(job_key, error=str(failure))
+            raise failure
 
         scheduler_job_id = f"sched-{job_key}"
         submitted.append(job_key)
@@ -402,15 +407,16 @@ def test_submit_failure_isolated_to_one_job(tmp_path: Path, monkeypatch):
     }
 
 
-def test_queue_full_isolated_and_deferred_job_is_not_auto_retried(
+def test_queue_full_isolated_and_deferred_job_is_retried_next_tick(
     tmp_path: Path,
     monkeypatch,
 ):
     submitted: list[str] = []
+    submit_failures = {"qpy-0": QueueFullError("queue full")}
     _install_single_submit_fakes(
         monkeypatch,
         submitted=submitted,
-        submit_failures={"qpy-0": QueueFullError("queue full")},
+        submit_failures=submit_failures,
     )
     runner = _runner(
         tmp_path,
@@ -421,16 +427,66 @@ def test_queue_full_isolated_and_deferred_job_is_not_auto_retried(
     runner.register_jobs([_spec(tmp_path, f"qpy-{index}", "qpy") for index in range(2)])
 
     first = asyncio.run(runner.tick())
+    submit_failures.clear()
     second = asyncio.run(runner.tick())
 
     assert [job.job_key for job in first.submitted] == ["qpy-1"]
-    assert second.submitted == []
-    assert submitted == ["qpy-1"]
-    assert runner.all_submitted("qpy") is False
+    assert [job.job_key for job in second.submitted] == ["qpy-0"]
+    assert submitted == ["qpy-1", "qpy-0"]
+    assert runner.all_submitted("qpy") is True
     assert runner.status_counts("qpy") == {
-        BulkJobStatus.SUBMIT_DEFERRED.value: 1,
-        BulkJobStatus.SUBMITTED.value: 1,
+        BulkJobStatus.SUBMITTED.value: 2,
     }
+    assert runner.registry.get_job("qpy-0").submit_attempts == 2
+
+
+def test_deferred_job_fails_after_submit_retry_limit(tmp_path: Path, monkeypatch):
+    submitted: list[str] = []
+    _install_single_submit_fakes(
+        monkeypatch,
+        submitted=submitted,
+        submit_failures={"qpy-0": QueueFullError("queue full")},
+    )
+    runner = _runner(tmp_path, initial_submit_count=1, max_submit_per_refill=1)
+    runner.register_jobs(
+        [_spec(tmp_path, "qpy-0", "qpy", max_submit_attempts=2)]
+    )
+
+    asyncio.run(runner.tick())
+    first = runner.registry.get_job("qpy-0")
+    assert first.status == BulkJobStatus.SUBMIT_DEFERRED
+    assert first.submit_attempts == 1
+
+    asyncio.run(runner.tick())
+    exhausted = runner.registry.get_job("qpy-0")
+    assert exhausted.status == BulkJobStatus.FAILED
+    assert exhausted.submit_attempts == 2
+    assert "retry limit exhausted" in exhausted.last_error
+
+
+def test_tick_recovers_awaiting_job_when_outputs_become_visible(
+    tmp_path: Path,
+    monkeypatch,
+):
+    _install_single_submit_fakes(monkeypatch, submitted=[])
+    runner = _runner(tmp_path, initial_submit_count=0)
+    output = tmp_path / "job-0" / "done.txt"
+    runner.register_jobs(
+        [_spec(tmp_path, "job-0", "qpy", expected_outputs=[output])]
+    )
+    runner.registry.mark_awaiting_operator(
+        "job-0",
+        "scheduler job disappeared before terminal state could be confirmed",
+    )
+    output.parent.mkdir(parents=True)
+    output.write_text("ok")
+
+    result = asyncio.run(runner.tick())
+
+    assert result.status_counts == {BulkJobStatus.SUCCEEDED.value: 1}
+    recovered = runner.registry.get_job("job-0")
+    assert recovered.status == BulkJobStatus.SUCCEEDED
+    assert recovered.last_error is None
 
 
 def test_register_trimsqd_jobs_later_and_tick_submits_them(tmp_path: Path, monkeypatch):

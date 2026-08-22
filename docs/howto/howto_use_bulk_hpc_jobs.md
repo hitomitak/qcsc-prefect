@@ -87,10 +87,10 @@ increase the batch size selected by queue capacity, `initial_submit_count`,
 If one selected job raises `QueueFullError` or `TemporarySubmitError`, only that
 job is marked `SUBMIT_DEFERRED`; the runner still lets other jobs already
 selected for the same tick finish their submit attempts. `SUBMIT_DEFERRED` jobs
-are not retried automatically by `GlobalFugakuBulkRunner`, because the runner
-selects only `PENDING` jobs for staged submission. Use stable `job_key` values,
-expected output skips, and explicit registry reset helpers for workflow-level
-reruns.
+are retried by `GlobalFugakuBulkRunner` on a later tick while
+`submit_attempts < max_submit_attempts`. A deferred job that reaches the limit
+is marked `FAILED`. Use stable `job_key` values and expected output skips so
+restarts remain idempotent.
 
 ```python
 from pathlib import Path

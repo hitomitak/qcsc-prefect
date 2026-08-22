@@ -569,7 +569,8 @@ class BulkJobRegistry:
 
         statuses = _status_values(tuple(SUBMIT_CANDIDATE_BULK_JOB_STATUSES))
         return self._fetch_records(
-            f"status IN ({self._placeholders(statuses)}) AND desired_state = ?",
+            f"status IN ({self._placeholders(statuses)}) "
+            "AND submit_attempts < max_submit_attempts AND desired_state = ?",
             [*statuses, BulkJobDesiredState.RUN.value, int(limit)],
             "created_at ASC, rowid ASC, job_key ASC LIMIT ?",
         )
@@ -577,7 +578,8 @@ class BulkJobRegistry:
     def count_submit_candidates(self) -> int:
         statuses = _status_values(tuple(SUBMIT_CANDIDATE_BULK_JOB_STATUSES))
         return self._count_records(
-            f"status IN ({self._placeholders(statuses)}) AND desired_state = ?",
+            f"status IN ({self._placeholders(statuses)}) "
+            "AND submit_attempts < max_submit_attempts AND desired_state = ?",
             [*statuses, BulkJobDesiredState.RUN.value],
         )
 
@@ -1327,16 +1329,23 @@ class BulkJobRegistry:
             )
         return int(cursor.rowcount)
 
-    def refresh_completed_jobs_from_outputs(self) -> None:
+    def refresh_completed_jobs_from_outputs(
+        self,
+        *,
+        include_awaiting_operator: bool = False,
+    ) -> None:
         now = _utcnow_iso()
+        excluded_statuses = [
+            BulkJobStatus.SUCCEEDED.value,
+            BulkJobStatus.PREPARED.value,
+        ]
+        if not include_awaiting_operator:
+            excluded_statuses.append(BulkJobStatus.AWAITING_OPERATOR.value)
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM bulk_jobs WHERE status NOT IN (?, ?, ?)",
-                (
-                    BulkJobStatus.SUCCEEDED.value,
-                    BulkJobStatus.PREPARED.value,
-                    BulkJobStatus.AWAITING_OPERATOR.value,
-                ),
+                "SELECT * FROM bulk_jobs "
+                f"WHERE status NOT IN ({self._placeholders(excluded_statuses)})",
+                excluded_statuses,
             ).fetchall()
             for row in rows:
                 expected_outputs = _json_loads_paths(row["expected_outputs_json"])

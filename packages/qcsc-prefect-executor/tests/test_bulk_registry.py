@@ -699,6 +699,15 @@ def test_get_submit_candidates_fifo_uses_insert_order_not_priority(tmp_path: Pat
     assert registry.get_submit_candidates_fifo(limit=2)[-1].job_key == "second"
 
 
+def test_fifo_candidates_exclude_deferred_jobs_at_submit_attempt_limit(tmp_path: Path):
+    registry = _registry(tmp_path)
+    registry.upsert_jobs([_spec(tmp_path, "deferred", max_submit_attempts=1)])
+    registry.mark_submit_deferred("deferred", error="queue full")
+
+    assert registry.get_submit_candidates_fifo(limit=10) == []
+    assert registry.count_submit_candidates() == 0
+
+
 def test_count_helpers_and_bootstrap_done(tmp_path: Path):
     registry = _registry(tmp_path)
     registry.upsert_jobs(
@@ -1227,6 +1236,9 @@ def test_output_refresh_does_not_bypass_prepared_or_operator_hold(tmp_path: Path
     registry.mark_awaiting_operator("job-1", "operator review required")
     registry.refresh_completed_jobs_from_outputs()
     assert registry.get_job("job-1").status == BulkJobStatus.AWAITING_OPERATOR
+
+    registry.refresh_completed_jobs_from_outputs(include_awaiting_operator=True)
+    assert registry.get_job("job-1").status == BulkJobStatus.SUCCEEDED
 
 
 def test_registry_reload_preserves_state(tmp_path: Path):
