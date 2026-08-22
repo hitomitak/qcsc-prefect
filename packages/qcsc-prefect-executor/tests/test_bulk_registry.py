@@ -1274,6 +1274,12 @@ def test_operator_can_attach_or_explicitly_reset_held_claim(tmp_path: Path):
     assert reset.status == BulkJobStatus.PENDING
     assert reset.prepared_at is None
     assert reset.submit_attempts == 0
+    assert reset.spec_hash is None
+    assert reset.input_digest is None
+    assert reset.code_digest is None
+    assert reset.environment_digest is None
+    assert reset.job_name is None
+    assert reset.job_comment is None
     assert "operator@example" in str(reset.last_error)
 
 
