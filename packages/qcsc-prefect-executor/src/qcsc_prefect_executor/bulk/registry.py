@@ -1307,6 +1307,16 @@ class BulkJobRegistry:
                     "bulk_parent_job_id = NULL",
                     "bulk_index = NULL",
                     "scheduler_subjob_id = NULL",
+                    # A controlled rerun is a new submission attempt. Discard the
+                    # previous prepared identity so that current Prefect Block
+                    # values can produce a new resolved spec for the same job key.
+                    "spec_hash = NULL",
+                    "input_digest = NULL",
+                    "code_digest = NULL",
+                    "environment_digest = NULL",
+                    "prepared_at = NULL",
+                    "job_name = NULL",
+                    "job_comment = NULL",
                 ]
             )
         if clear_error:

@@ -786,6 +786,12 @@ def test_reset_jobs_for_rerun_resets_failed_unknown_and_clears_scheduler_fields(
                 target_id="target-failed",
                 command_args={"kind": "failed"},
                 expected_outputs=[Path("done.txt")],
+                spec_hash="qcsc-prefect-bulk-spec-v1:sha256:failed",
+                input_digest="input-failed",
+                code_digest="code-failed",
+                environment_digest="environment-failed",
+                job_name="qcsc-failed",
+                job_comment="qcsc-spec=failed",
             ),
             _spec(
                 tmp_path,
@@ -794,8 +800,23 @@ def test_reset_jobs_for_rerun_resets_failed_unknown_and_clears_scheduler_fields(
                 target_id="target-unknown",
                 command_args={"kind": "unknown"},
                 expected_outputs=[Path("result.json")],
+                spec_hash="qcsc-prefect-bulk-spec-v1:sha256:unknown",
+                input_digest="input-unknown",
+                code_digest="code-unknown",
+                environment_digest="environment-unknown",
+                job_name="qcsc-unknown",
+                job_comment="qcsc-spec=unknown",
             ),
-            _spec(tmp_path, "succeeded"),
+            _spec(
+                tmp_path,
+                "succeeded",
+                spec_hash="qcsc-prefect-bulk-spec-v1:sha256:succeeded",
+                input_digest="input-succeeded",
+                code_digest="code-succeeded",
+                environment_digest="environment-succeeded",
+                job_name="qcsc-succeeded",
+                job_comment="qcsc-spec=succeeded",
+            ),
         ]
     )
     for index, job_key in enumerate(["failed", "unknown", "succeeded"]):
@@ -840,6 +861,13 @@ def test_reset_jobs_for_rerun_resets_failed_unknown_and_clears_scheduler_fields(
         assert record.bulk_index is None
         assert record.scheduler_subjob_id is None
         assert record.effective_scheduler_job_id is None
+        assert record.spec_hash is None
+        assert record.input_digest is None
+        assert record.code_digest is None
+        assert record.environment_digest is None
+        assert record.prepared_at is None
+        assert record.job_name is None
+        assert record.job_comment is None
         assert record.stage_id == "stage-a"
         assert record.wave_id == "wave-a"
         assert record.target_id == f"target-{job_key}"
@@ -853,6 +881,55 @@ def test_reset_jobs_for_rerun_resets_failed_unknown_and_clears_scheduler_fields(
     assert succeeded.scheduler_job_id == "12345"
     assert succeeded.scheduler_subjob_id == "12345[2]"
     assert succeeded.submit_mode == "native_bulk"
+    assert succeeded.spec_hash == "qcsc-prefect-bulk-spec-v1:sha256:succeeded"
+    assert succeeded.job_name == "qcsc-succeeded"
+
+
+def test_reset_jobs_for_rerun_accepts_a_changed_spec_for_the_same_job_key(
+    tmp_path: Path,
+):
+    registry = _registry(tmp_path)
+    old_spec = _spec(
+        tmp_path,
+        "failed",
+        command_args={"input": "old.dat"},
+        spec_hash="qcsc-prefect-bulk-spec-v1:sha256:old",
+        input_digest="input-old",
+        code_digest="code-old",
+        environment_digest="environment-old",
+        job_name="qcsc-old",
+        job_comment="qcsc-spec=old",
+    )
+    new_spec = _spec(
+        tmp_path,
+        "failed",
+        command_args={"input": "new.dat"},
+        spec_hash="qcsc-prefect-bulk-spec-v1:sha256:new",
+        input_digest="input-new",
+        code_digest="code-new",
+        environment_digest="environment-new",
+        job_name="qcsc-new",
+        job_comment="qcsc-spec=new",
+    )
+    registry.upsert_jobs([old_spec])
+    registry.mark_failed("failed", error="exit 1")
+
+    with pytest.raises(SpecHashMismatchError):
+        registry.upsert_jobs([new_spec])
+
+    assert registry.reset_jobs_for_rerun(job_keys=["failed"]) == 1
+    registry.upsert_jobs([new_spec])
+
+    record = registry.get_job("failed")
+    assert record is not None
+    assert record.status == BulkJobStatus.PENDING
+    assert record.command_args == {"input": "new.dat"}
+    assert record.spec_hash == "qcsc-prefect-bulk-spec-v1:sha256:new"
+    assert record.input_digest == "input-new"
+    assert record.code_digest == "code-new"
+    assert record.environment_digest == "environment-new"
+    assert record.job_name == "qcsc-new"
+    assert record.job_comment == "qcsc-spec=new"
 
 
 def test_reset_jobs_for_rerun_can_clear_error(tmp_path: Path):
@@ -941,7 +1018,20 @@ def test_reset_jobs_for_rerun_respects_status_filter(tmp_path: Path):
 
 def test_reset_jobs_for_rerun_can_preserve_scheduler_ids(tmp_path: Path):
     registry = _registry(tmp_path)
-    registry.upsert_jobs([_spec(tmp_path, "failed")])
+    registry.upsert_jobs(
+        [
+            _spec(
+                tmp_path,
+                "failed",
+                spec_hash="qcsc-prefect-bulk-spec-v1:sha256:old",
+                input_digest="input-old",
+                code_digest="code-old",
+                environment_digest="environment-old",
+                job_name="qcsc-old",
+                job_comment="qcsc-spec=old",
+            )
+        ]
+    )
     registry.mark_submitted(
         "failed",
         "12345",
@@ -968,6 +1058,12 @@ def test_reset_jobs_for_rerun_can_preserve_scheduler_ids(tmp_path: Path):
     assert record.submitted_at is not None
     assert record.finished_at is not None
     assert record.last_error == "exit 1"
+    assert record.spec_hash == "qcsc-prefect-bulk-spec-v1:sha256:old"
+    assert record.input_digest == "input-old"
+    assert record.code_digest == "code-old"
+    assert record.environment_digest == "environment-old"
+    assert record.job_name == "qcsc-old"
+    assert record.job_comment == "qcsc-spec=old"
 
 
 def test_unknown_job_with_scheduler_id_is_monitorable_but_not_active(tmp_path: Path):
