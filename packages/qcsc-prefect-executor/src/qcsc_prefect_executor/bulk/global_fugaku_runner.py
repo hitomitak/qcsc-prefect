@@ -227,7 +227,6 @@ class GlobalFugakuBulkRunner:
         if not candidates:
             return []
 
-        semaphore = asyncio.Semaphore(self.submit_workers)
         cloud_policy_kwargs = (
             {"cloud_log_policy": self.cloud_log_policy} if self.cloud_log_policy is not None else {}
         )
@@ -235,34 +234,43 @@ class GlobalFugakuBulkRunner:
         async def _attempt(
             job: BulkJobRecord,
         ) -> tuple[str, BulkJobRecord, SubmittedJob | str]:
-            async with semaphore:
-                try:
-                    submitted_job = await submit_job_from_blocks(
-                        command_block=self.command_block,
-                        execution_profile_block=effective_execution_profile_block(
-                            job,
-                            self.execution_profile_block,
-                        ),
-                        hpc_profile_block=effective_hpc_profile_block(
-                            job,
-                            self.hpc_profile_block,
-                        ),
-                        work_dir=job.work_dir,
-                        job_key=job.job_key,
-                        command_args=job.command_args,
-                        registry=self.registry,
-                        fugaku_no_check_directory=self.no_check_directory,
-                        **cloud_policy_kwargs,
-                    )
-                except (QueueFullError, TemporarySubmitError) as exc:
-                    return ("deferred", job, str(exc))
-                except Exception as exc:
-                    return ("failed", job, _exception_text(exc))
+            try:
+                submitted_job = await submit_job_from_blocks(
+                    command_block=self.command_block,
+                    execution_profile_block=effective_execution_profile_block(
+                        job,
+                        self.execution_profile_block,
+                    ),
+                    hpc_profile_block=effective_hpc_profile_block(
+                        job,
+                        self.hpc_profile_block,
+                    ),
+                    work_dir=job.work_dir,
+                    job_key=job.job_key,
+                    command_args=job.command_args,
+                    registry=self.registry,
+                    fugaku_no_check_directory=self.no_check_directory,
+                    **cloud_policy_kwargs,
+                )
+            except (QueueFullError, TemporarySubmitError) as exc:
+                return ("deferred", job, str(exc))
+            except Exception as exc:
+                return ("failed", job, _exception_text(exc))
 
-                return ("submitted", job, submitted_job)
+            return ("submitted", job, submitted_job)
 
         async with submission_block_cache():
-            outcomes = await asyncio.gather(*(_attempt(job) for job in candidates))
+            outcomes: list[tuple[str, BulkJobRecord, SubmittedJob | str]] = []
+            for offset in range(0, len(candidates), self.submit_workers):
+                batch = candidates[offset : offset + self.submit_workers]
+                batch_outcomes = await asyncio.gather(*(_attempt(job) for job in batch))
+                outcomes.extend(batch_outcomes)
+                if any(kind == "deferred" for kind, _, _ in batch_outcomes):
+                    # A scheduler capacity rejection applies to the submit
+                    # stream, not just one logical job. Leave later FIFO
+                    # candidates untouched so the next tick can retry them
+                    # without hammering sbatch for the rest of this refill.
+                    break
 
         submitted: list[SubmittedJob] = []
         for kind, job, payload in outcomes:

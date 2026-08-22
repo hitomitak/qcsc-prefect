@@ -440,6 +440,48 @@ def test_queue_full_isolated_and_deferred_job_is_retried_next_tick(
     assert runner.registry.get_job("qpy-0").submit_attempts == 2
 
 
+def test_queue_full_stops_later_submit_batches_until_next_tick(
+    tmp_path: Path,
+    monkeypatch,
+):
+    submitted: list[str] = []
+    submit_failures = {"qpy-0": QueueFullError("queue full")}
+    _install_single_submit_fakes(
+        monkeypatch,
+        submitted=submitted,
+        submit_failures=submit_failures,
+    )
+    runner = _runner(
+        tmp_path,
+        initial_submit_count=6,
+        max_submit_per_refill=6,
+        submit_workers=2,
+    )
+    runner.register_jobs([_spec(tmp_path, f"qpy-{index}", "qpy") for index in range(6)])
+
+    first = asyncio.run(runner.tick())
+
+    assert [job.job_key for job in first.submitted] == ["qpy-1"]
+    assert submitted == ["qpy-1"]
+    assert runner.status_counts("qpy") == {
+        BulkJobStatus.PENDING.value: 4,
+        BulkJobStatus.SUBMIT_DEFERRED.value: 1,
+        BulkJobStatus.SUBMITTED.value: 1,
+    }
+
+    submit_failures.clear()
+    second = asyncio.run(runner.tick())
+
+    assert {job.job_key for job in second.submitted} == {
+        "qpy-0",
+        "qpy-2",
+        "qpy-3",
+        "qpy-4",
+        "qpy-5",
+    }
+    assert runner.status_counts("qpy") == {BulkJobStatus.SUBMITTED.value: 6}
+
+
 def test_deferred_job_fails_after_submit_retry_limit(tmp_path: Path, monkeypatch):
     submitted: list[str] = []
     _install_single_submit_fakes(
