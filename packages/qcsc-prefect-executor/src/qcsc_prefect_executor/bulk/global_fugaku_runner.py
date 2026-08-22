@@ -86,6 +86,12 @@ async def submit_job_from_blocks(*args, **kwargs):
     return await _submit_job_from_blocks(*args, **kwargs)
 
 
+def submission_block_cache():
+    from qcsc_prefect_executor.from_blocks import submission_block_cache as _block_cache
+
+    return _block_cache()
+
+
 async def _resolve_default_bulk_queue_probe(*args, **kwargs) -> QueueProbe:
     from qcsc_prefect_executor.from_blocks import (
         _resolve_default_bulk_queue_probe as _resolve_queue_probe,
@@ -255,7 +261,8 @@ class GlobalFugakuBulkRunner:
 
                 return ("submitted", job, submitted_job)
 
-        outcomes = await asyncio.gather(*(_attempt(job) for job in candidates))
+        async with submission_block_cache():
+            outcomes = await asyncio.gather(*(_attempt(job) for job in candidates))
 
         submitted: list[SubmittedJob] = []
         for kind, job, payload in outcomes:

@@ -1171,6 +1171,52 @@ def test_bulk_public_api_exports_from_blocks_helpers():
     assert callable(submit_job_from_blocks)
 
 
+def test_submission_block_cache_deduplicates_concurrent_loads():
+    calls: list[str] = []
+
+    class FakeBlock:
+        @classmethod
+        async def load(cls, name: str) -> object:
+            calls.append(name)
+            await asyncio.sleep(0)
+            return object()
+
+    async def exercise() -> None:
+        async with mod.submission_block_cache():
+            first, second, third = await asyncio.gather(
+                mod._load_block(FakeBlock, "shared"),
+                mod._load_block(FakeBlock, "shared"),
+                mod._load_block(FakeBlock, "other"),
+            )
+        assert first is second
+        assert third is not first
+
+    asyncio.run(exercise())
+
+    assert calls == ["shared", "other"]
+
+
+def test_submission_block_cache_expires_after_context():
+    calls = 0
+
+    class FakeBlock:
+        @classmethod
+        async def load(cls, name: str) -> object:
+            nonlocal calls
+            calls += 1
+            return object()
+
+    async def exercise() -> None:
+        async with mod.submission_block_cache():
+            await mod._load_block(FakeBlock, "shared")
+        async with mod.submission_block_cache():
+            await mod._load_block(FakeBlock, "shared")
+
+    asyncio.run(exercise())
+
+    assert calls == 2
+
+
 def test_fugaku_history_verbose_rows_parse_ext_jobs_without_success_evidence():
     rows = mod._parse_fugaku_pjstat_rows(FUGAKU_HISTORY_VERBOSE_OUTPUT)
 

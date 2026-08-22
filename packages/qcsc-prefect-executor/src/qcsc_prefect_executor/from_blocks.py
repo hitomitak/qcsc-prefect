@@ -4,10 +4,12 @@ import asyncio
 import getpass
 import inspect
 import re
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, AsyncIterator, Literal
 
 from prefect.artifacts import create_table_artifact
 from prefect.logging import get_run_logger
@@ -111,6 +113,10 @@ _SCRIPT_SUFFIX_BY_TARGET = {
 _KNOWN_SCRIPT_SUFFIXES = frozenset(_SCRIPT_SUFFIX_BY_TARGET.values())
 DEFAULT_SLURM_RECOVERY_GRACE_SECONDS = 120.0
 DEFAULT_SLURM_CLOCK_SKEW_MARGIN_SECONDS = 60.0
+
+_BLOCK_LOAD_CACHE: ContextVar[dict[tuple[type[Any], str], asyncio.Task[Any]] | None] = (
+    ContextVar("qcsc_prefect_block_load_cache", default=None)
+)
 
 
 def _validate_slurm_recovery_settings(
@@ -246,8 +252,43 @@ async def _resolve_loaded_block(value):
     return value
 
 
+@asynccontextmanager
+async def submission_block_cache() -> AsyncIterator[None]:
+    """Deduplicate Prefect Block loads within one bulk submission cycle.
+
+    The cache is scoped to one caller context. A long-running controller
+    therefore reloads Blocks on its next tick and sees operator edits, while
+    concurrent submissions in the same tick share one Cloud API request for
+    each ``(Block type, document name)`` pair.
+    """
+
+    existing_cache = _BLOCK_LOAD_CACHE.get()
+    if existing_cache is not None:
+        yield
+        return
+
+    token = _BLOCK_LOAD_CACHE.set({})
+    try:
+        yield
+    finally:
+        _BLOCK_LOAD_CACHE.reset(token)
+
+
 async def _load_block(block_cls, block_name: str):
-    return await _resolve_loaded_block(block_cls.load(block_name))
+    cache = _BLOCK_LOAD_CACHE.get()
+    if cache is None:
+        return await _resolve_loaded_block(block_cls.load(block_name))
+
+    key = (block_cls, block_name)
+    load_task = cache.get(key)
+    if load_task is None:
+
+        async def load() -> Any:
+            return await _resolve_loaded_block(block_cls.load(block_name))
+
+        load_task = asyncio.create_task(load())
+        cache[key] = load_task
+    return await asyncio.shield(load_task)
 
 
 def _resolve_submission_target_from_loaded_blocks(
