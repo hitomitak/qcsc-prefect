@@ -72,7 +72,6 @@ def _run_squeue(
         "squeue",
         "--noheader",
         "--array",
-        "--states=all",
         f"--user={user}",
     ]
     if account:

@@ -43,7 +43,7 @@ def test_queue_gate_applies_safety_margin_once_to_slurm_capacity(monkeypatch):
     assert gate.allowed_submit_count() == 5
 
 
-def test_run_squeue_uses_user_account_partition_and_expands_arrays(monkeypatch):
+def test_run_squeue_uses_default_active_states_and_expands_arrays(monkeypatch):
     calls: list[dict[str, object]] = []
 
     class _CompletedProcess:
@@ -69,7 +69,6 @@ def test_run_squeue_uses_user_account_partition_and_expands_arrays(monkeypatch):
                 "squeue",
                 "--noheader",
                 "--array",
-                "--states=all",
                 "--user=alice",
                 "--account=project-a",
                 "--partition=compute",
@@ -107,7 +106,6 @@ def test_run_squeue_omits_empty_optional_filters(monkeypatch):
             "squeue",
             "--noheader",
             "--array",
-            "--states=all",
             "--user=alice",
             "--format=%i|%T",
         ]
