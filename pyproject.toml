@@ -7,7 +7,7 @@ name = "qcsc-prefect-workspace"
 version = "0.0.0"
 description = "Monorepo workspace for HPC + Prefect integration"
 readme = "docs/concept.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = []
 
 # This project itself is not intended for distribution
@@ -60,7 +60,7 @@ authors = ["HPC Team"]
 packages = []
 
 [tool.poetry.dependencies]
-python = ">=3.10"
+python = ">=3.11"
 
 [tool.poetry.workspace]
 members = [
@@ -101,7 +101,7 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 # Match the pre-commit hook scope (types_or: [python, pyi])
 extend-exclude = ["*.ipynb", "*.md"]
 
@@ -114,7 +114,7 @@ exclude_dirs = ["tests"]
 skips = ["B101"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 strict = false
 warn_unused_configs = true
 warn_return_any = true

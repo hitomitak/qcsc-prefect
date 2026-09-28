@@ -7,7 +7,7 @@ name = "qcsc-prefect-executor"
 version = "0.2.5"
 description = "Prefect executor integrations for HPC schedulers"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [
     { name = "QCSC Prefect Contributors" },

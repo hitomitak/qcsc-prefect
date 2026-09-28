@@ -49,6 +49,8 @@ qcsc-prefect/
 
 ## Installation
 
+QCSC Prefect requires Python 3.11 or later.
+
 Install the core QCSC Prefect packages from PyPI with:
 
 ```bash
@@ -162,7 +164,7 @@ Code quality checks are configured with pre-commit (`.pre-commit-config.yaml`):
 The `CI` workflow (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `main`:
 
 - `Lint`: `ruff check` and `ruff format --check`
-- `Test (Python 3.10–3.13)`: `pytest` against all workspace packages
+- `Test (Python 3.11–3.13)`: `pytest` against all workspace packages
 - `CI OK`: aggregate status; use this as the required check for branch protection
 
 `pytest` and `ruff` are defined in the root `dev` dependency group, which `uv sync` installs by default.
