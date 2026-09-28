@@ -159,6 +159,17 @@ Code quality checks are configured with pre-commit (`.pre-commit-config.yaml`):
 - `detect-secrets` (secret scanning backed by `.secrets.baseline`)
 - basic repository hygiene hooks (`check-yaml`, trailing whitespace, EOF fix, merge conflict checks)
 
+The `CI` workflow (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `main`:
+
+- `Lint`: `ruff check` and `ruff format --check`
+- `Test (Python 3.10–3.13)`: `pytest` against all workspace packages
+- `CI OK`: aggregate status; use this as the required check for branch protection
+
+`pytest` and `ruff` are defined in the root `dev` dependency group, which `uv sync` installs by default.
+The ruff version is pinned so pre-commit and CI produce identical results; to upgrade it, bump the pin
+in the root `pyproject.toml` and run `uv run ruff format .` in a dedicated pull request.
+Miyabi/Fugaku integration tests are skipped in CI and must be run manually on the login nodes.
+
 ## Versioning Policy
 
 Each sub-package under `packages/` maintains its own version in its own `pyproject.toml`.
@@ -217,8 +228,12 @@ For the `0.1.0` packaging validation:
 2. Run checks before commit:
    - `pre-commit run --all-files`
    - or let them run automatically on `git commit`
-3. Run tests as needed:
+3. Run the same checks as CI before opening a pull request:
+   - `uv run ruff check .`
+   - `uv run ruff format --check .`
    - `uv run pytest`
+4. (Optional) Hide the bulk formatting commit from local `git blame`:
+   - `git config blame.ignoreRevsFile .git-blame-ignore-revs`
 
 When adding a new HPC target, include:
 
