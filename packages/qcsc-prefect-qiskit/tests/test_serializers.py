@@ -170,16 +170,14 @@ def test_save_sampler_and_estimator_summaries(tmp_path):
 
 def test_artifacts_and_serializers_use_shared_summary_extraction():
     assert (
-        artifacts_mod.extract_sampler_result_summary
-        is summaries_mod.extract_sampler_result_summary
+        artifacts_mod.extract_sampler_result_summary is summaries_mod.extract_sampler_result_summary
     )
     assert (
         artifacts_mod.extract_estimator_result_summary
         is summaries_mod.extract_estimator_result_summary
     )
     assert (
-        artifacts_mod.collect_sampler_result_counts
-        is summaries_mod.collect_sampler_result_counts
+        artifacts_mod.collect_sampler_result_counts is summaries_mod.collect_sampler_result_counts
     )
     assert (
         artifacts_mod.collect_estimator_result_values

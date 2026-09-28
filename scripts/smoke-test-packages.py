@@ -6,7 +6,6 @@ from __future__ import annotations
 import importlib
 import importlib.util
 
-
 REQUIRED_MODULES = [
     "qcsc_prefect_core",
     "qcsc_prefect_blocks",

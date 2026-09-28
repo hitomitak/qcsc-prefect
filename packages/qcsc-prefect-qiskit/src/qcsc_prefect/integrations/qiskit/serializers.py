@@ -111,8 +111,7 @@ def _make_json_serializable(value: Any, *, seen: set[int]) -> Any:
         seen.add(value_id)
         try:
             return {
-                str(key): _make_json_serializable(item, seen=seen)
-                for key, item in value.items()
+                str(key): _make_json_serializable(item, seen=seen) for key, item in value.items()
             }
         finally:
             seen.discard(value_id)

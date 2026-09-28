@@ -160,11 +160,7 @@ def effective_execution_profile_block(
 ) -> str:
     """Return the per-job execution profile block or the runner/API default."""
 
-    return (
-        job.execution_profile_block
-        if job.execution_profile_block is not None
-        else default_block
-    )
+    return job.execution_profile_block if job.execution_profile_block is not None else default_block
 
 
 def effective_hpc_profile_block(

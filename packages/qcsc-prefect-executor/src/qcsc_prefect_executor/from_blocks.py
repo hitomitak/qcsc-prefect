@@ -464,8 +464,7 @@ def _validate_native_bulk_candidates(jobs: list[BulkJobRecord]) -> None:
     if overridden_blocks:
         raise ValueError(
             "submit_mode='native_bulk' does not support per-job execution_profile_block "
-            "or hpc_profile_block overrides: "
-            + ", ".join(overridden_blocks)
+            "or hpc_profile_block overrides: " + ", ".join(overridden_blocks)
         )
 
 
@@ -478,8 +477,7 @@ def _validate_native_bulk_specs(jobs: list[BulkJobSpec]) -> None:
     if overridden_blocks:
         raise ValueError(
             "submit_mode='native_bulk' does not support per-job execution_profile_block "
-            "or hpc_profile_block overrides: "
-            + ", ".join(overridden_blocks)
+            "or hpc_profile_block overrides: " + ", ".join(overridden_blocks)
         )
 
 
@@ -712,9 +710,9 @@ async def _submit_prepared_job(
     if target == "miyabi":
         submit = await MiyabiPBSRuntime().submit(script_path, cwd=prepared.work_dir)
     elif target == "fugaku":
-        submit = await FugakuPJMRuntime(
-            no_check_directory=fugaku_no_check_directory
-        ).submit(script_path, cwd=prepared.work_dir)
+        submit = await FugakuPJMRuntime(no_check_directory=fugaku_no_check_directory).submit(
+            script_path, cwd=prepared.work_dir
+        )
     elif target == "slurm":
         submit = await SlurmRuntime().submit(script_path, cwd=prepared.work_dir)
     else:
