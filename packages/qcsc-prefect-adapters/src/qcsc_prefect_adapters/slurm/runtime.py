@@ -5,18 +5,8 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
-
-from qcsc_prefect_adapters.base.recovery import (
-    SchedulerJobCandidate,
-    SchedulerJobIdentity,
-)
-from qcsc_prefect_adapters.base.subprocess import (
-    DEFAULT_SCHEDULER_COMMAND_TIMEOUT_SECONDS,
-    SchedulerCommandError,
-    SchedulerCommandTimeout,
-    run_scheduler_command,
-)
+from typing import Any
+import logging
 
 
 class SubmitError(RuntimeError):
@@ -271,6 +261,9 @@ class SlurmRuntime:
     `qcsc_prefect_executor.slurm.run.run_slurm_job` or
     `qcsc_prefect_executor.from_blocks.run_job_from_blocks` instead.
     """
+    def __init__(self):
+        # Initialize the logger attribute for the class
+        self.logger = logging.getLogger(self.__class__.__name__)
 
     async def submit(
         self,
@@ -442,19 +435,48 @@ class SlurmRuntime:
         """
 
         start = asyncio.get_running_loop().time()
-        while True:
-            command_timeout = DEFAULT_SCHEDULER_COMMAND_TIMEOUT_SECONDS
-            wait_deadline_limits_command = False
-            if timeout_seconds is not None:
-                now = asyncio.get_running_loop().time()
-                remaining = timeout_seconds - (now - start)
-                if remaining <= 0:
-                    raise WaitTimeout(f"timeout waiting for job_id={job_id}")
-                if remaining <= command_timeout:
-                    command_timeout = remaining
-                    wait_deadline_limits_command = True
+        try:
+            while True:
+                if timeout_seconds is not None:
+                    now = asyncio.get_running_loop().time()
+                    if now - start > timeout_seconds:
+                        raise WaitTimeout(f"timeout waiting for job_id={job_id}")
+                
+                stdout = await run_command(
+                    "scontrol", "show", "job", "-o", job_id
+                )
+                self.logger.info(f"DEBUG: scontrol output for job {job_id}:\n{stdout}")
 
-            try:
+                if stdout.strip():
+                    # scontrol -o gives a single line of space-separated key=value pairs per job
+                    for line in stdout.strip().split('\n'):
+                        # Parse key-value pairs (handling potential spaces inside values if any, 
+                        # though -o usually formats tightly)
+                        job_data = {}
+                        for token in line.split():
+                            if '=' in token:
+                                k, v = token.split('=', 1)
+                                job_data[k] = v
+
+                        # Map scontrol fields to your required dictionary keys
+                        # Note: scontrol uses 'JobId', 'JobState', 'ExitCode', 'RunTime', 'NumCPUs', 'NodeList'
+                        out = {
+                            'JobID': job_data.get('JobId', job_id),
+                            'State': job_data.get('JobState', 'UNKNOWN'),
+                            'ExitCode': job_data.get('ExitCode', '0:0'),
+                            'Elapsed': job_data.get('RunTime', '0:00'),
+                            'AllocCPUS': job_data.get('NumCPUs', job_data.get('AllocCPUS', '0')),
+                            'NodeList': job_data.get('NodeList', ''),
+                        }
+
+                        # Check if job finished
+                        final_states = ['BOOT_FAIL', 'COMPLETED', 'FAILED', 'CANCELLED', 'DEADLINE', 'TIMEOUT', 'NODE_FAIL', 'OUT_OF_MEMORY', 'PREEMPTED']
+                        if out['State'] in final_states:
+                            exit_code = out['ExitCode'].split(':')[0]
+                            self.logger.info(f"Job {job_id} finished with state {out['State']} and exit code {exit_code}")
+                            return out
+                
+
                 stdout = await run_command(
                     "sacct",
                     "-j",
