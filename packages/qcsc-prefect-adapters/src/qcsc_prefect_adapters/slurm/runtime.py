@@ -168,7 +168,8 @@ class SlurmRuntime:
                                 job_data[k] = v
 
                         # Map scontrol fields to your required dictionary keys
-                        # Note: scontrol uses 'JobId', 'JobState', 'ExitCode', 'RunTime', 'NumCPUs', 'NodeList'
+                        # Note: scontrol uses 'JobId', 'JobState', 'ExitCode', 'RunTime',
+                        # 'NumCPUs', 'NodeList'
                         out = {
                             "JobID": job_data.get("JobId", job_id),
                             "State": job_data.get("JobState", "UNKNOWN"),
@@ -193,7 +194,8 @@ class SlurmRuntime:
                         if out["State"] in final_states:
                             exit_code = out["ExitCode"].split(":")[0]
                             self.logger.info(
-                                f"Job {job_id} finished with state {out['State']} and exit code {exit_code}"
+                                f"Job {job_id} finished with state {out['State']} "
+                                f"and exit code {exit_code}"
                             )
                             return out
 

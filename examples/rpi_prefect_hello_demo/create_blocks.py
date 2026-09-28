@@ -17,7 +17,8 @@ def main() -> None:
     account = os.getenv("SLURM_ACCOUNT", "").strip()
     if not account:
         raise RuntimeError(
-            "Set SLURM_ACCOUNT (your account/project on the cluster) before running create_blocks.py."
+            "Set SLURM_ACCOUNT (your account/project on the cluster) "
+            "before running create_blocks.py."
         )
 
     partition = os.getenv("SLURM_PARTITION", "default").strip()
