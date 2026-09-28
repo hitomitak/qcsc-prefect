@@ -10,8 +10,8 @@ readme = "docs/concept.md"
 requires-python = ">=3.10"
 dependencies = []
 
-# この project 自体は配布しない想定
-# （pip install . されても意味はない）
+# This project itself is not intended for distribution
+# (running `pip install .` on it is meaningless)
 dynamic = []
 
 # Development tools (installed by default with `uv sync`)
@@ -26,7 +26,7 @@ dev = [
 packages = []
 
 # -----------------------------
-# Workspace / Monorepo 設定
+# Workspace / Monorepo settings
 # -----------------------------
 
 # --- uv ---
@@ -86,7 +86,7 @@ members = [
 ]
 
 # -----------------------------
-# 共通開発ツール設定（任意）
+# Shared development tool settings (optional)
 # -----------------------------
 
 [tool.pytest.ini_options]
