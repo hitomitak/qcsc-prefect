@@ -14,6 +14,14 @@ dependencies = []
 # （pip install . されても意味はない）
 dynamic = []
 
+# 開発用ツール（`uv sync` でデフォルトインストールされる）
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    # CI とローカル (pre-commit) で整形結果を揃えるため完全一致で固定する
+    "ruff==0.16.9",
+]
+
 [tool.setuptools]
 packages = []
 
@@ -94,6 +102,8 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+# pre-commit (types_or: [python, pyi]) と対象を揃える
+extend-exclude = ["*.ipynb", "*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
