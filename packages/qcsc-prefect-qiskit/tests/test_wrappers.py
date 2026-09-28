@@ -142,8 +142,7 @@ def test_sampler_wrapper_robust_mode_can_cache_submit_and_fetch(monkeypatch):
     assert submit_calls[0]["task_options"]["persist_result"] is True
     assert fetch_calls[0]["kwargs"]["artifact_key"] == "sampler-artifact"
     assert (
-        fetch_calls[0]["task_options"]["cache_key_fn"]
-        is wrappers_mod.qiskit_result_fetch_cache_key
+        fetch_calls[0]["task_options"]["cache_key_fn"] is wrappers_mod.qiskit_result_fetch_cache_key
     )
     assert fetch_calls[0]["task_options"]["persist_result"] is True
     assert fetch_calls[0]["task_options"]["result_serializer"] == "compressed/pickle"
@@ -200,8 +199,7 @@ def test_sampler_run_returns_job_like_handle_with_result(monkeypatch):
     assert len(fetch_calls) == 1
     assert fetch_calls[0]["kwargs"]["pubs"] == ["pub-0"]
     assert (
-        fetch_calls[0]["task_options"]["cache_key_fn"]
-        is wrappers_mod.qiskit_result_fetch_cache_key
+        fetch_calls[0]["task_options"]["cache_key_fn"] is wrappers_mod.qiskit_result_fetch_cache_key
     )
 
 
@@ -263,8 +261,7 @@ def test_estimator_wrapper_robust_mode_can_cache_submit_and_fetch(monkeypatch):
         is wrappers_mod.qiskit_estimator_submit_cache_key
     )
     assert (
-        fetch_calls[0]["task_options"]["cache_key_fn"]
-        is wrappers_mod.qiskit_result_fetch_cache_key
+        fetch_calls[0]["task_options"]["cache_key_fn"] is wrappers_mod.qiskit_result_fetch_cache_key
     )
     assert fetch_calls[0]["task_options"]["result_serializer"] == "compressed/pickle"
 

@@ -111,13 +111,9 @@ def _install_single_submit_fakes(
                 record = records_by_scheduler_id[scheduler_job_id]
                 registry.mark_succeeded(record.job_key)
             return {
-                scheduler_job_id: BulkJobStatus.SUCCEEDED
-                for scheduler_job_id in scheduler_job_ids
+                scheduler_job_id: BulkJobStatus.SUCCEEDED for scheduler_job_id in scheduler_job_ids
             }
-        return {
-            scheduler_job_id: BulkJobStatus.SUBMITTED
-            for scheduler_job_id in scheduler_job_ids
-        }
+        return {scheduler_job_id: BulkJobStatus.SUBMITTED for scheduler_job_id in scheduler_job_ids}
 
     monkeypatch.setattr(runner_mod, "submit_job_from_blocks", fake_submit_job_from_blocks)
     monkeypatch.setattr(runner_mod, "monitor_jobs_many", fake_monitor_jobs_many)
@@ -347,8 +343,7 @@ def test_submit_workers_caps_concurrent_submits(tmp_path: Path, monkeypatch):
             registry: BulkJobRegistry | None = None,
         ) -> dict[str, BulkJobStatus]:
             return {
-                scheduler_job_id: BulkJobStatus.SUBMITTED
-                for scheduler_job_id in scheduler_job_ids
+                scheduler_job_id: BulkJobStatus.SUBMITTED for scheduler_job_id in scheduler_job_ids
             }
 
         monkeypatch.setattr(runner_mod, "submit_job_from_blocks", fake_submit_job_from_blocks)

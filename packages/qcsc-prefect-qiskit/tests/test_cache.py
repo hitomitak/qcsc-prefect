@@ -168,8 +168,7 @@ def test_missing_input_digest_returns_none_for_submit_cache_helpers():
 
 def test_missing_job_id_returns_none_for_fetch_cache_helper():
     assert (
-        qiskit_result_fetch_cache_key(None, {"job_reference": {"program_type": "sampler"}})
-        is None
+        qiskit_result_fetch_cache_key(None, {"job_reference": {"program_type": "sampler"}}) is None
     )
 
 

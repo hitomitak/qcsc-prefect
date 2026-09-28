@@ -280,9 +280,7 @@ class GlobalFugakuBulkRunner:
             ),
         ]
         if self.target_active_jobs is not None:
-            limits.append(
-                max(0, int(self.target_active_jobs) - self.registry.count_active_jobs())
-            )
+            limits.append(max(0, int(self.target_active_jobs) - self.registry.count_active_jobs()))
         return max(0, min(limits))
 
     async def _resolved_queue_probe(self) -> QueueProbe:

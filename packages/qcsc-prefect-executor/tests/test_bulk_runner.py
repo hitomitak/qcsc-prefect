@@ -332,6 +332,7 @@ def _install_native_bulk_fakes(
 
     monkeypatch.setattr(mod, "resolve_submission_target", fake_resolve_submission_target)
     monkeypatch.setattr(mod, "_prepare_job_from_blocks", fake_prepare_job_from_blocks)
+
     def runtime_factory(*, no_check_directory: bool = False) -> _NativeBulkSubmitRuntime:
         runtime.no_check_directory_calls.append(no_check_directory)
         return runtime

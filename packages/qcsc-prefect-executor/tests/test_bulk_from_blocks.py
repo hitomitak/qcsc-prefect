@@ -220,9 +220,7 @@ def test_submit_job_from_blocks_uses_fugaku_no_check_directory_default_false(
     assert len(runtime.submit_calls) == 1
 
 
-def test_submit_job_from_blocks_passes_fugaku_no_check_directory_true(
-    tmp_path: Path, monkeypatch
-):
+def test_submit_job_from_blocks_passes_fugaku_no_check_directory_true(tmp_path: Path, monkeypatch):
     _patch_block_loading(monkeypatch, hpc_target="fugaku")
     runtime = _SubmitRuntimeStub(job_id="49075255")
     no_check_directory_calls = _patch_fugaku_runtime(monkeypatch, runtime)
