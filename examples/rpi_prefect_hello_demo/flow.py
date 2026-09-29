@@ -16,7 +16,9 @@ async def _resolve_loaded_block(value):
     return value
 
 
-def _resolve_partition_and_account(hpc_block: HPCProfileBlock, resource_class: str) -> tuple[str, str]:
+def _resolve_partition_and_account(
+    hpc_block: HPCProfileBlock, resource_class: str
+) -> tuple[str, str]:
     if resource_class == "gpu":
         return hpc_block.queue_gpu, hpc_block.project_gpu
     return hpc_block.queue_cpu, hpc_block.project_cpu

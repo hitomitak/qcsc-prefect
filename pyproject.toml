@@ -7,18 +7,26 @@ name = "qcsc-prefect-workspace"
 version = "0.0.0"
 description = "Monorepo workspace for HPC + Prefect integration"
 readme = "docs/concept.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = []
 
-# この project 自体は配布しない想定
-# （pip install . されても意味はない）
+# This project itself is not intended for distribution
+# (running `pip install .` on it is meaningless)
 dynamic = []
+
+# Development tools (installed by default with `uv sync`)
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    # Pinned exactly so that CI and local pre-commit produce identical results
+    "ruff==0.16.9",
+]
 
 [tool.setuptools]
 packages = []
 
 # -----------------------------
-# Workspace / Monorepo 設定
+# Workspace / Monorepo settings
 # -----------------------------
 
 # --- uv ---
@@ -52,7 +60,7 @@ authors = ["HPC Team"]
 packages = []
 
 [tool.poetry.dependencies]
-python = ">=3.10"
+python = ">=3.11"
 
 [tool.poetry.workspace]
 members = [
@@ -78,7 +86,7 @@ members = [
 ]
 
 # -----------------------------
-# 共通開発ツール設定（任意）
+# Shared development tool settings (optional)
 # -----------------------------
 
 [tool.pytest.ini_options]
@@ -93,7 +101,9 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
+# Match the pre-commit hook scope (types_or: [python, pyi])
+extend-exclude = ["*.ipynb", "*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
@@ -104,7 +114,7 @@ exclude_dirs = ["tests"]
 skips = ["B101"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 strict = false
 warn_unused_configs = true
 warn_return_any = true

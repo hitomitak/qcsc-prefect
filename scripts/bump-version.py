@@ -8,7 +8,6 @@ import re
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_GLOB = "packages/*/pyproject.toml"
 INTERNAL_PIN_NAME = r"qcsc-prefect(?:-[A-Za-z0-9]+)*"
@@ -29,7 +28,7 @@ def replace_versions(path: Path, old_version: str, new_version: str) -> tuple[st
     version_pattern = re.compile(rf'(?m)^(version\s*=\s*)"{old}"$')
     if not version_pattern.search(text):
         rel = path.relative_to(ROOT)
-        raise ValueError(f"{rel}: expected version = \"{old_version}\"")
+        raise ValueError(f'{rel}: expected version = "{old_version}"')
 
     text, version_count = version_pattern.subn(rf'\1"{new_version}"', text)
 

@@ -7,7 +7,7 @@ name = "qcsc-prefect-adapters"
 version = "0.2.5"
 description = "HPC adapters (Miyabi, Fugaku, Slurm) for QCSC Prefect workflows"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [
     { name = "QCSC Prefect Contributors" },

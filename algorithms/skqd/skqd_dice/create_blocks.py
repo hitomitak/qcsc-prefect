@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import tomllib
 from pathlib import Path
 from typing import Any
 
-import tomllib
 from prefect.variables import Variable
 from qcsc_prefect_dice import create_dice_blocks
 

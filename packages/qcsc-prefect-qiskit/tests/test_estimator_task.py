@@ -99,9 +99,7 @@ def _patch_estimator_task(monkeypatch):
     artifact_calls = {"metadata": [], "result": []}
 
     async def fake_create_artifact(metadata, *, result=None, key: str) -> None:
-        artifact_calls["metadata"].append(
-            {"metadata": metadata, "result": result, "key": key}
-        )
+        artifact_calls["metadata"].append({"metadata": metadata, "result": result, "key": key})
 
     async def fake_create_result_artifact(result, *, key: str) -> None:
         artifact_calls["result"].append({"result": result, "key": key})

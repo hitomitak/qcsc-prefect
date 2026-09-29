@@ -572,9 +572,7 @@ def _span_timestamps(span: Any | None) -> tuple[Any | None, Any | None]:
     if span is None:
         return None, None
     return (
-        _safe_get(span, "start")
-        or _safe_get(span, "started")
-        or _safe_get(span, "running"),
+        _safe_get(span, "start") or _safe_get(span, "started") or _safe_get(span, "running"),
         _safe_get(span, "stop")
         or _safe_get(span, "completed")
         or _safe_get(span, "finished")

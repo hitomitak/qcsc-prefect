@@ -17,7 +17,8 @@ def main() -> None:
     account = os.getenv("SLURM_ACCOUNT", "").strip()
     if not account:
         raise RuntimeError(
-            "Set SLURM_ACCOUNT (your account/project on the cluster) before running create_blocks.py."
+            "Set SLURM_ACCOUNT (your account/project on the cluster) "
+            "before running create_blocks.py."
         )
 
     partition = os.getenv("SLURM_PARTITION", "default").strip()
@@ -34,7 +35,7 @@ def main() -> None:
         profile_name="hello-single-node",
         command_name="hello-demo",
         resource_class="cpu",
-        #resource_class="local",
+        # resource_class="local",
         num_nodes=1,
         mpiprocs=1,
         ompthreads=1,

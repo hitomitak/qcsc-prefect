@@ -5,10 +5,9 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
-
-import tomllib
 
 
 def _import_sbd_solver_block():
