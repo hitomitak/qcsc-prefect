@@ -1,0 +1,12 @@
+# Offline validation environment tested with Python 3.12 on macOS arm64.
+# Keep separate from the cluster's working QRMI/task_runner environment.
+ffsim==0.0.84
+numpy==2.5.4
+pydantic==2.14.1
+pydantic-numpy==9.1.0
+pyscf==2.13.0
+qiskit==2.4.0
+qiskit-ibm-runtime==0.46.1
+prefect==3.6.27
+scipy==1.18.1
+pytest==9.0.3

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 from qcsc_prefect_adapters.slurm.builder import SlurmJobRequest, render_script
@@ -69,3 +71,33 @@ def test_render_slurm_script_omits_optional_directives(tmp_path: Path):
     assert "#SBATCH --ntasks-per-node" not in text
     assert "#SBATCH --account" not in text
     assert "#SBATCH --qpu" not in text
+
+
+def test_mpirun_without_application_arguments_executes_the_binary(tmp_path: Path):
+    # The BitCount PoC has MPI flags but no application arguments. Exercise
+    # the generated shell command so a missing executable cannot pass silently.
+    launcher = tmp_path / "mpirun"
+    launcher.write_text('#!/bin/bash\nset -eu\ntest "$1" = --display-map\nshift\nexec "$@"\n')
+    launcher.chmod(0o700)
+    executable = tmp_path / "bitcount executable"
+    executable.write_text('#!/bin/bash\nprintf executed > "application-ran"\n')
+    executable.chmod(0o700)
+    profile = ExecutionProfile(
+        command_key="bitcount",
+        num_nodes=2,
+        mpiprocs=1,
+        launcher="mpirun",
+        mpi_options=["--display-map"],
+    )
+    text = render_script(
+        work_dir=tmp_path,
+        exec_profile=profile,
+        req=SlurmJobRequest(partition="debug", executable=str(executable)),
+    )
+    subprocess.run(
+        ["bash", "-c", text],
+        env={**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}"},
+        check=True,
+        capture_output=True,
+    )
+    assert (tmp_path / "application-ran").read_text() == "executed"

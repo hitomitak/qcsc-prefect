@@ -1,0 +1,27 @@
+--- a/plugins/spank_qrmi/spank_qrmi.c
++++ b/plugins/spank_qrmi/spank_qrmi.c
+@@ -192,7 +192,7 @@
+ 
+     if (g_qpu_names_opt == NULL) {
+         /* noop if this is not QPU job */
+-        return SLURM_ERROR;
++        return SLURM_SUCCESS;
+     }
+ 
+     /*
+@@ -419,11 +419,10 @@
+ 
+     char *optargp = NULL;
+     if (spank_option_getopt(spank_ctxt, &spank_qrmi_options[0], &optargp) != ESPANK_SUCCESS) {
+-        /* if spank_qrmi plugin is not registered, simply returns an error. */
+-        return SLURM_ERROR;
+-    }
+-    size_t optlen = strlen(optargp);
+-    if ((optargp == NULL) || optlen == 0) {
++        /* noop if the --qpu option was not supplied. */
++        return SLURM_SUCCESS;
++    }
++    if ((optargp == NULL) || strlen(optargp) == 0) {
+         /* noop if this is not QPU job */
+         return SLURM_SUCCESS;
+     }

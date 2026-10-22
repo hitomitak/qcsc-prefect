@@ -11,6 +11,7 @@ from prefect import flow, task
 from prefect.artifacts import create_table_artifact
 from prefect.variables import Variable
 from qcsc_prefect_executor.from_blocks import run_job_from_blocks
+from qcsc_prefect_executor.slurm.run import SlurmRunResult
 
 try:
     from options_resolver import resolve_sampler_options_and_work_dir
@@ -107,10 +108,22 @@ async def run_hpc_bitcount_from_input(
         timeout_seconds=1800,
         metrics_artifact_key="bitcount-optimized-metrics",
     )
-    if result.exit_status != 0:
-        raise RuntimeError(f"Optimized BitCount job failed: exit_status={result.exit_status}")
+    slurm_failed = isinstance(result, SlurmRunResult) and result.state != "COMPLETED"
+    if result.exit_status != 0 or slurm_failed:
+        raise RuntimeError(
+            f"Optimized BitCount job {result.job_id} failed: "
+            f"state={getattr(result, 'state', 'unknown')}, exit_status={result.exit_status}; "
+            f"see {resolved_job_work_dir}/output.out and output.err. "
+            "If these logs are absent, check the compute node's slurmd log."
+        )
 
-    hist = _read_hist_u64(resolved_job_work_dir / "hist_u64.bin")
+    hist_path = resolved_job_work_dir / "hist_u64.bin"
+    if not hist_path.is_file():
+        raise RuntimeError(
+            f"BitCount job {result.job_id} produced no histogram: {hist_path}; "
+            f"see {resolved_job_work_dir}/output.out and output.err"
+        )
+    hist = _read_hist_u64(hist_path)
     counts = {format(i, f"0{BITLEN}b"): c for i, c in enumerate(hist) if c > 0}
     return {
         "job_id": result.job_id,

@@ -1,5 +1,9 @@
 # Prefect BitCount Demo
 
+For the `test_heron` QRMI/SPANK cluster, see
+[QRMI Batch + Slurm MPI BitCount PoC](README_qrmi_slurm.md).
+It runs QRMI `task_runner` and the existing MPI BitCount executable in two separate Slurm jobs.
+
 This example provides two execution styles:
 
 - `flow_optimized.py`: block-driven execution (works on Miyabi, Fugaku, and Slurm)

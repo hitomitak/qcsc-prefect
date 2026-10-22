@@ -1,0 +1,13 @@
+{
+  "pull_request": "https://github.com/qiskit-community/qcsc-prefect/pull/42",
+  "repository": "BStar14/qcsc-prefect",
+  "commit": "2d435b19af4648cbbc5fbc6a27ff258c93817d1a",
+  "path": "algorithms/sqd/sqd_fulqrum/main.py",
+  "source_url": "https://github.com/BStar14/qcsc-prefect/blob/2d435b19af4648cbbc5fbc6a27ff258c93817d1a/algorithms/sqd/sqd_fulqrum/main.py",
+  "sha256": "f5078060a1b8227a401e757bd811c569823a490cf9c2f42eaf9f4858d098cce7",
+  "definitions": [
+    "CircuitParameters",
+    "create_ansatz_circuits",
+    "transpile_circuit"
+  ]
+}
