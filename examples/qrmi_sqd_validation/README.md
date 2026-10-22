@@ -1,5 +1,8 @@
 # PR #42: H₂/STO-3G LUCJ の QPY・トランスパイル検証
 
+固定PRのサンプリング段階から`BitArray`を返すローカル接続は、
+[QRMI統合入口](README_integration.md)を参照してください。
+
 このローカル検証は、[PR #42](https://github.com/qiskit-community/qcsc-prefect/pull/42)
 の LUCJ 回路と専用トランスパイラを、QPY を使ったノード間転送に利用できるか確認するものです。
 QRMI、Slurm、QPU、Prefect Cloud、ローカルの Prefect Server は不要です。

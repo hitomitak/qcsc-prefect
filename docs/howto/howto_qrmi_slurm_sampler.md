@@ -85,6 +85,10 @@ SHA-256を使って確認しています。
 オフラインテストを追加しています。PRのFlow全体を無変更で置き換えられるという意味ではありません。
 PR #42への変更、コメント、pushは行いません。
 
+固定PRのサンプリング段階から後段用の`BitArray`を返すローカルアダプターは
+[QRMI統合入口](../../examples/qrmi_sqd_validation/README_integration.md)にあります。
+runtimeとoptionsを注入し、固定PRの回路生成・専用トランスパイルを再利用します。
+
 明示的な `shots=` と `options["params"]["shots"]` が異なる場合はエラーです。
 両方省略したときのライブラリの既定値は100 shotsです。
 固定PRの `Variable.get` が設定する既定値100,000 shotsとは異なりますが、
@@ -163,6 +167,12 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m pytest \
 ```
 
 以前のPoCではH₂/STO-3G、4量子ビットLUCJ、`test_heron`、100 shots、4ビット`meas`の
-クラスタ実行が確認されています。今回のライブラリ化後の確認はオフラインです。
-変更後のクラスタ再実行、`test`レジスタ付きの実機受付、ノイズ下のreset mitigation、
-Fulqrum全体の実行は未確認です。
+クラスタ実行が確認されています。ライブラリ化後も、利用者から以下の成功報告を受けています。
+
+- Slurm job: `16`、Compute host: `slurm-vm1`。
+- H₂/STO-3G、100 shots、4ビット`meas`のみ。カウント合計100。
+- 証跡ディレクトリ:
+  `/shared/qrmi-h2-library-check.UJ8xXq/runs/run_04c127d0c7d148229c809de682475227/quantum/6ed4fa77b0714d9083a701c9d2351949`。
+
+追加したBitArray統合入口の実機実行、`test`レジスタ付きの実機受付、
+ノイズ下のreset mitigation、Fulqrum全体の実行は未確認です。

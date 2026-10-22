@@ -3,7 +3,9 @@
 QRMI/Slurm実行部分はライブラリへ移動しました。以下のexample APIとBlock名は互換層で維持しています。
 配置前に[ライブラリの移行手順](../../docs/howto/howto_qrmi_slurm_sampler.md#pocからの移行)を確認し、
 ワークフローと計算ノードの両方で `qcsc-prefect-qiskit` を更新してください。
-ライブラリ化後のクラスタ再実行は未確認です。
+ライブラリ化後のH₂・100 shots・`meas`のみは、利用者からSlurm job `16`、
+`slurm-vm1`で成功報告を受けています。
+別途追加した[BitArray統合入口](README_integration.md)はオフライン検証までです。
 
 オフライン検証の次に、実際の `test_heron` Target と `task_runner` の接続を確認する手順です。
 既存の BitCount PoC が動いたクラスタ設定、Prefect Cloud 接続、量子用の `poc-qrmi-*` 3 Block を使います。
