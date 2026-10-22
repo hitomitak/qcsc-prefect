@@ -119,6 +119,24 @@ def prepare_qpy_transport(circuit):
     raise RuntimeError("ffsim gates remain after ten decomposition rounds")
 
 
+def prepare_sampler_circuit(circuit, *, circuit_parameters: dict):
+    """Algorithm-owned sender hook for the reusable Slurm sampler."""
+    from qcsc_prefect.integrations.qiskit.qrmi import PreparedCircuit
+
+    params = load_pr42().CircuitParameters(**circuit_parameters)
+    provenance = source_metadata()
+    config = {
+        "strategy": "sqd-pr42",
+        "source_commit": provenance["commit"],
+        "source_sha256": provenance["sha256"],
+        "circuit_parameters": params.model_dump(),
+        "seed": 24,
+        "transport": "ffsim-pre-init-decomposed",
+        "original_ops": dict(circuit.count_ops()),
+    }
+    return PreparedCircuit(prepare_qpy_transport(circuit), config)
+
+
 def transpile_for_target(circuit, target, config: dict):
     """Use the same pinned PR and parameters on both sides of the QPY handoff."""
     provenance = source_metadata()

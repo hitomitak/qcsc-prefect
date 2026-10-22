@@ -18,13 +18,14 @@ pytest.importorskip("pydantic_numpy")
 pytest.importorskip("qiskit_ibm_runtime")
 
 from pyscf import lib  # noqa: E402
+from qcsc_prefect.integrations.qiskit.qrmi import runtime as runtime_mod  # noqa: E402
+from qcsc_prefect.integrations.qiskit.qrmi import worker as node_mod  # noqa: E402
 from qiskit import qpy  # noqa: E402
 from qiskit.primitives import PrimitiveResult, SamplerPubResult  # noqa: E402
 from qiskit.primitives.containers import BitArray, DataBin  # noqa: E402
 from qiskit.providers.fake_provider import GenericBackendV2  # noqa: E402
 
-from examples.prefect_bitcount_demo import qrmi_slurm_runtime as runtime_mod  # noqa: E402
-from examples.prefect_bitcount_demo import qrmi_task_runner as node_mod  # noqa: E402
+from examples.prefect_bitcount_demo import qrmi_slurm_runtime as example_runtime  # noqa: E402
 from examples.qrmi_sqd_validation import flow as flow_mod  # noqa: E402
 from examples.qrmi_sqd_validation.pr42 import chem, load_pr42  # noqa: E402
 
@@ -114,7 +115,9 @@ Path(destination).write_text(json.dumps(result, cls=RuntimeEncoder))
     runner.chmod(0o700)
     execute = node_mod.execute_task_runner
     monkeypatch.setattr(
-        node_mod, "execute_task_runner", lambda isa, shots, _: execute(isa, shots, runner)
+        node_mod,
+        "execute_task_runner",
+        lambda isa, shots, _, resource: execute(isa, shots, runner, resource),
     )
 
     def reject_generic(*args, **kwargs):
@@ -140,7 +143,7 @@ def test_sampler_qpy_worker_qasm_cli_handoff(
 
     async def fake_submit(**kwargs):
         assert kwargs["hpc_profile_block_name"] == "poc-qrmi-hpc"
-        assert kwargs["user_args"] == ["--shots", "4", "--transpile-strategy", "sqd-pr42"]
+        assert kwargs["user_args"] == ["--request", "sampler_request.json"]
         work_dir = kwargs["work_dir"]
         monkeypatch.chdir(work_dir)
         monkeypatch.setattr(sys, "argv", ["qrmi_task_runner.py", *kwargs["user_args"]])
@@ -148,7 +151,7 @@ def test_sampler_qpy_worker_qasm_cli_handoff(
         return SimpleNamespace(job_id="12", state="COMPLETED", exit_status=0)
 
     monkeypatch.setattr(runtime_mod, "run_job_from_blocks", fake_submit)
-    runtime = runtime_mod.QrmiSlurmRuntime(
+    runtime = example_runtime.QrmiSlurmRuntime(
         root_dir=tmp_path / "quantum",
         transpile_strategy="sqd-pr42",
         sqd_circuit_parameters=params.model_dump(),
@@ -190,7 +193,7 @@ def test_h2_flow_returns_measured_registers(tmp_path, monkeypatch, h2, reset):
             metadata={"qcsc_slurm": {"job_id": "12", "mode": "batch"}},
         )
 
-    monkeypatch.setattr(runtime_mod.QrmiSlurmRuntime, "sampler", fake_sampler)
+    monkeypatch.setattr(example_runtime.QrmiSlurmRuntime, "sampler", fake_sampler)
     summary = asyncio.run(
         flow_mod.h2_lucj_flow.fn(shots=4, work_dir=str(tmp_path), reset_mitigation=reset)
     )
@@ -219,7 +222,7 @@ def test_worker_rejects_different_pr_source_before_cli(tmp_path, monkeypatch, h2
         node_mod.main()
 
     monkeypatch.setattr(runtime_mod, "run_job_from_blocks", fake_submit)
-    runtime = runtime_mod.QrmiSlurmRuntime(
+    runtime = example_runtime.QrmiSlurmRuntime(
         root_dir=tmp_path / "quantum",
         transpile_strategy="sqd-pr42",
         sqd_circuit_parameters=params.model_dump(),

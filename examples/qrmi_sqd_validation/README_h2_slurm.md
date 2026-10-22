@@ -1,5 +1,10 @@
 # H₂ LUCJ を既存 Slurm/QRMI PoC で実行する
 
+QRMI/Slurm実行部分はライブラリへ移動しました。以下のexample APIとBlock名は互換層で維持しています。
+配置前に[ライブラリの移行手順](../../docs/howto/howto_qrmi_slurm_sampler.md#pocからの移行)を確認し、
+ワークフローと計算ノードの両方で `qcsc-prefect-qiskit` を更新してください。
+ライブラリ化後のクラスタ再実行は未確認です。
+
 オフライン検証の次に、実際の `test_heron` Target と `task_runner` の接続を確認する手順です。
 既存の BitCount PoC が動いたクラスタ設定、Prefect Cloud 接続、量子用の `poc-qrmi-*` 3 Block を使います。
 この Flow は H₂ の量子サンプリングまでを実行します。Fulqrum によるエネルギー計算は次の段階です。
@@ -25,6 +30,7 @@ Mac のリポジトリのルートで実行します。`VM1_SSH_HOST` は普段�
 
 ```bash
 rsync -avR --exclude='__pycache__/' --exclude='.pytest_cache/' \
+  packages/qcsc-prefect-qiskit \
   examples/qrmi_sqd_validation \
   examples/prefect_bitcount_demo/qrmi_slurm_runtime.py \
   examples/prefect_bitcount_demo/qrmi_task_runner.py \
@@ -150,6 +156,7 @@ Flow のログと最後の JSON に `work_dir` が出ます。
   summary.json
   quantum/<ID>/
     circuit.qpy             # ffSIM 前処理・展開済みの転送回路
+    sampler_request.json    # schema、resource、shots、レジスタ、フック名
     transpile_config.json   # 固定PRの出典、パラメータ、seed
     sampler.slurm
     output.out / output.err

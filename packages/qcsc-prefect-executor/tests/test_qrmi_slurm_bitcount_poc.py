@@ -14,6 +14,8 @@ import pytest
 pytest.importorskip("qiskit")
 pytest.importorskip("qiskit_ibm_runtime")
 
+from qcsc_prefect.integrations.qiskit.qrmi import runtime as runtime_mod  # noqa: E402
+from qcsc_prefect.integrations.qiskit.qrmi import worker as node_mod  # noqa: E402
 from qiskit import QuantumCircuit, qpy  # noqa: E402
 from qiskit.primitives import PrimitiveResult, SamplerPubResult  # noqa: E402
 from qiskit.primitives.containers import BitArray, DataBin  # noqa: E402
@@ -24,8 +26,7 @@ from examples.prefect_bitcount_demo import (  # noqa: E402
 )
 from examples.prefect_bitcount_demo import flow_optimized as bitcount_mod  # noqa: E402
 from examples.prefect_bitcount_demo import flow_qrmi_slurm as flow_mod  # noqa: E402
-from examples.prefect_bitcount_demo import qrmi_slurm_runtime as runtime_mod  # noqa: E402
-from examples.prefect_bitcount_demo import qrmi_task_runner as node_mod  # noqa: E402
+from examples.prefect_bitcount_demo import qrmi_slurm_runtime as example_runtime  # noqa: E402
 
 SAMPLES = ["0000000000", "1111111111", "0000000000", "1010101010"]
 
@@ -47,16 +48,16 @@ def test_batch_guard_rejects_missing_or_dedicated_mode(monkeypatch, mode):
     if mode is not None:
         monkeypatch.setenv("test_heron_QRMI_IBM_QCS_SESSION_MODE", mode)
     with pytest.raises(RuntimeError, match="SESSION_MODE"):
-        node_mod.require_batch_environment()
+        node_mod.require_batch_environment("test_heron")
 
 
 def test_batch_guard_requires_spank_acquisition(monkeypatch):
     monkeypatch.setenv("test_heron_QRMI_IBM_QCS_SESSION_MODE", "batch")
     monkeypatch.delenv("test_heron_QRMI_JOB_ACQUISITION_TOKEN", raising=False)
     with pytest.raises(RuntimeError, match="acquisition token"):
-        node_mod.require_batch_environment()
+        node_mod.require_batch_environment("test_heron")
     monkeypatch.setenv("test_heron_QRMI_JOB_ACQUISITION_TOKEN", "test-token")
-    node_mod.require_batch_environment()
+    node_mod.require_batch_environment("test_heron")
 
 
 def test_node_invokes_actual_cli_contract_and_decodes_result(tmp_path, monkeypatch):
@@ -83,7 +84,7 @@ def test_node_invokes_actual_cli_contract_and_decodes_result(tmp_path, monkeypat
     circuit = QuantumCircuit(10)
     circuit.measure_all()
 
-    node_mod.execute_task_runner(circuit, 4, runner)
+    node_mod.execute_task_runner(circuit, 4, runner, "test_heron")
 
     payload = json.loads((tmp_path / "sampler_input.json").read_text())
     assert payload["parameters"]["pubs"][0][1:] == [None, 4]
@@ -112,7 +113,7 @@ def test_node_reports_unexpected_result_and_preserves_raw_file(
     circuit = QuantumCircuit(10)
     circuit.measure_all()
     with pytest.raises(RuntimeError, match=message) as exc:
-        node_mod.execute_task_runner(circuit, 4, tmp_path / "task_runner")
+        node_mod.execute_task_runner(circuit, 4, tmp_path / "task_runner", "test_heron")
     assert str(tmp_path / "result.json") in str(exc.value)
     assert (tmp_path / "result.json").read_text() == encoded
 
@@ -123,7 +124,7 @@ def test_node_rejects_successful_cli_without_result(tmp_path, monkeypatch):
     circuit = QuantumCircuit(1)
     circuit.measure_all()
     with pytest.raises(FileNotFoundError):
-        node_mod.execute_task_runner(circuit, 4, tmp_path / "task_runner")
+        node_mod.execute_task_runner(circuit, 4, tmp_path / "task_runner", "test_heron")
 
 
 def test_node_transpiles_qpy_before_calling_task_runner(tmp_path, monkeypatch):
@@ -138,6 +139,18 @@ def test_node_transpiles_qpy_before_calling_task_runner(tmp_path, monkeypatch):
     circuit.h(0)
     circuit.cx(0, 1)
     circuit.measure_all()
+    Path("sampler_request.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "resource": "test_heron",
+                "shots": 4,
+                "registers": {"meas": 10},
+                "transpiler": runtime_mod.DEFAULT_TRANSPILER,
+            }
+        )
+    )
+    Path("transpile_config.json").write_text("{}")
     with Path("circuit.qpy").open("wb") as stream:
         qpy.dump(circuit, stream)
 
@@ -150,13 +163,14 @@ def test_node_transpiles_qpy_before_calling_task_runner(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "qrmi", qrmi)
     monkeypatch.setitem(sys.modules, "qrmi.primitives", ModuleType("qrmi.primitives"))
     monkeypatch.setitem(sys.modules, "qrmi.primitives.ibm", ibm)
-    monkeypatch.setattr(sys, "argv", ["qrmi_task_runner.py", "--shots", "4"])
+    monkeypatch.setattr(sys, "argv", ["qrmi_task_runner.py"])
     calls = []
     monkeypatch.setattr(node_mod, "execute_task_runner", lambda *args: calls.append(args))
 
     node_mod.main()
 
-    isa, shots, executable = calls[0]
+    isa, shots, executable, resource_id = calls[0]
+    assert resource_id == "test_heron"
     assert "h" not in isa.count_ops()
     assert isa.num_clbits == 10
     assert shots == 4
@@ -171,7 +185,7 @@ def test_sampler_sends_qpy_to_existing_executor_and_returns_shots(tmp_path, monk
         assert circuit.num_qubits == 10
         assert circuit.num_clbits == 10
         assert kwargs["hpc_profile_block_name"] == "poc-qrmi-hpc"
-        assert kwargs["user_args"] == ["--shots", "4"]
+        assert kwargs["user_args"] == ["--request", "sampler_request.json"]
         (work_dir / "result.json").write_text(json.dumps(make_result(), cls=RuntimeEncoder))
         return SimpleNamespace(job_id="6", state="COMPLETED", exit_status=0)
 
@@ -181,7 +195,7 @@ def test_sampler_sends_qpy_to_existing_executor_and_returns_shots(tmp_path, monk
     circuit = QuantumCircuit(10)
     circuit.measure_all()
 
-    result = asyncio.run(runtime_mod.QrmiSlurmRuntime(tmp_path).sampler([(circuit,)], shots=4))
+    result = asyncio.run(example_runtime.QrmiSlurmRuntime(tmp_path).sampler([(circuit,)], shots=4))
 
     assert result[0].data.meas.get_bitstrings() == SAMPLES
     assert result.metadata["qcsc_slurm"]["job_id"] == "6"
@@ -207,10 +221,11 @@ def test_sampler_rejects_failed_or_missing_result(
         return SimpleNamespace(job_id="6", state=state, exit_status=exit_status)
 
     monkeypatch.setattr(runtime_mod, "run_job_from_blocks", fake_run)
+    monkeypatch.setattr(runtime_mod, "_sample_on_slurm", runtime_mod._sample_on_slurm.fn)
     circuit = QuantumCircuit(10)
     circuit.measure_all()
     with pytest.raises(RuntimeError):
-        asyncio.run(runtime_mod._sample_on_slurm.fn(circuit, 4, str(tmp_path)))
+        asyncio.run(example_runtime.QrmiSlurmRuntime(tmp_path).sampler([(circuit,)], shots=4))
 
 
 def test_bitcount_rejects_slurm_failure_even_with_zero_exit_status(tmp_path, monkeypatch):
@@ -274,7 +289,7 @@ def test_flow_passes_real_shots_to_mpi_and_checks_histogram(tmp_path, monkeypatc
     async def fake_artifact(**kwargs):
         artifacts.append(kwargs)
 
-    monkeypatch.setattr(runtime_mod.QrmiSlurmRuntime, "sampler", fake_sampler)
+    monkeypatch.setattr(example_runtime.QrmiSlurmRuntime, "sampler", fake_sampler)
     monkeypatch.setattr(flow_mod, "run_hpc_bitcount_from_input", fake_bitcount)
     monkeypatch.setattr(flow_mod, "create_table_artifact", fake_artifact)
     monkeypatch.setattr(flow_mod, "get_run_logger", logger_stub)

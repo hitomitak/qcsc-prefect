@@ -1,5 +1,11 @@
 # QRMI Batch + Slurm MPI BitCount PoC
 
+QRMI/Slurm実行は `qcsc-prefect-qiskit` のライブラリへ移動しました。
+exampleのコンストラクタ・Block名・workerのスクリプトパスは維持しています。
+[移行手順](../../docs/howto/howto_qrmi_slurm_sampler.md#pocからの移行)に従い、
+ワークフローと計算ノードの両側でパッケージを更新してください。
+以下の従来のrsync対象だけでは、新しいライブラリは転送されません。
+
 `test_heron`、`debug` partition、共有領域 `/shared`、既存のQRMI仮想環境
 `/shared/venv/qrmi` を使う最小デモです。Workflowはvm1上のPythonで実行します。
 

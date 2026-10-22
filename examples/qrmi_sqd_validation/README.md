@@ -30,7 +30,9 @@ QPY 自体の測定結果が壊れているわけではありません。
 復元後は PR の専用トランスパイラを変更せずに呼び出しています。
 実験用ヘルパー `prepare_qpy_transport()` は `examples/qrmi_sqd_validation/pr42.py` に置き、
 オフラインテストと Slurm PoC が同じ処理を使います。
-本番ライブラリの API にはまだ組み込んでいません。
+このアルゴリズム固有処理はexampleに残し、ライブラリの `prepare` フックへ接続しています。
+実行部分の責務と移行手順は
+[QRMI/Slurm Sampler ライブラリ](../../docs/howto/howto_qrmi_slurm_sampler.md)を参照してください。
 
 ```text
 送信側: H₂ の CCSD → LUCJ → ffSIM PRE_INIT → ffSIM ゲート展開 → QPY 保存
