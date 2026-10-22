@@ -5,6 +5,9 @@
 QRMI、Slurm、QPU、Prefect Cloud、ローカルの Prefect Server は不要です。
 依存パッケージのインストール後、テスト中のネットワーク接続は禁止しています。
 
+このテストがクラスタでも通ったら、次は [H₂ LUCJ の Slurm/QRMI 実行手順](README_h2_slurm.md)
+で実際の `test_heron` Target と `task_runner` の接続を確認できます。
+
 ## 確認結果
 
 Python 3.12 / macOS arm64 で **6 passed, 2 xfailed**。
@@ -25,8 +28,9 @@ QPY 自体の測定結果が壊れているわけではありません。
 通過した回避経路では、送信側で `ffsim.qiskit.PRE_INIT` を実行してから、残った ffSIM 独自ゲートを
 定義へ展開して QPY に保存します。この処理には QPU の `Target` は不要です。
 復元後は PR の専用トランスパイラを変更せずに呼び出しています。
-実験用ヘルパー `prepare_qpy_transport()` はテストファイル内に置いています。
-本番ライブラリや既存 PoC の実行経路にはまだ組み込んでいません。
+実験用ヘルパー `prepare_qpy_transport()` は `examples/qrmi_sqd_validation/pr42.py` に置き、
+オフラインテストと Slurm PoC が同じ処理を使います。
+本番ライブラリの API にはまだ組み込んでいません。
 
 ```text
 送信側: H₂ の CCSD → LUCJ → ffSIM PRE_INIT → ffSIM ゲート展開 → QPY 保存

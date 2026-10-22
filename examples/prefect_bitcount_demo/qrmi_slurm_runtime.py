@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 from prefect import task
@@ -29,6 +30,8 @@ class QrmiSlurmRuntime:
     """
 
     root_dir: Path
+    transpile_strategy: Literal["generic", "sqd-pr42"] = "generic"
+    sqd_circuit_parameters: dict | None = None
 
     async def sampler(self, sampler_pubs, *, shots: int = 100) -> PrimitiveResult:
         if len(sampler_pubs) != 1 or len(sampler_pubs[0]) != 1:
@@ -38,13 +41,54 @@ class QrmiSlurmRuntime:
             raise ValueError("Use a measured circuit without unbound parameters")
         if shots < 1:
             raise ValueError("shots must be positive")
-        return await _sample_on_slurm(circuit, shots, str(self.root_dir))
+        if self.transpile_strategy not in {"generic", "sqd-pr42"}:
+            raise ValueError(f"Unknown transpile strategy: {self.transpile_strategy}")
+        if self.transpile_strategy == "generic" and self.sqd_circuit_parameters is not None:
+            raise ValueError("sqd_circuit_parameters requires the sqd-pr42 strategy")
+        return await _sample_on_slurm(
+            circuit,
+            shots,
+            str(self.root_dir),
+            transpile_strategy=self.transpile_strategy,
+            sqd_circuit_parameters=self.sqd_circuit_parameters,
+        )
 
 
 @task(name="quantum-sampling-qrmi-slurm", retries=0, cache_policy=NO_CACHE, persist_result=False)
-async def _sample_on_slurm(circuit, shots: int, root_dir: str) -> PrimitiveResult:
+async def _sample_on_slurm(
+    circuit,
+    shots: int,
+    root_dir: str,
+    *,
+    transpile_strategy: str = "generic",
+    sqd_circuit_parameters: dict | None = None,
+) -> PrimitiveResult:
     work_dir = Path(root_dir).expanduser().resolve() / uuid4().hex
     work_dir.mkdir(parents=True, exist_ok=False)
+    user_args = ["--shots", str(shots)]
+    if transpile_strategy == "sqd-pr42":
+        from examples.qrmi_sqd_validation.pr42 import (
+            load_pr42,
+            prepare_qpy_transport,
+            source_metadata,
+        )
+
+        params = load_pr42().CircuitParameters(**(sqd_circuit_parameters or {}))
+        provenance = source_metadata()
+        config = {
+            "strategy": transpile_strategy,
+            "source_commit": provenance["commit"],
+            "source_sha256": provenance["sha256"],
+            "circuit_parameters": params.model_dump(),
+            "seed": 24,
+            "transport": "ffsim-pre-init-decomposed",
+            "original_ops": dict(circuit.count_ops()),
+        }
+        circuit = prepare_qpy_transport(circuit)
+        (work_dir / "transpile_config.json").write_text(
+            json.dumps(config, indent=2), encoding="utf-8"
+        )
+        user_args.extend(["--transpile-strategy", "sqd-pr42"])
     with (work_dir / "circuit.qpy").open("wb") as stream:
         qpy.dump(circuit, stream)
 
@@ -55,7 +99,7 @@ async def _sample_on_slurm(circuit, shots: int, root_dir: str) -> PrimitiveResul
         hpc_profile_block_name="poc-qrmi-hpc",
         work_dir=work_dir,
         script_filename="sampler.slurm",
-        user_args=["--shots", str(shots)],
+        user_args=user_args,
         watch_poll_interval=2.0,
         metrics_artifact_key="poc-qrmi-slurm-job",
     )
@@ -73,7 +117,12 @@ async def _sample_on_slurm(circuit, shots: int, root_dir: str) -> PrimitiveResul
             f"QRMI returned {result[0].data.meas.num_shots} shots; "
             f"expected {shots}; see {result_path}"
         )
-    record = {"job_id": job.job_id, "work_dir": str(work_dir), "mode": "batch"}
+    record = {
+        "job_id": job.job_id,
+        "work_dir": str(work_dir),
+        "mode": "batch",
+        "transpile_strategy": transpile_strategy,
+    }
     (work_dir / "slurm_job.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
     result.metadata["qcsc_slurm"] = record
     get_run_logger().info("Quantum Slurm job %s completed: %s", job.job_id, work_dir)

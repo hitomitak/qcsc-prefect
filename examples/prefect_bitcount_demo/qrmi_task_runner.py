@@ -85,6 +85,7 @@ def execute_task_runner(isa_circuit, shots: int, executable: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--shots", type=int, default=100)
+    parser.add_argument("--transpile-strategy", choices=["generic", "sqd-pr42"], default="generic")
     args = parser.parse_args()
     if args.shots < 1:
         parser.error("--shots must be positive")
@@ -99,9 +100,36 @@ def main() -> None:
         raise RuntimeError("test_heron is not present in this Slurm allocation")
     with Path("circuit.qpy").open("rb") as stream:
         (circuit,) = qpy.load(stream)
-    pm = generate_preset_pass_manager(optimization_level=1, target=get_target(resource))
-    isa = pm.run(circuit)
+    target = get_target(resource)
+    if args.transpile_strategy == "sqd-pr42":
+        # The batch command executes this file by absolute path, from its job
+        # directory. Resolve the shared source checkout for the PoC imports.
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+        from examples.qrmi_sqd_validation.pr42 import transpile_for_target
+
+        config = json.loads(Path("transpile_config.json").read_text(encoding="utf-8"))
+        if config["strategy"] != args.transpile_strategy:
+            raise ValueError("Slurm strategy argument does not match transpile_config.json")
+        isa = transpile_for_target(circuit, target, config)
+        report = {
+            **config,
+            "input_ops": dict(circuit.count_ops()),
+            "isa_ops": dict(isa.count_ops()),
+            "target_num_qubits": target.num_qubits,
+            "isa_num_qubits": isa.num_qubits,
+            "registers": {reg.name: len(reg) for reg in isa.cregs},
+            "host": socket.gethostname(),
+            "resource": RESOURCE,
+            "mode": "batch",
+        }
+        Path("transpile_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+        with Path("isa.qpy").open("wb") as stream:
+            qpy.dump(isa, stream)
+    else:
+        pm = generate_preset_pass_manager(optimization_level=1, target=target)
+        isa = pm.run(circuit)
     print(f">>> Host: {socket.gethostname()}, resource: {RESOURCE}, mode: batch", flush=True)
+    print(f">>> Transpile strategy: {args.transpile_strategy}", flush=True)
     print(f">>> Circuit ops (ISA): {dict(isa.count_ops())}", flush=True)
     execute_task_runner(isa, args.shots, Path(sys.executable).with_name("task_runner"))
 

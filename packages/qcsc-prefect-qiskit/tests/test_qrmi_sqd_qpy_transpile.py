@@ -7,50 +7,25 @@ Prefect flow/server. The function bodies and transpiler passes are unchanged.
 
 from __future__ import annotations
 
-import ast
-import hashlib
-import json
 import logging
 import socket
-import sys
-from pathlib import Path
-from types import ModuleType
 from unittest.mock import patch
 
 import pytest
 
 np = pytest.importorskip("numpy")
-ffsim = pytest.importorskip("ffsim", reason="Install examples/qrmi_sqd_validation/requirements.txt")
+pytest.importorskip("ffsim", reason="Install examples/qrmi_sqd_validation/requirements.txt")
 pytest.importorskip("pyscf")
 pytest.importorskip("pydantic_numpy")
 pytest.importorskip("qiskit_ibm_runtime")
 
-from ffsim.qiskit import PRE_INIT  # noqa: E402
-from pydantic import BaseModel, Field  # noqa: E402
 from pyscf import lib  # noqa: E402
-from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister, qpy  # noqa: E402
-from qiskit.passmanager import ConditionalController  # noqa: E402
+from qiskit import qpy  # noqa: E402
 from qiskit.providers.fake_provider import GenericBackendV2  # noqa: E402
 from qiskit.quantum_info import Statevector  # noqa: E402
-from qiskit.transpiler import Target, generate_preset_pass_manager  # noqa: E402
-from qiskit.transpiler.passes import (  # noqa: E402
-    ApplyLayout,
-    BarrierBeforeFinalMeasurements,
-    EnlargeWithAncilla,
-    FullAncillaAllocation,
-    Optimize1qGatesDecomposition,
-    RemoveIdentityEquivalent,
-    SabreLayout,
-)
-from qiskit.transpiler.passmanager import PassManager  # noqa: E402
-from qiskit_ibm_runtime.transpiler.passes import FoldRzzAngle  # noqa: E402
 
-ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT / "algorithms/qcsc_workflow_utility/src"))
+from examples.qrmi_sqd_validation.pr42 import chem, load_pr42, prepare_qpy_transport  # noqa: E402
 
-from qcsc_workflow_utility import ElectronicProperties, chem  # noqa: E402
-
-FIXTURE_DIR = Path(__file__).parent / "fixtures/pr42"
 LOGGER = logging.getLogger("qrmi-sqd-offline-validation")
 
 
@@ -69,54 +44,7 @@ def block_network():
 
 @pytest.fixture(scope="module")
 def pr42(block_network):
-    """Load actual PR definitions without importing its deployment/solver code."""
-    provenance = json.loads((FIXTURE_DIR / "source.json").read_text())
-    source_path = FIXTURE_DIR / "sqd_fulqrum_main.py.txt"
-    source = source_path.read_bytes()
-    assert hashlib.sha256(source).hexdigest() == provenance["sha256"]
-    tree = ast.parse(source, filename=str(source_path))
-    definitions = [
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef | ast.FunctionDef)
-        and node.name in provenance["definitions"]
-    ]
-    assert [node.name for node in definitions] == provenance["definitions"]
-    module = ModuleType("_qrmi_sqd_pr42_offline")
-    module.__dict__.update(
-        BaseModel=BaseModel,
-        Field=Field,
-        QuantumCircuit=QuantumCircuit,
-        QuantumRegister=QuantumRegister,
-        ClassicalRegister=ClassicalRegister,
-        ElectronicProperties=ElectronicProperties,
-        ffsim=ffsim,
-        np=np,
-        PRE_INIT=PRE_INIT,
-        Target=Target,
-        generate_preset_pass_manager=generate_preset_pass_manager,
-        PassManager=PassManager,
-        ConditionalController=ConditionalController,
-        ApplyLayout=ApplyLayout,
-        BarrierBeforeFinalMeasurements=BarrierBeforeFinalMeasurements,
-        EnlargeWithAncilla=EnlargeWithAncilla,
-        FullAncillaAllocation=FullAncillaAllocation,
-        Optimize1qGatesDecomposition=Optimize1qGatesDecomposition,
-        RemoveIdentityEquivalent=RemoveIdentityEquivalent,
-        SabreLayout=SabreLayout,
-        FoldRzzAngle=FoldRzzAngle,
-        task=lambda fn: fn,
-        get_run_logger=lambda: LOGGER,
-    )
-    sys.modules[module.__name__] = module
-    try:
-        exec(
-            compile(ast.Module(body=definitions, type_ignores=[]), str(source_path), "exec"),
-            module.__dict__,
-        )
-        yield module
-    finally:
-        sys.modules.pop(module.__name__, None)
+    return load_pr42()
 
 
 @pytest.fixture(scope="module")
@@ -150,28 +78,6 @@ def qpy_roundtrip(circuit, path):
     with path.open("rb") as stream:
         (restored,) = qpy.load(stream)
     return restored
-
-
-def prepare_qpy_transport(circuit):
-    """Experimental, Target-independent transport boundary for this fixture.
-
-    QPY preserves definitions but does not reconstruct ffsim Gate subclasses.
-    Run ffsim's optimizations while their attributes are available, then expand
-    remaining ffsim gates. The PR's Target-dependent transpiler is unchanged.
-    """
-    circuit = PRE_INIT.run(circuit)
-    for _ in range(10):
-        gates = sorted(
-            {
-                instruction.operation.name
-                for instruction in circuit.data
-                if (type(instruction.operation).__module__ or "").startswith("ffsim.")
-            }
-        )
-        if not gates:
-            return circuit
-        circuit = circuit.decompose(gates_to_decompose=gates)
-    raise AssertionError("ffsim gates remain after ten decomposition rounds")
 
 
 def register_shape(circuit):
