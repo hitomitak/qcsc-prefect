@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=77.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qcsc-qrmi-pr42-validation"
+version = "0.1.0"
+description = "Source-checkout PR #42 sampling validation for QCSC Prefect 0.3.0"
+requires-python = ">=3.12"
+dependencies = [
+    "qcsc-prefect-qiskit[slurm]==0.3.0",
+    "qcsc-workflow-utility==0.1.0",
+    "ffsim==0.0.84",
+    "pyscf==2.13.0",
+]
+
+# Editable installation keeps the immutable fixture in its source checkout.
+[tool.setuptools]
+packages = ["examples.qrmi_sqd_validation"]
+package-dir = {"examples.qrmi_sqd_validation" = "."}
