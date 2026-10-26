@@ -1,5 +1,10 @@
 # One H2 flow: QRMI sampling to configuration recovery and Fulqrum
 
+For the simpler integration-review scenario, use the
+[preserved PR #42 flow with a minimal QRMI patch](README_pr42_smoke.md). It uses
+small inputs and does not make FCI agreement a requirement. This earlier H2
+entrypoint remains available as separate numerical-validation evidence.
+
 `end_to_end.py` connects a **fresh** `QrmiRuntime` 0.3.0 sampling call, the
 configuration recovery at PR #42 commit
 `2d435b19af4648cbbc5fbc6a27ff258c93817d1a`, classical Slurm Fulqrum execution

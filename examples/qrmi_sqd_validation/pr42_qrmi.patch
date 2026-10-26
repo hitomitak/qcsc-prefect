@@ -1,0 +1,72 @@
+--- a/algorithms/sqd/sqd_fulqrum/main.py
++++ b/algorithms/sqd/sqd_fulqrum/main.py
+@@ -1,3 +1,4 @@
++# ruff: noqa: I001
+ """Definition of the SQD workflow with the fulqrum eigensolver.
+
+ The quantum stage (LUCJ ansatz, transpilation, sampling) is the same as in
+@@ -16,7 +17,7 @@
+ from prefect.artifacts import create_table_artifact
+ from prefect.cache_policies import INPUTS, NO_CACHE
+ from prefect.variables import Variable
+-from prefect_qiskit.runtime import QuantumRuntime
++from examples.qrmi_sqd_validation.pr42_bridge import load_qrmi_runtime, sample_with_qrmi
+ from pydantic import BaseModel, Field
+ from qcsc_prefect_fulqrum import FulqrumSolverJob
+ from qcsc_workflow_utility import (
+@@ -42,7 +43,7 @@
+ from qiskit_addon_sqd.fermion import SCIResult
+ from qiskit_ibm_runtime.transpiler.passes import FoldRzzAngle
+
+-from sqd_fulqrum.recovery import SolveFn, run_configuration_recovery
++from examples.qrmi_sqd_validation.pr42_bridge import SolveFn, run_configuration_recovery
+
+ DEFAULT_RUNTIME_BLOCK_NAME = "ibm-runner"
+ DEFAULT_SOLVER_BLOCK_NAME = "sqd-fulqrum-solver"
+@@ -484,7 +485,6 @@
+         Sampled bitstrings representing determinants.
+     """
+     logger = get_run_logger()
+-    rng = np.random.default_rng(24)
+
+     options = await Variable.get(option_name, default={"params": {"shots": 100_000}})
+     shots = _resolve_shots(sampler_options=options)
+@@ -500,14 +500,7 @@
+             rand_seed=random_seed,
+         )
+
+-    try:
+-        runtime = await QuantumRuntime.load(runner_name)
+-    except ValueError as exc:
+-        raise RuntimeError(
+-            f"Quantum source 'real-device' requested but QuantumRuntime block "
+-            f"'{runner_name}' is not defined. Set quantum_source='random' to use "
+-            "deterministic random sampling instead."
+-        ) from exc
++    runtime = await load_qrmi_runtime(runner_name)
+
+     # Create ansatz circuits
+     lucj_circ = create_ansatz_circuits(
+@@ -515,20 +508,8 @@
+         elec_props=elec_props,
+     )
+
+-    # Transpile
+-    target = await runtime.get_target()
+-    isa_circuit = transpile_circuit(
+-        circuit=lucj_circ,
+-        target=target,
+-        circuit_params=circuit_params,
+-        seed=rng,
+-    )
+-
+-    # Run primitive
+-    pub_result = await runtime.sampler(
+-        sampler_pubs=[(isa_circuit,)],
+-        options=options,
+-    )
++    # Transpile inside the QRMI/Slurm allocation, then run the primitive.
++    pub_result = await sample_with_qrmi(runtime, lucj_circ, circuit_params, options)
+
+     # Post-process bitstrings
+     meas_bits = pub_result[0].data.meas

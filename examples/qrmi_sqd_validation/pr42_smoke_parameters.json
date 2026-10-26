@@ -1,0 +1,30 @@
+{
+  "parameters": {
+    "molecule": {
+      "atom": "H 0 0 0; H 0 0 0.74",
+      "basis": "sto-3g",
+      "symmetry": false,
+      "spin_sq": 0.0
+    },
+    "circuit": {
+      "use_reset_mitigation": false,
+      "optimization_level": 1,
+      "sabre_max_iterations": 1,
+      "sabre_swap_trials": 1,
+      "sabre_layout_trials": 1,
+      "n_lucj_layers": 1
+    },
+    "sqd": {
+      "subspace_dim": 1,
+      "num_batches": 1,
+      "max_iterations": 1
+    },
+    "quantum_source": "real-device",
+    "random_seed": 24
+  },
+  "sampler_options": {
+    "params": {
+      "shots": 16
+    }
+  }
+}

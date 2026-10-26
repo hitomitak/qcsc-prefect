@@ -7,6 +7,11 @@ commit `2d435b19af4648cbbc5fbc6a27ff258c93817d1a` to the public
 The application and its fixtures belong to this integration-validation branch.
 The generic library is unchanged from tag `v0.3.0`.
 
+For a reviewer-friendly demonstration that preserves the original PR flow body
+and applies a small QRMI boundary patch, start with the
+[minimal-patch workflow check](README_pr42_smoke.md). Its separate fast inputs
+check workflow completion without requiring FCI accuracy.
+
 For a single parent flow connecting **fresh** QRMI sampling to recovery, native
 Fulqrum/Slurm and FCI verification, see the [end-to-end guide](README_end_to_end.md).
 
