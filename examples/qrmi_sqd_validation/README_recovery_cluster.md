@@ -1,5 +1,10 @@
 # Cluster runbook: saved eight-shot H2 samples to Fulqrum
 
+The user reported PASS for this saved-result stage on 2026-10-26. For the next
+stage, use the [single-flow end-to-end guide](README_end_to_end.md). It reuses
+the existing environments/blocks and provides a verifier without manual input
+manifests or `sacct`. Do not repeat block registration for that new flow.
+
 These instructions are for a future user-operated validation. Writing this
 runbook did not execute anything on the cluster. Step 7 submits classical Slurm
 jobs; earlier steps prepare a separate checkout and environments, inspect saved

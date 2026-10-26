@@ -157,6 +157,26 @@ def validate_result(result, norb, nelec):
         )
 
 
+async def load_block(block_class, name):
+    block = block_class.load(name)
+    return await block if inspect.isawaitable(block) else block
+
+
+async def load_fulqrum_solver(solver_block):
+    """Check the classical solver route before any new quantum submission."""
+    from qcsc_prefect_blocks.common.blocks import HPCProfileBlock
+    from qcsc_prefect_fulqrum import FulqrumSolverJob
+
+    require(bool(solver_block), "fulqrum-block requires solver_block")
+    solver = await load_block(FulqrumSolverJob, solver_block)
+    hpc = await load_block(HPCProfileBlock, solver.hpc_profile_block_name)
+    require(
+        hpc.hpc_target == "slurm" and not hpc.slurm_qpu,
+        "Fulqrum recovery requires a classical Slurm profile without slurm_qpu",
+    )
+    return solver, hpc
+
+
 async def make_solver(backend, properties, solver_block):
     if backend == "reference":
         from qiskit_addon_sqd.fermion import solve_fermion
@@ -190,9 +210,7 @@ async def make_solver(backend, properties, solver_block):
 
         return solve
     if backend == "fulqrum-block":
-        from qcsc_prefect_blocks.common.blocks import HPCProfileBlock
         from qcsc_prefect_executor.from_blocks import run_job_from_blocks
-        from qcsc_prefect_fulqrum import FulqrumSolverJob
         from qcsc_prefect_fulqrum.io_utils import (
             make_job_work_dir,
             read_solver_output,
@@ -200,16 +218,7 @@ async def make_solver(backend, properties, solver_block):
         )
         from qcsc_prefect_fulqrum.solver_job import solution_to_sci_result
 
-        async def load(block_class, name):
-            block = block_class.load(name)
-            return await block if inspect.isawaitable(block) else block
-
-        solver = await load(FulqrumSolverJob, solver_block)
-        hpc = await load(HPCProfileBlock, solver.hpc_profile_block_name)
-        require(
-            hpc.hpc_target == "slurm" and not hpc.slurm_qpu,
-            "Fulqrum recovery requires a classical Slurm profile without slurm_qpu",
-        )
+        solver, _ = await load_fulqrum_solver(solver_block)
         job_directories = []
 
         async def solve(ci_strings):

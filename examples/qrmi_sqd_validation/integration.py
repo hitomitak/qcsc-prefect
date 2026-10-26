@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from functools import partial
 from importlib.metadata import version
 from pathlib import Path
@@ -89,14 +89,19 @@ async def sample_bitstrings(
     return bits
 
 
-@flow(name="qrmi-pr42-h2-bitarray", retries=0, persist_result=False)
-async def h2_bitarray_flow(
+@dataclass(frozen=True)
+class H2SamplingRun:
+    bits: BitArray
+    run_dir: Path
+
+
+async def sample_h2_run(
     *,
     shots: int = 100,
     work_dir: str = "/shared/qrmi-pr42-bitarray",
     reset_mitigation: bool = False,
-) -> BitArray:
-    """Executable H2 integration with ordered samples saved for the next stage."""
+) -> H2SamplingRun:
+    """Sample and save one fresh H2 run inside the calling flow's context."""
     shots = positive_shots(shots)
     run_dir = Path(work_dir).expanduser().resolve() / f"run_{uuid4().hex}"
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -143,7 +148,19 @@ async def h2_bitarray_flow(
         "quantum_root_dir": str(runtime.root_dir),
     }
     (run_dir / "sampling_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    return bits
+    return H2SamplingRun(bits=bits, run_dir=run_dir)
+
+
+@flow(name="qrmi-pr42-h2-bitarray", retries=0, persist_result=False)
+async def h2_bitarray_flow(
+    *,
+    shots: int = 100,
+    work_dir: str = "/shared/qrmi-pr42-bitarray",
+    reset_mitigation: bool = False,
+) -> BitArray:
+    """Preserve the sampling-only flow's native BitArray return contract."""
+    run = await sample_h2_run(shots=shots, work_dir=work_dir, reset_mitigation=reset_mitigation)
+    return run.bits
 
 
 def main(argv: list[str] | None = None) -> None:

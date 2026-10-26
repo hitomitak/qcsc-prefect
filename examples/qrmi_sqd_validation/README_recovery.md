@@ -209,5 +209,9 @@ The input fixture is synthetic and matches the user's reported eight-shot
 counts; the user's actual cluster files are not present locally. User-reported
 sampling success establishes a different validation stage from these tests.
 Replay of those actual files, native Fulqrum execution and classical Slurm
-execution remain to be checked. No quantum or cluster workload was run while
-implementing this entrypoint.
+execution were pending at the time of the local implementation. On 2026-10-26,
+the user reported PASS for the actual saved eight-shot run through native
+Fulqrum/classical Slurm, with total energy `-1.1372838344885021` Hartree versus
+FCI `-1.1372838344885023`, and ten unchanged quantum input hashes. No cluster
+workload was executed by the implementation agent. The next stage is the
+[fresh-sampling end-to-end flow](README_end_to_end.md).

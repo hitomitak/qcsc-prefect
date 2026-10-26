@@ -7,6 +7,9 @@ commit `2d435b19af4648cbbc5fbc6a27ff258c93817d1a` to the public
 The application and its fixtures belong to this integration-validation branch.
 The generic library is unchanged from tag `v0.3.0`.
 
+For a single parent flow connecting **fresh** QRMI sampling to recovery, native
+Fulqrum/Slurm and FCI verification, see the [end-to-end guide](README_end_to_end.md).
+
 ## Execution boundary
 
 ```text
