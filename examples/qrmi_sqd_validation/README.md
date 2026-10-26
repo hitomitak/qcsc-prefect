@@ -26,8 +26,9 @@ runtime unchanged. A runtime with existing compilation hooks/config is rejected.
 The fixed PR's `QuantumRuntime.load`, Prefect Variable lookup and workflow-host
 Target acquisition are replaced by explicit runtime/options arguments and the
 compute-node compilation hook. The original PR remains unchanged. This is a
-sampling-stage adapter; configuration recovery, Fulqrum execution and energy
-validation remain outside its scope.
+sampling-stage adapter. A separate [saved-result recovery entrypoint](README_recovery.md)
+connects its saved results to the pinned configuration recovery and Fulqrum
+solver interface without resampling.
 
 ## Preserved sampling contract
 
@@ -130,8 +131,9 @@ result and Slurm metadata under the quantum job directory.
 
 ## Validation status
 
-Earlier PoC runs returned four-bit, 100-shot `meas` results on `test_heron`,
-including the previous BitArray adapter. Those runs used the earlier runtime API.
-Hardware execution against `QrmiRuntime` 0.3.0, hardware acceptance of the `test`
-register, the full Fulqrum workflow and energy accuracy are separate, pending
-validation stages.
+The user reported successful H2 sampling on `test_heron` against `QrmiRuntime`
+0.3.0: a 100-shot, four-bit `meas` run and a reset-mitigated run retaining eight
+four-bit shots. The actual saved cluster files are not present locally, so these
+are user-reported hardware results. The full Fulqrum workflow and energy
+validation remain separate stages; see the recovery entrypoint for the local
+test coverage and native-backend limitation.

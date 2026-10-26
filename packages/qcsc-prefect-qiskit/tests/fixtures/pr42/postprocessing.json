@@ -1,0 +1,66 @@
+{
+  "repository": "BStar14/qcsc-prefect",
+  "commit": "2d435b19af4648cbbc5fbc6a27ff258c93817d1a",
+  "files": [
+    {
+      "path": "algorithms/sqd/sqd_fulqrum/__init__.py",
+      "local_path": "packages/qcsc-prefect-qiskit/tests/fixtures/pr42/postprocessing/algorithms/sqd/sqd_fulqrum/__init__.py.txt",
+      "sha256": "24e3cbe66a44cea668f12cb04fa5209f7954ed0c37272f6fbbd17d8fa3444c0c"
+    },
+    {
+      "path": "algorithms/sqd/sqd_fulqrum/recovery.py",
+      "local_path": "packages/qcsc-prefect-qiskit/tests/fixtures/pr42/postprocessing/algorithms/sqd/sqd_fulqrum/recovery.py.txt",
+      "sha256": "a0457da0158586789065bc69c3cfc1d62a1670335b737db26999f2a056db393b"
+    },
+    {
+      "path": "algorithms/sqd/sqd_fulqrum/subsample.py",
+      "local_path": "packages/qcsc-prefect-qiskit/tests/fixtures/pr42/postprocessing/algorithms/sqd/sqd_fulqrum/subsample.py.txt",
+      "sha256": "e1a169df4012c7c6054315d994ca0b33abe094d0159ff0c7ab09dc182e835258"
+    },
+    {
+      "path": "packages/qcsc-prefect-fulqrum/src/qcsc_prefect_fulqrum/__init__.py",
+      "local_path": "packages/qcsc-prefect-fulqrum/src/qcsc_prefect_fulqrum/__init__.py",
+      "sha256": "7925cf22e139e7ef779903aad6d558923855e6a7bcb67b251dfdab5757250942"
+    },
+    {
+      "path": "packages/qcsc-prefect-fulqrum/src/qcsc_prefect_fulqrum/block_utils.py",
+      "local_path": "packages/qcsc-prefect-fulqrum/src/qcsc_prefect_fulqrum/block_utils.py",
+      "sha256": "af8359a1d30a4ccd982c73a77b92fca00948c1dd84b9accb763329408aaf46ee"
+    },
+    {
+      "path": "packages/qcsc-prefect-fulqrum/src/qcsc_prefect_fulqrum/cli.py",
+      "local_path": "packages/qcsc-prefect-fulqrum/src/qcsc_prefect_fulqrum/cli.py",
+      "sha256": "fede3fba4dff9a965d4de1c45c1dc934956d7c94a483896da8211fc4609746fe"
+    },
+    {
+      "path": "packages/qcsc-prefect-fulqrum/src/qcsc_prefect_fulqrum/io_utils.py",
+      "local_path": "packages/qcsc-prefect-fulqrum/src/qcsc_prefect_fulqrum/io_utils.py",
+      "sha256": "d7506f633a12719b0c4a85f8e2b48373cd97357c9f0334df75bdf8613f17c3aa"
+    },
+    {
+      "path": "packages/qcsc-prefect-fulqrum/src/qcsc_prefect_fulqrum/solver.py",
+      "local_path": "packages/qcsc-prefect-fulqrum/src/qcsc_prefect_fulqrum/solver.py",
+      "sha256": "fd4f2dd35dbdb3db564c6c6819b60c107304809124fe2858e445c23e336a9ba2"
+    },
+    {
+      "path": "packages/qcsc-prefect-fulqrum/src/qcsc_prefect_fulqrum/solver_job.py",
+      "local_path": "packages/qcsc-prefect-fulqrum/src/qcsc_prefect_fulqrum/solver_job.py",
+      "sha256": "4d0652bd31ce6fcc9fe49328595d44ddb8dfe73d917be04339b0ecf799335408"
+    },
+    {
+      "path": "packages/qcsc-prefect-fulqrum/pyproject.toml",
+      "local_path": "packages/qcsc-prefect-qiskit/tests/fixtures/pr42/postprocessing/packages/qcsc-prefect-fulqrum/pyproject.toml.txt",
+      "sha256": "cb9cc64f6a01e5f2485eab5b008454d293f3c014d084a9e5a01032c9d4f7939a"
+    },
+    {
+      "path": "packages/qcsc-prefect-fulqrum/README.md",
+      "local_path": "packages/qcsc-prefect-fulqrum/README.md",
+      "sha256": "d94541c3aa91210084492af20c45e0de605f056360a41f996ce42ba162420b35"
+    },
+    {
+      "path": "packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh",
+      "local_path": "packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh",
+      "sha256": "a3267d4c7b0530d6decf327c9f6c9669d18dcfd7a65bf612a205f882c7d6b5dc"
+    }
+  ]
+}
