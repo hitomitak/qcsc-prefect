@@ -14,7 +14,7 @@ maintainers = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "ffsim",
+    "ffsim==0.0.84",
     "qiskit-addon-sqd",
     "prefect-qiskit",
     "prefect[aws]>=3.4.14",
