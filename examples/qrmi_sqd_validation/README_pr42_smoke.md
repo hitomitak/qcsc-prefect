@@ -14,24 +14,38 @@ tests apply the patch to the original file and compare the resulting bytes.
 
 ## What changed in main.py
 
-The patch changes the Runtime import and the sampling boundary in
-`sample_bitstrings`:
+The Runtime construction and primitive call are written directly in
+`sample_bitstrings`. There is no bridge wrapper hiding the replacement:
 
 ```text
 QuantumRuntime.load(block name)
-  -> load_qrmi_runtime(runtime JSON file)
+  -> read runtime JSON -> QrmiRuntime(**runtime_config)
 
 workflow-host get_target -> transpile -> sampler(ISA circuit)
-  -> sample_with_qrmi(original LUCJ circuit, original circuit parameters, options)
-  -> QPY preparation -> Slurm -> compute-node Target / pinned transpiler -> sampler
+  -> runtime.sampler(sampler_pubs=[(lucj_circ,)], options=options)
+     with QPY preparation before Slurm and Target / transpilation inside Slurm
 ```
 
-The companion [pr42_bridge.py](pr42_bridge.py) uses the released
-`QrmiRuntime(scheduler="slurm")` API. It installs the existing application-owned
-ffSIM PRE_INIT/decomposition hook before QPY and calls the fixed PR transpiler
-inside the allocation. This is needed because raw ffSIM gates lose Python
-attributes through QPY. The helper and validation application must be installed;
-the patch is not a standalone replacement for those transport hooks.
+The executable copy contains the released `QrmiRuntime(scheduler="slurm")`
+configuration, hook settings, direct sampler call and scheduler-evidence write.
+The hook settings are visible in the same function:
+
+```python
+runtime_config.update(
+    prepare=partial(prepare_sampler_circuit, circuit_parameters=circuit_params.model_dump()),
+    transpiler="examples.qrmi_sqd_validation.pr42:transpile_for_target",
+)
+runtime = QrmiRuntime(**runtime_config)
+```
+
+The two transport callbacks remain in [pr42.py](pr42.py):
+`prepare_sampler_circuit` applies ffSIM PRE_INIT/decomposition before QPY;
+`transpile_for_target` calls the fixed PR transpiler after the compute node
+acquires its Target. Raw ffSIM gates lose Python attributes through QPY, so
+preparation must happen before transport. The compute-node callback must be
+importable by name. These callbacks are explicit application-owned transport
+hooks, not a replacement sampler API. Install the validation application on
+both sides; the patch alone does not contain those hook implementations.
 
 The original `runner_name` string argument now names a runtime JSON file written
 by the smoke launcher. It is not interpreted as the old QuantumRuntime Block.
@@ -39,9 +53,11 @@ The original sampler-options Variable interface remains in use. The launcher
 creates a unique Variable for the explicit 16-shot options and records its name;
 it does not overwrite existing Variables or register new blocks.
 
-There are two non-computational adjustments in the patch: the recovery import
-points at the verified snapshot namespace, and an import-order lint suppression
-keeps the original source layout intact. The unused sampler-local RNG line is
+There are two non-computational adjustments in the patch: the original recovery
+objects are bound explicitly with `load_recovery().SolveFn` and
+`load_recovery().run_configuration_recovery`, and an import-order lint suppression
+keeps the original source layout intact. The source proof checks those exact
+bindings and the tests verify function identity. The unused sampler-local RNG line is
 removed because transpilation moves into the allocation; the transpiler hook
 preserves seed 24. The recovery RNG in the original flow is unchanged.
 
@@ -170,6 +186,6 @@ complete native outputs with a failed scheduler result and verifies rejection.
 A subsequent user-operated cluster run is needed before claiming that this
 minimal-patch version also ran through QRMI and native Fulqrum on the cluster.
 
-Local verification on 2026-10-26: **388 passed, 3 skipped, 2 xfailed** for the
-full suite via `uv run --no-sync pytest`; the six new checks passed. Ruff
+Local verification on 2026-10-26: **389 passed, 3 skipped, 2 xfailed** for the
+full suite via `uv run --no-sync pytest`; the seven smoke checks passed. Ruff
 checks/formatting and the dependency consistency check also passed.

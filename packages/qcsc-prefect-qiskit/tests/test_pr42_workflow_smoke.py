@@ -33,7 +33,7 @@ boundaries = _boundaries
 smoke = importlib.import_module("examples.qrmi_sqd_validation.pr42_smoke")
 proof_module = importlib.import_module("examples.qrmi_sqd_validation.pr42_source_proof")
 workflow = importlib.import_module("examples.qrmi_sqd_validation.pr42_workflow")
-bridge = importlib.import_module("examples.qrmi_sqd_validation.pr42_bridge")
+pinned_recovery = importlib.import_module("examples.qrmi_sqd_validation.pinned_recovery")
 DIRECTORY = Path(smoke.__file__).parent
 
 
@@ -50,8 +50,10 @@ def test_source_copy_preserves_calculation_and_parameters():
     assert proof["changed_definition"] == "sample_bitstrings"
     assert proof["sampling_postprocessing_unchanged"] is True
     assert (
-        workflow.run_configuration_recovery is bridge._original_recovery.run_configuration_recovery
+        workflow.run_configuration_recovery
+        is pinned_recovery.load_recovery().run_configuration_recovery
     )
+    assert workflow.SolveFn is pinned_recovery.load_recovery().SolveFn
     from qcsc_prefect_fulqrum import FulqrumSolverJob
 
     assert workflow.FulqrumSolverJob is FulqrumSolverJob
@@ -77,14 +79,30 @@ def test_displayed_patch_applies_to_the_pinned_source(tmp_path):
     assert target.read_bytes() == (DIRECTORY / "pr42_workflow.py").read_bytes()
 
 
-def test_source_proof_rejects_changes_to_the_calculation(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("before", "after", "message"),
+    [
+        (
+            "range(0, elec_props.num_orbitals, 4)",
+            "range(0, elec_props.num_orbitals, 2)",
+            "Calculation definition changed: create_ansatz_circuits",
+        ),
+        (
+            "SolveFn = load_recovery().SolveFn",
+            "SolveFn = object",
+            "Verified original recovery bindings changed",
+        ),
+    ],
+)
+def test_source_proof_rejects_changes_to_the_calculation(
+    tmp_path, monkeypatch, before, after, message
+):
     source = (DIRECTORY / "pr42_workflow.py").read_text()
-    source = source.replace(
-        "range(0, elec_props.num_orbitals, 4)", "range(0, elec_props.num_orbitals, 2)"
-    )
+    assert before in source
+    source = source.replace(before, after)
     (tmp_path / "pr42_workflow.py").write_text(source)
     monkeypatch.setattr(proof_module, "__file__", str(tmp_path / "pr42_source_proof.py"))
-    with pytest.raises(ValueError, match="Calculation definition changed: create_ansatz_circuits"):
+    with pytest.raises(ValueError, match=message):
         proof_module.verify_workflow_copy()
 
 

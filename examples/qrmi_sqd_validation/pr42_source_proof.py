@@ -1,4 +1,4 @@
-"""Prove that the review copy changes only imports and the sampling boundary."""
+"""Verify recovery aliases and preserve all code outside the sampling boundary."""
 
 from __future__ import annotations
 
@@ -51,7 +51,19 @@ def verify_workflow_copy() -> dict:
             raise ValueError(f"Calculation decorators or annotations changed: {name}")
         unchanged.append(name)
 
-    # Constants and the module docstring also stay unchanged; imports are visible in the patch.
+    # Only these explicit bindings may be added outside the sampling function.
+    bindings = {
+        ast.dump(node, include_attributes=False)
+        for node in ast.parse(
+            "SolveFn = load_recovery().SolveFn\n"
+            "run_configuration_recovery = load_recovery().run_configuration_recovery\n"
+        ).body
+    }
+    module_nodes = [ast.dump(node, include_attributes=False) for node in after.body]
+    if any(module_nodes.count(binding) != 1 for binding in bindings):
+        raise ValueError("Verified original recovery bindings changed")
+
+    # Constants and the module docstring stay unchanged; imports are visible in the patch.
     def other_nodes(tree):
         return [
             ast.dump(node, include_attributes=False)
@@ -60,6 +72,7 @@ def verify_workflow_copy() -> dict:
                 node,
                 (ast.Import, ast.ImportFrom, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef),
             )
+            and ast.dump(node, include_attributes=False) not in bindings
         ]
 
     if other_nodes(before) != other_nodes(after):

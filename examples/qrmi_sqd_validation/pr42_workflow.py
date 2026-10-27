@@ -6,8 +6,10 @@ The quantum stage (LUCJ ansatz, transpilation, sampling) is the same as in
 ``FulqrumSolverJob`` block instead of the DICE SHCI solver.
 """
 
+import json
 import os
 import pathlib
+from functools import partial
 from typing import Any, Literal
 
 import ffsim
@@ -17,7 +19,7 @@ from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_table_artifact
 from prefect.cache_policies import INPUTS, NO_CACHE
 from prefect.variables import Variable
-from examples.qrmi_sqd_validation.pr42_bridge import load_qrmi_runtime, sample_with_qrmi
+from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntime
 from pydantic import BaseModel, Field
 from qcsc_prefect_fulqrum import FulqrumSolverJob
 from qcsc_workflow_utility import (
@@ -43,7 +45,12 @@ from qiskit_addon_sqd.counts import bit_array_to_arrays, generate_bit_array_unif
 from qiskit_addon_sqd.fermion import SCIResult
 from qiskit_ibm_runtime.transpiler.passes import FoldRzzAngle
 
-from examples.qrmi_sqd_validation.pr42_bridge import SolveFn, run_configuration_recovery
+from examples.qrmi_sqd_validation.pinned_recovery import load_recovery
+from examples.qrmi_sqd_validation.pr42 import prepare_sampler_circuit
+
+# Bind the original recovery objects from the verified PR #42 snapshot.
+SolveFn = load_recovery().SolveFn
+run_configuration_recovery = load_recovery().run_configuration_recovery
 
 DEFAULT_RUNTIME_BLOCK_NAME = "ibm-runner"
 DEFAULT_SOLVER_BLOCK_NAME = "sqd-fulqrum-solver"
@@ -476,7 +483,7 @@ async def sample_bitstrings(
     Args:
         circuit_params: Circuit parameters for quantum sampling.
         elec_props: Electronic properties of molecule to solver for.
-        runner_name: Block name of QuantumRuntime to execute primitives on.
+        runner_name: Path to the QRMI/Slurm runtime JSON configuration.
         option_name: Name of Variable storing sampler primitive options to load.
         quantum_source: ``"real-device"`` or ``"random"``.
         random_seed: Seed for ``"random"`` sampling.
@@ -500,7 +507,12 @@ async def sample_bitstrings(
             rand_seed=random_seed,
         )
 
-    runtime = await load_qrmi_runtime(runner_name)
+    runtime_config = json.loads(pathlib.Path(runner_name).read_text(encoding="utf-8"))
+    runtime_config.update(
+        prepare=partial(prepare_sampler_circuit, circuit_parameters=circuit_params.model_dump()),
+        transpiler="examples.qrmi_sqd_validation.pr42:transpile_for_target",
+    )
+    runtime = QrmiRuntime(**runtime_config)
 
     # Create ansatz circuits
     lucj_circ = create_ansatz_circuits(
@@ -508,8 +520,17 @@ async def sample_bitstrings(
         elec_props=elec_props,
     )
 
-    # Transpile inside the QRMI/Slurm allocation, then run the primitive.
-    pub_result = await sample_with_qrmi(runtime, lucj_circ, circuit_params, options)
+    # Prepare ffSIM gates before QPY; acquire Target and transpile inside Slurm.
+    pub_result = await runtime.sampler(sampler_pubs=[(lucj_circ,)], options=options)
+
+    # Retain scheduler evidence without changing the original meas/test selection.
+    quantum_stage = {
+        "job": pub_result.metadata["qcsc_slurm"],
+        "options": options,
+        "circuit_parameters": circuit_params.model_dump(),
+    }
+    stage_path = pathlib.Path(runtime.root_dir).resolve().parent / "quantum_stage.json"
+    stage_path.write_text(json.dumps(quantum_stage, indent=2), encoding="utf-8")
 
     # Post-process bitstrings
     meas_bits = pub_result[0].data.meas
