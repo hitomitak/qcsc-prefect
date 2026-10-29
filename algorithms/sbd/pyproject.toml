@@ -27,6 +27,9 @@ dependencies = [
 # ProcessPoolTaskRunner / ConcurrentTaskRunner (see SBD_TASK_RUNNER).
 ray = ["prefect-ray"]
 
+# QFw-SLURM validation currently uses ffsim 0.0.84.
+qfw = ["ffsim==0.0.84"]
+
 [tool.uv.sources]
 qcsc_workflow_utility = { path = "../qcsc_workflow_utility", editable = true }
 

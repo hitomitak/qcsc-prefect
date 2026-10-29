@@ -1,11 +1,15 @@
 # Workflow for observability demo
 
 import asyncio
+import os
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
 import numpy as np
+from ffsim.qiskit import PRE_INIT
 from prefect import get_run_logger, task
 from prefect.variables import Variable
 from prefect_qiskit import QuantumRuntime
@@ -87,6 +91,12 @@ def walker_sqd(
                 "Quantum source 'qfw' requires the QFw environment and dependencies."
             ) from exc
 
+        qfw_slurm_bin = os.environ.get("QFW_SLURM_BIN")
+        if qfw_slurm_bin:
+            sys.path.insert(0, qfw_slurm_bin)
+
+        from qfw_slurm_sampler import run_sampler_job
+
         try:
             qfw = QFwResource.load("qfw-runner")
         except ValueError as exc:
@@ -99,18 +109,6 @@ def walker_sqd(
     if quantum_source in ("real-device", "qfw"):
         logger.info("Preparing quantum sampling on backend %s.", resource_name)
 
-        target_start = perf_counter()
-        if runtime is not None:
-            target = runtime.get_target()
-        else:
-            target = qfw.get_target()
-
-        logger.info(
-            "Loaded backend target for %s in %.2fs.",
-            resource_name,
-            perf_counter() - target_start,
-        )
-
         vir_circuit = create_lucj_circuit(
             ucj_parameter=ucj_parameter,
             elec_props=elec_props,
@@ -121,37 +119,6 @@ def walker_sqd(
         )
 
         logger.info(
-            "Searching ISA layout for backend %s "
-            "(max_iterations=%s, swap_trials=%s, layout_trials=%s).",
-            resource_name,
-            circuit_params.sabre_max_iterations,
-            circuit_params.sabre_swap_trials,
-            circuit_params.sabre_layout_trials,
-        )
-        layout = find_optimal_layout(
-            test_circuit=vir_circuit,
-            target=target,
-            optimization_level=circuit_params.optimization_level,
-            max_iterations=circuit_params.sabre_max_iterations,
-            swap_trials=circuit_params.sabre_swap_trials,
-            layout_trials=circuit_params.sabre_layout_trials,
-        )
-
-        logger.info("Transpiling ISA circuit for backend %s.", resource_name)
-        transpile_start = perf_counter()
-        isa_circuit = transpile_circuit(
-            circuit=vir_circuit,
-            target=target,
-            layout=layout,
-            optimization_level=circuit_params.optimization_level,
-        )
-        logger.info(
-            "Completed ISA transpilation for %s in %.2fs.",
-            resource_name,
-            perf_counter() - transpile_start,
-        )
-
-        logger.info(
             "Submitting sampler workload to %s (shots=%s).",
             resource_name,
             shots,
@@ -159,6 +126,46 @@ def walker_sqd(
         sampling_start = perf_counter()
 
         if runtime is not None:
+            target_start = perf_counter()
+            target = runtime.get_target()
+
+            logger.info(
+                "Loaded backend target for %s in %.2fs.",
+                resource_name,
+                perf_counter() - target_start,
+            )
+
+            logger.info(
+                "Searching ISA layout for backend %s "
+                "(max_iterations=%s, swap_trials=%s, layout_trials=%s).",
+                resource_name,
+                circuit_params.sabre_max_iterations,
+                circuit_params.sabre_swap_trials,
+                circuit_params.sabre_layout_trials,
+            )
+            layout = find_optimal_layout(
+                test_circuit=vir_circuit,
+                target=target,
+                optimization_level=circuit_params.optimization_level,
+                max_iterations=circuit_params.sabre_max_iterations,
+                swap_trials=circuit_params.sabre_swap_trials,
+                layout_trials=circuit_params.sabre_layout_trials,
+            )
+
+            logger.info("Transpiling ISA circuit for backend %s.", resource_name)
+            transpile_start = perf_counter()
+            isa_circuit = transpile_circuit(
+                circuit=vir_circuit,
+                target=target,
+                layout=layout,
+                optimization_level=circuit_params.optimization_level,
+            )
+            logger.info(
+                "Completed ISA transpilation for %s in %.2fs.",
+                resource_name,
+                perf_counter() - transpile_start,
+            )
+
             try:
                 pub_result = runtime.sampler(
                     sampler_pubs=[(isa_circuit,)],
@@ -187,14 +194,66 @@ def walker_sqd(
 
         else:
             try:
-                bit_array = qfw.run_sampler(
-                    isa_circuit,
-                    num_shots=shots,
-                    use_reset_mitigation=circuit_params.use_reset_mitigation,
+                vir_circuit = PRE_INIT.run(vir_circuit)
+
+                sampler_path = Path(__file__).with_name("qfw_slurm_sqd_sampler.py")
+
+                record = run_sampler_job(
+                    vir_circuit,
+                    shots=shots,
+                    qpu=resource_name,
+                    work_dir=str(Path.home() / "qfw_jobs"),
+                    sampler=str(sampler_path),
+                    sampler_args=[
+                        "--optimization-level",
+                        circuit_params.optimization_level,
+                        "--sabre-max-iterations",
+                        circuit_params.sabre_max_iterations,
+                        "--sabre-swap-trials",
+                        circuit_params.sabre_swap_trials,
+                        "--sabre-layout-trials",
+                        circuit_params.sabre_layout_trials,
+                    ],
                 )
+
+                counts = record["counts"]
+
+                if circuit_params.use_reset_mitigation:
+                    samples = []
+
+                    for bitstring, count in counts.items():
+                        registers = bitstring.split()
+
+                        if len(registers) != 2:
+                            raise RuntimeError(
+                                "Expected QFw reset-mitigation counts to contain "
+                                f"two classical registers, got {bitstring!r}."
+                            )
+
+                        test_bits = registers[0]
+                        meas_bits = registers[1]
+
+                        if int(test_bits, 2).bit_count() == 0:
+                            samples.extend([meas_bits] * count)
+
+                    if not samples:
+                        raise RuntimeError(
+                            "Reset mitigation removed all samples from the QFw sampler result."
+                        )
+
+                    bit_array = BitArray.from_samples(samples)
+
+                else:
+                    samples = []
+
+                    for bitstring, count in counts.items():
+                        samples.extend([bitstring] * count)
+
+                    bit_array = BitArray.from_samples(samples)
+
             except Exception:
                 logger.exception(
-                    "QFw sampler submission or execution failed for device %s.",
+                    "QFw Slurm sampler submission or execution failed for device %s.",
                     resource_name,
                 )
                 raise
