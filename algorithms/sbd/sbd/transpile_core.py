@@ -75,6 +75,7 @@ def _find_optimal_layout(
     use_pre_init: bool = True,
 ) -> tuple[Layout, list[dict]]:
     coupling_map = target.build_coupling_map()
+    layout_source = coupling_map if coupling_map is not None else target
     num_qubits = len(test_circuit.qubits)
 
     if logger is not None:
@@ -116,18 +117,21 @@ def _find_optimal_layout(
             ]
         )
 
-    test_pm.layout = PassManager(
-        [
-            BarrierBeforeFinalMeasurements(
-                label="qiskit.transpiler.internal.routing.protection.barrier",
-            ),
-            SabreLayout(
-                coupling_map=coupling_map,
-                seed=TRANSPILE_SEED,
-                max_iterations=max_iterations,
-                layout_trials=layout_trials,
-                swap_trials=swap_trials,
-            ),
+    layout_passes = [
+        BarrierBeforeFinalMeasurements(
+            label="qiskit.transpiler.internal.routing.protection.barrier",
+        ),
+        SabreLayout(
+            coupling_map=layout_source,
+            seed=TRANSPILE_SEED,
+            max_iterations=max_iterations,
+            layout_trials=layout_trials,
+            swap_trials=swap_trials,
+        ),
+    ]
+
+    if coupling_map is not None:
+        layout_passes.append(
             ConditionalController(
                 tasks=[
                     FullAncillaAllocation(coupling_map=coupling_map),
@@ -135,9 +139,10 @@ def _find_optimal_layout(
                     ApplyLayout(),
                 ],
                 condition=lambda propset: propset["final_layout"] is None,
-            ),
-        ]
-    )
+            )
+        )
+
+    test_pm.layout = PassManager(layout_passes)
 
     start = perf_counter()
     isa_trial = test_pm.run(test_circuit)
