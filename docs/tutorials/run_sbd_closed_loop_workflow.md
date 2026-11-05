@@ -14,7 +14,7 @@ The goal is to compute the ground state energy of N2-Mo State.
 Before starting, make sure:
 
 - You have completed [Create Your QCSC Workflow with Prefect](./create_qcsc_workflow_for_miyabi.md).
-- For `Quantum Source = real-device`, you have completed [How to Set Up a QRMI Runtime Block for Direct IQP Execution](../howto/howto_setup_qrmi_iqp_runtime.md). The `random` source does not need it.
+- For `Quantum Source = real-device`, you have completed [How to Set Up a QRMI Runtime Block for Direct IQP Execution](../howto/howto_setup_qrmi_iqp_runtime.md). The `random` source does not need the runtime block, but then delete the `[runtime]` tables from the block config in step 4.2.
 
 > [!IMPORTANT]
 > - Replace `gz00` and `z12345` with your actual group and account name.
@@ -247,6 +247,22 @@ Set at least:
 | `iteration` | `1` | Number of iterations |
 | `tolerance` | `0.01` | Convergence tolerance |
 | `carryover_ratio` | `0.1` | Carryover ratio |
+
+The end of the copied file has `[runtime]` and `[runtime.qrmi]` tables, which create the
+`QrmiRuntimeBlock` `qrmi-runtime` for `Quantum Source = real-device`:
+
+- For `random` only, **delete both tables**. Otherwise the block creation script in
+  step 4.3 tries to create the runtime block and stops with
+  `Missing required setting: environment variable QRMI_IBM_QCS_IAM_APIKEY`.
+- For `real-device` with `scheduler = "iqp"`, keep them, set `resource` and the
+  `[runtime.qrmi]` values, and export the API key before step 4.3. Do not write the key
+  in the file:
+
+  ```bash
+  export QRMI_IBM_QCS_IAM_APIKEY="<your API key>"
+  ```
+
+  See [How to Set Up a QRMI Runtime Block for Direct IQP Execution](../howto/howto_setup_qrmi_iqp_runtime.md).
 
 > [!NOTE]
 > For Miyabi, start with low MPI parallelism (`-np 8`) to avoid memory OOM, then scale up only after confirming stability.

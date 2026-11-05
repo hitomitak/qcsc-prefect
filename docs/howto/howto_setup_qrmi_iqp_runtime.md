@@ -46,10 +46,23 @@ batch.
 ## Option 1: create the block with an algorithm's `create_blocks.py`
 
 The algorithm block generators create the block from a `[runtime]` table and read
-the API key from the environment, so the key is never written to a file:
+the API key from the environment, so the key is never written to a file.
+
+The generators also create the algorithm's solver and HPC blocks, so the config file
+needs the algorithm's other settings too (for example `project`, `queue`, `work_dir`
+and the solver executable). Start from the algorithm's example config and follow its
+README for those settings:
+
+```bash
+cp algorithms/open_loop/sqd/sqd_blocks.example.toml algorithms/open_loop/sqd/sqd_blocks.toml
+vim algorithms/open_loop/sqd/sqd_blocks.toml
+```
+
+The Miyabi examples already end with the `[runtime]` tables; in the Fugaku and Slurm
+examples they are commented out. Set them as follows:
 
 ```toml
-# for example in algorithms/open_loop/sqd/sqd_blocks.toml
+# at the end of algorithms/open_loop/sqd/sqd_blocks.toml
 runtime_block_name = "qrmi-runtime"
 
 [runtime]
@@ -69,7 +82,9 @@ python algorithms/open_loop/sqd/create_blocks.py \
 ```
 
 The same table works for `algorithms/open_loop/skqd` and
-`algorithms/closed_loop/sqd_de`. The closed loop always uses the block name
+`algorithms/closed_loop/sqd_de` (with their own example configs and `--hpc-target`). If
+you only want to create the runtime block and already have the other blocks, Option 2
+is simpler. The closed loop always uses the block name
 `qrmi-runtime`. Writing `QRMI_IBM_QCS_IAM_APIKEY` in the file, or setting
 `transpiler`, `transpile_config` or `resource_config` in `[runtime]`, is an error:
 the flows set the transpiler themselves.
