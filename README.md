@@ -91,11 +91,17 @@ Install all optional integrations with:
 pip install "qcsc-prefect[all]"
 ```
 
-The DICE integration can also be installed directly:
+The solver integrations can also be installed directly:
 
 ```bash
 pip install qcsc-prefect-dice
+pip install qcsc-prefect-sbd
 ```
+
+They provide the Prefect blocks for the DICE and SBD solvers; the solver executables are
+built separately on each HPC system. See the
+[DICE](./packages/qcsc-prefect-dice/README.md) and
+[SBD](./packages/qcsc-prefect-sbd/README.md) package READMEs.
 
 For source development, install the workspace with uv from the repository root:
 
@@ -108,53 +114,6 @@ uv run pytest
 
 The root `pyproject.toml` is a workspace coordinator and is not the package published to PyPI.
 Each package under `packages/` remains independently buildable.
-
-## DICE Integration
-
-`qcsc-prefect-dice` is a Python-side integration package. Installing it provides Prefect
-tasks/blocks, scheduler templates, DICE input/output handling, and documentation. It does
-not build, download, vendor, or install the external DICE/SBD executable.
-
-The DICE/SBD executable must already be compiled on the target HPC system. Build instructions
-are site-specific because compilers, MPI stacks, BLAS/LAPACK libraries, GPU support, filesystem
-layout, and scheduler environments differ across HPC systems.
-
-Configure the DICE executable through the command configuration used by the target HPC profile.
-In the current block model, the `CommandBlock` names the executable key and the `HPCProfileBlock`
-maps that key to the executable path visible on the target HPC system:
-
-```python
-from qcsc_prefect_blocks.common.blocks import CommandBlock, HPCProfileBlock
-
-CommandBlock(
-    command_name="dice",
-    executable_key="dice_solver",
-    description="DICE SHCI solver executable",
-    default_args=[],
-).save("cmd-dice-solver", overwrite=True)
-
-HPCProfileBlock(
-    hpc_target="miyabi",
-    queue_cpu="regular-c",
-    queue_gpu="regular-g",
-    project_cpu="gz00",
-    project_gpu="gz00",
-    executable_map={
-        "dice_solver": "/work/gz00/<user>/dice/bin/Dice",
-    },
-).save("hpc-miyabi-dice", overwrite=True)
-```
-
-Generated Miyabi, Fugaku, and Slurm job scripts include a preflight check that runs on the
-HPC node before launching the job. The script fails early with a clear message if the configured
-executable path is empty, missing, not executable, or not found on `PATH`.
-
-For execution on the Prefect worker itself, set `HPCProfileBlock.hpc_target="local"`.
-Local execution invokes the mapped executable directly without a shell, job script, or scheduler.
-`environments` are merged into the process environment; `modules` and `pre_commands` are not
-supported and cause an error before the process starts.
-
-See [DICE Integration](./docs/howto/howto_use_dice_prefect.md) for a longer setup example.
 
 ## Documentation
 
