@@ -1,7 +1,7 @@
 # Create Your QCSC Workflow with Prefect for Miyabi
 
 This hands-on tutorial guides you through building a small C++ program on the Miyabi-C environment and integrating it into a Prefect workflow.
-On the Prefect workflow, we also use [Prefect Qiskit](https://github.com/qiskit-community/prefect-qiskit) to show how to write a complete QCSC workflow from scratch.
+On the Prefect workflow, we also use `QrmiRuntime` from `qcsc-prefect-qiskit` for quantum sampling, to show how to write a complete QCSC workflow from scratch.
 
 Our objective is to compute a count dictionary of sampler bitstrings using MPI programming on the QCSC architecture.
 
@@ -26,8 +26,7 @@ You will see these terms:
   - Optimized flow task 1 (`quantum-sampling-task` in `flow_optimized.py`): quantum sampling and `input.bin` preparation
   - Optimized flow task 2 (`hpc-bitcount-task` in `flow_optimized.py`): HPC execution and count reconstruction
 - **Block**: reusable server-side configuration stored in Prefect
-  - `IBM Quantum Credentials` : IBM Cloud CRN + API key
-  - `QuantumRuntime` block: `ibm-runner` (pre-created)
+  - `QrmiRuntimeBlock`: `qrmi-runtime` (pre-created; holds the IBM Quantum settings and API key as a secret)
   - `CommandBlock`: `cmd-bitcount-hist`
   - `ExecutionProfileBlock`: `exec-bitcount-mpi`
   - `HPCProfileBlock`: `hpc-miyabi-bitcount`
@@ -87,7 +86,7 @@ Before starting, make sure:
   - [Step1 : How to Set Up Python Environment on the MDX Workflow Client](../howto/howto_setup_python_env.md).
 - You have completed [Step2 : How to Set Up File Sync Between MDX and Miyabi-C](../howto/howto_setup_file_sync.md).
 - You have completed [Step3 : How to Connect to Prefect Web Portal on MDX](../howto/howto_connect_to_prefect_on_mdx.md).
-- You have completed [Step4 : How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit.md).
+- For `--quantum-source real-device`, you have completed [Step4 : How to Set Up a QRMI Runtime Block for Direct IQP Execution](../howto/howto_setup_qrmi_iqp_runtime.md). The `random` source does not need it.
 
 > [!IMPORTANT]
 > Replace `gz00` and `z12345` with your actual group and account name.
@@ -150,12 +149,12 @@ Install necessary packages:
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 cd /work/gz00/z12345/qcsc-prefect
-uv pip install prefect-qiskit
 uv pip install --no-deps \
   -e packages/qcsc-prefect-core \
   -e packages/qcsc-prefect-adapters \
   -e packages/qcsc-prefect-blocks \
   -e packages/qcsc-prefect-executor
+uv pip install -e packages/qcsc-prefect-qiskit "qrmi[ibm]"
 ```
 
 Check installations:
@@ -193,28 +192,16 @@ prefect-auth login
 ```
 
 
-Make sure the Quantum Runtime block exist:
+For `--quantum-source real-device`, make sure the QRMI runtime block exists:
 
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-prefect block inspect quantum-runtime/ibm-runner
+prefect block inspect qrmi-runtime/qrmi-runtime
 ```
 
-The output may look like:
-
-```text
-┌──────────────────────┬─────────────────────────────────────────────┐
-│ Block Type           │ Quantum Runtime                             │
-│ Block id             │ b2047dc9-e90e-4930-be6c-269478a4d6b4        │
-├──────────────────────┼─────────────────────────────────────────────┤
-│ resource_name        │ ibm_kawasaki                                │
-│ execution_cache      │ True                                        │
-│ enable_job_analytics │ True                                        │
-│ credentials          │ {'crn':                                     │
-│                      │ 'crn:v1:bluemix:public:quantum-computing:u… │
-│                      │ 'api_key': '********'}                      │
-└──────────────────────┴─────────────────────────────────────────────┘
-```
+The block type is `QRMI Runtime`. With `scheduler` set to `iqp`, `resource` names the
+IBM Quantum backend (for example `ibm_kawasaki`), and `resource_config` is shown
+masked because it is stored as a secret.
 
 ## Step 4. Create MPI Program
 
@@ -332,7 +319,7 @@ Use `flow_optimized.py` with block names as runtime parameters:
 ```bash
 python examples/prefect_bitcount_demo/flow_optimized.py \
   --quantum-source real-device \
-  --runtime-block ibm-runner \
+  --runtime-block qrmi-runtime \
   --command-block cmd-bitcount-hist \
   --execution-profile-block exec-bitcount-mpi \
   --hpc-profile-block hpc-miyabi-bitcount \
@@ -363,9 +350,9 @@ with two Prefect tasks.
 Execution sequence:
 
 1. **Task: `quantum-sampling-task`**
-2. Load the Prefect `QuantumRuntime` block (default: `ibm-runner`).
+2. Load the `QrmiRuntimeBlock` (default: `qrmi-runtime`).
 3. Load sampler options (and optional `work_dir`) from a Prefect Variable (default: `miyabi-bitcount-options`).
-4. If `--quantum-source real-device`, build a 10-qubit GHZ circuit, transpile it, and run `runtime.sampler(...)`.
+4. If `--quantum-source real-device`, build a 10-qubit GHZ circuit and run `runtime.sampler(...)`. The runtime transpiles it against the backend Target (optimization level 3, seed 123) in the workflow process for `scheduler="iqp"`, or in a Slurm job for `scheduler="slurm"`.
 5. If `--quantum-source random`, generate deterministic pseudo-random bitstrings instead.
 6. Convert sampled bitstrings to `uint32` values and write `input.bin` in a per-run job directory.
 7. **Task: `hpc-bitcount-task`**
@@ -396,11 +383,11 @@ Preparation:
 
 Example runtime commands:
 
-<img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
+<img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 python examples/prefect_bitcount_demo/flow_optimized.py \
   --quantum-source real-device \
-  --runtime-block ibm-runner \
+  --runtime-block qrmi-runtime \
   --command-block cmd-bitcount-hist \
   --execution-profile-block exec-bitcount-miyabi \
   --hpc-profile-block hpc-miyabi-bitcount \
@@ -409,7 +396,7 @@ python examples/prefect_bitcount_demo/flow_optimized.py \
 
 python examples/prefect_bitcount_demo/flow_optimized.py \
   --quantum-source real-device \
-  --runtime-block ibm-runner \
+  --runtime-block qrmi-runtime \
   --command-block cmd-bitcount-hist \
   --execution-profile-block exec-bitcount-fugaku \
   --hpc-profile-block hpc-fugaku-bitcount \
@@ -425,7 +412,7 @@ In this pair, the changing runtime parameters are `--execution-profile-block` an
 
 If you have not created the legacy tutorial assets yet, generate them first:
 
-<img src="./images/icon-mdx.png" alt="mdx" width="50"/><br>
+<img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 python examples/prefect_bitcount_demo/create_blocks.py \
   --config examples/prefect_bitcount_demo/bitcount_blocks.toml \
@@ -463,7 +450,7 @@ plus `root_dir` and script settings.
 Runtime path in legacy flow:
 
 1. `flow_tutorial_style.py` loads:
-   - `runtime = QuantumRuntime.load("ibm-runner")`
+   - `runtime = await QrmiRuntimeBlock.aload_runtime("qrmi-runtime")`
    - `counter = BitCounter.load("miyabi-tutorial")`
    - `options = Variable.get("miyabi-tutorial")`
 2. Quantum sampling runs and produces `bitstrings`.

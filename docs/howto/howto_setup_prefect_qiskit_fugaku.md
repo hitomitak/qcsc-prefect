@@ -1,5 +1,12 @@
 # How to Set Up IBM Quantum Access Credentials for Prefect
 
+> [!WARNING]
+> **Legacy.** This page sets up the `prefect-qiskit` `QuantumRuntime` block
+> (`ibm-runner`). The algorithms and examples in this repository no longer use it:
+> their `real-device` path loads a `QrmiRuntimeBlock` instead. See
+> [How to Set Up a QRMI Runtime Block for Direct IQP Execution](./howto_setup_qrmi_iqp_runtime.md).
+> Keep this page only for your own workflows that still use `prefect-qiskit`.
+
 This guide explains how to configure Prefect Qiskit integration to access IBM Quantum services from the MDX workflow server.
 
 ## Prerequisites

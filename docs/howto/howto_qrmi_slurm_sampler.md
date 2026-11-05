@@ -19,6 +19,31 @@ and launches `task_runner` once for all circuits. Direct execution with
 `scheduler="iqp"` is described in [Direct IQP execution](#direct-iqp-execution).
 Other scheduler values raise `ValueError`.
 
+## Where QrmiRuntime fits in the algorithms
+
+The algorithms keep their `quantum_source` selection. `QrmiRuntime` is the
+`real-device` path, and its `scheduler` setting, stored in the `QrmiRuntimeBlock`,
+selects how that path runs:
+
+```text
+Quantum sampling
+├─ real-device → QrmiRuntime
+│                ├─ scheduler="iqp"
+│                │    └─ QRMI → IQP (without Slurm)
+│                └─ scheduler="slurm"
+│                     └─ Slurm → QRMI → QPU
+├─ random      → Existing local random sampling
+└─ qfw         → Existing QFw-SLURM execution
+                  └─ QFw → QRMI → QPU
+```
+
+`iqp` and `slurm` are runtime settings within `real-device`, not alternatives to
+`qfw`. QFw also uses QRMI underneath, but its submission, reservation,
+transpilation and result handling stay in the separate QFw path (only in
+`algorithms/closed_loop/sqd_de`). Unifying that path under `QrmiRuntime` is out of
+scope. To create the block for `scheduler="iqp"`, see
+[How to Set Up a QRMI Runtime Block for Direct IQP Execution](./howto_setup_qrmi_iqp_runtime.md).
+
 ## Responsibilities
 
 | Library | Application |

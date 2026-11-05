@@ -66,10 +66,14 @@ nav:
       - Local Slurm Workflow: tutorials/create_qcsc_workflow_for_local_slurm.md
       - Closed Loop Workflow: tutorials/run_sbd_closed_loop_workflow.md
       - Closed Loop Workflow (Fugaku): tutorials/run_sbd_closed_loop_workflow_fugaku.md
+      - Closed Loop Workflow (Slurm): tutorials/run_sbd_closed_loop_workflow_slurm.md
+      - Closed Loop Workflow (QFw-SLURM): tutorials/run_sbd_closed_loop_workflow_qfw-slurm.md
   - How-to:
+      - QRMI Sampler: howto/howto_qrmi_slurm_sampler.md
+      - QRMI Runtime Block for IQP: howto/howto_setup_qrmi_iqp_runtime.md
+      - QFw Device Configuration: howto/howto_setup_qfw_device_configuration.md
+      - QFw Resource Block: howto/howto_setup_qfw_resource_block.md
       - Native Qiskit on Prefect: howto/howto_use_native_qiskit_prefect.md
-      - Prefect Qiskit Setup: howto/howto_setup_prefect_qiskit.md
-      - Prefect Qiskit Setup (Fugaku): howto/howto_setup_prefect_qiskit_fugaku.md
       - DICE Integration: howto/howto_use_dice_prefect.md
       - Connect to Prefect on MDX: howto/howto_connect_to_prefect_on_mdx.md
       - Python Environment: howto/howto_setup_python_env.md
@@ -79,8 +83,12 @@ nav:
       - Shutdown Workflow: howto/howto_shutdown_workflow.md
       - MPI Locally: howto/howto_use_mpi_locally.md
       - Slurm Docker Cluster: howto/howto_test_slurm_with_docker_cluster.md
+      - Prefect Server on Slurm: howto/howto_setup_prefect_server_slurm.md
       - Queue-Aware Bulk HPC Jobs: howto/howto_use_bulk_hpc_jobs.md
-      - QRMI Sampler: howto/howto_qrmi_slurm_sampler.md
+      - Legacy (prefect-qiskit QuantumRuntime):
+          - Prefect Qiskit Setup: howto/howto_setup_prefect_qiskit.md
+          - Prefect Qiskit Setup (Fugaku): howto/howto_setup_prefect_qiskit_fugaku.md
+          - Prefect Qiskit Setup (Slurm): howto/howto_setup_prefect_qiskit_slurm.md
   - Reference:
       - PyPI Release Guide: release.md
       - QCSC Prefect API: reference/qcsc_prefect_api.md

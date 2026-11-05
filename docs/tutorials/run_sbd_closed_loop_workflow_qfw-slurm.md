@@ -44,6 +44,14 @@ The tutorial will cover creating and starting the QFw-SLURM environment, configu
 
 With `quantum_source="qfw"`, the SQD workflow uses QFw and QRMI for quantum execution and Slurm/MPI for the classical SBD stage.
 
+> [!NOTE]
+> `qfw` is a separate path from `real-device`. `real-device` samples through
+> `QrmiRuntime` and its `QrmiRuntimeBlock` (`scheduler="iqp"` or `"slurm"`); `qfw` keeps
+> its own submission, reservation, transpilation and result handling through the
+> `QFwResource` block `qfw-runner`, as described in this tutorial. QFw also uses QRMI
+> underneath, but unifying it under `QrmiRuntime` is out of scope. No `QrmiRuntimeBlock`
+> is needed for `qfw`.
+
 ![QFw-SLURM SQD workflow architecture](../images/img-sbd-qfw-slurm-architecture.png)
 
 <p align="center">
@@ -232,6 +240,7 @@ uv pip install --no-deps \
   -e packages/qcsc-prefect-blocks \
   -e packages/qcsc-prefect-executor \
   -e packages/qcsc-prefect-dice \
+  -e packages/qcsc-prefect-qiskit \
   -e packages/qcsc-prefect-sbd
 ```
 

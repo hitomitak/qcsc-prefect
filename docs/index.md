@@ -9,7 +9,9 @@ multiple HPC systems by switching reusable execution blocks.
 - The core architecture and execution model in [Architecture](./concept.md)
 - Step-by-step tutorials for Miyabi and Fugaku in
   [Tutorials](./tutorials/create_qcsc_workflow_for_miyabi.md)
-- Operational setup guides in [How-to](./howto/howto_setup_prefect_qiskit.md)
+- Operational setup guides in How-to, including
+  [quantum sampling through QRMI](./howto/howto_qrmi_slurm_sampler.md) and the
+  [QRMI runtime block for IQP](./howto/howto_setup_qrmi_iqp_runtime.md)
 
 ## Repository Layout
 

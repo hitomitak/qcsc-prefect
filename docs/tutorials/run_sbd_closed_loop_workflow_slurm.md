@@ -34,7 +34,7 @@ Before starting, make sure:
 - You have access to a Slurm cluster with `sbatch` and `srun` available.
 - Python 3.12 and `uv` are available on the Slurm login node.
 - OpenBLAS and an MPI C++ compiler (`mpicxx` or `mpic++`) are available for building the SBD solver.
-- IBM Quantum access is optional for the initial classical workflow test. If you plan to use a real quantum device, complete [How to Set Up IBM Quantum Access Credentials for Prefect on a Local Slurm Setup](../howto/howto_setup_prefect_qiskit_slurm.md).
+- IBM Quantum access is optional for the initial classical workflow test. If you plan to use a real quantum device, create the `QrmiRuntimeBlock` `qrmi-runtime`: see [How to Set Up a QRMI Runtime Block for Direct IQP Execution](../howto/howto_setup_qrmi_iqp_runtime.md) for `scheduler="iqp"`, or the [QRMI Sampler guide](../howto/howto_qrmi_slurm_sampler.md) for `scheduler="slurm"` (QRMI on a compute node through SPANK).
 ------------------------------------------------------------------------
 
 ## 0. What changes for Slurm?
@@ -67,7 +67,9 @@ A typical Slurm setup contains three execution contexts:
     workflow logic.
 -   **Slurm compute nodes** --- execute the compiled SBD `diag` binary.
 -   **IBM Quantum** --- executes quantum sampling when
-    `quantum_source="real-device"` is selected.
+    `quantum_source="real-device"` is selected. The runtime block's
+    `scheduler` selects whether QRMI submits from the workflow environment
+    (`iqp`) or from a Slurm job (`slurm`).
 
 On systems where the workflow environment and Slurm login environment
 are the same machine or share the same filesystem, the repository and
@@ -159,6 +161,7 @@ uv pip install --no-deps \
   -e packages/qcsc-prefect-blocks \
   -e packages/qcsc-prefect-executor \
   -e packages/qcsc-prefect-dice \
+  -e packages/qcsc-prefect-qiskit \
   -e packages/qcsc-prefect-sbd
 ```
 
@@ -457,12 +460,46 @@ For an initial test, use parameters similar to:
 | Random Seed | `24` |
 | Solver Block Ref | `sbd_solver_job/davidson-solver` |
 
-`Solver Block Ref` selects the `SBDSolverJob` preset used by the
-workflow.
+`Solver Block Ref` selects the eigensolver of every walker:
+- `sbd_solver_job/<name>`: SBD. Each solve returns carryover determinants, which are
+  kept in the next generation's subspace.
+- `dice_shci_solver_job/<name>`: DICE, **without carryover**. This is not the same
+  calculation as SBD with carryover, and results are not expected to match. The run
+  logs `solver=DICE, carryover=none`, and every row of the `sqd-telemetry` artifact
+  records the solver.
+
+HPC details are still resolved through the underlying 3 blocks of the solver block.
+
+`Quantum Source` controls how SQD obtains bitstrings:
+
+```text
+Quantum sampling
+├─ real-device → QrmiRuntime
+│                ├─ scheduler="iqp"
+│                │    └─ QRMI → IQP (without Slurm)
+│                └─ scheduler="slurm"
+│                     └─ Slurm → QRMI → QPU
+├─ random      → Existing local random sampling
+└─ qfw         → Existing QFw-SLURM execution
+                  └─ QFw → QRMI → QPU
+```
+
+- `real-device`: sample through `QrmiRuntime`, using the `QrmiRuntimeBlock` named
+  `qrmi-runtime`. Its `scheduler` setting selects `iqp` or `slurm`; they are runtime
+  settings within `real-device`. With `iqp`, each walker's `sampler()` call is one IQP
+  job, not grouped in a session or batch, so a run submits (iterations × walkers)
+  jobs. If a submission result is unknown, for example after a network error, the job
+  is not resubmitted: check the IBM Quantum dashboard using the resource and time in
+  the log.
+- `random`: skip quantum sampling and generate deterministic pseudo-random bitstrings
+  with `Random Seed`.
+- `qfw`: the existing QFw-SLURM path. QFw also uses QRMI underneath, but its
+  submission, reservation, transpilation and result handling stay separate from
+  `QrmiRuntime`. See the [QFw-SLURM tutorial](./run_sbd_closed_loop_workflow_qfw-slurm.md).
 
 For the initial Slurm integration test, use `random` to validate the classical workflow and Slurm execution path without requiring access to a quantum device.
 
-After validating the Slurm execution path, use `real-device` to run the sampling workload on IBM Quantum using the configured quantum runtime block.
+After validating the Slurm execution path, use `real-device` to run the sampling workload on IBM Quantum through the `qrmi-runtime` block.
 
 ------------------------------------------------------------------------
 

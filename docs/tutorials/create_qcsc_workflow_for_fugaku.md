@@ -1,7 +1,7 @@
 # Create Your QCSC Workflow with Prefect for Fugaku
 
 This hands-on tutorial guides you through building a small C++ program on the Fugaku environment and integrating it into a Prefect workflow using a custom `FugakuJobBlock` class.
-On the Prefect workflow, we also use [Prefect Qiskit](https://github.com/qiskit-community/prefect-qiskit) to show how to write a complete QCSC workflow from scratch.
+On the Prefect workflow, we also use `QrmiRuntime` from `qcsc-prefect-qiskit` for quantum sampling, to show how to write a complete QCSC workflow from scratch.
 
 Our objective is to compute a count dictionary of sampler bitstrings using MPI programming on the QCSC architecture.
 
@@ -25,8 +25,7 @@ You will see these terms:
   - `quantum-sampling-task` in `flow_optimized.py`
   - `hpc-bitcount-task` in `flow_optimized.py`
 - **Block**: reusable server-side configuration stored in Prefect
-  - `IBM Quantum Credentials`: IBM Cloud CRN + API key
-  - `QuantumRuntime` block: `ibm-runner` (pre-created)
+  - `QrmiRuntimeBlock`: `qrmi-runtime` (pre-created; holds the IBM Quantum settings and API key as a secret)
   - `CommandBlock`: `cmd-bitcount-hist`
   - `ExecutionProfileBlock`: `exec-bitcount-fugaku`
   - `HPCProfileBlock`: `hpc-fugaku-bitcount`
@@ -49,7 +48,7 @@ The whole process image is :
 Before starting, make sure:
 
 - You have completed [Step1 : How to Set Up Python Environment on Fugaku Pre/Post Node](../howto/howto_setup_python_env_fugaku.md).
-- You have completed [Step2 : How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit_fugaku.md).
+- For `--quantum-source real-device`, you have completed [Step2 : How to Set Up a QRMI Runtime Block for Direct IQP Execution](../howto/howto_setup_qrmi_iqp_runtime.md). The `random` source does not need it.
 
 > [!IMPORTANT]
 > Replace `ra00000`, `u12345` and `vol0000x` with your actual group, account name and mount volume.
@@ -105,15 +104,20 @@ cd qcsc-prefect
 
 source ~/venv/prefect/bin/activate
 export SSL_CERT_FILE=$(python -c 'import certifi; print(certifi.where())')
-uv pip install prefect-qiskit
 uv pip install --no-deps \
   -e packages/qcsc-prefect-core \
   -e packages/qcsc-prefect-adapters \
   -e packages/qcsc-prefect-blocks \
   -e packages/qcsc-prefect-executor
+uv pip install -e packages/qcsc-prefect-qiskit "qrmi[ibm]"
 ```
 
 `SSL_CERT_FILE` is required on Fugaku for IBM Quantum access in this environment.
+
+> [!NOTE]
+> With `scheduler="iqp"`, QRMI runs on the Pre/Post Node, so that node must reach IBM
+> Quantum, and `qrmi[ibm]` must install there (QRMI publishes Linux wheels). If it
+> cannot, run the tutorial with `--quantum-source random`.
 
 Use Fugaku cloud profile
 
@@ -233,7 +237,7 @@ Use `flow_optimized.py` with Fugaku block names:
 ```bash
 python examples/prefect_bitcount_demo/flow_optimized.py \
   --quantum-source real-device \
-  --runtime-block ibm-runner \
+  --runtime-block qrmi-runtime \
   --command-block cmd-bitcount-hist \
   --execution-profile-block exec-bitcount-fugaku \
   --hpc-profile-block hpc-fugaku-bitcount \
@@ -256,9 +260,9 @@ Code location:
 Execution sequence:
 
 1. `quantum-sampling-task`
-2. Load `QuantumRuntime` block (`ibm-runner`)
+2. Load `QrmiRuntimeBlock` (`qrmi-runtime`)
 3. Load sampler options variable (`fugaku-bitcount-options`)
-4. Build and run GHZ sampling, or generate deterministic pseudo-random bitstrings when `--quantum-source random` is selected
+4. Build the GHZ circuit and sample it through `QrmiRuntime`, which transpiles it against the backend Target; or generate deterministic pseudo-random bitstrings when `--quantum-source random` is selected
 5. Write `input.bin` into a run-specific job directory
 6. `hpc-bitcount-task`
 7. Submit HPC job via `run_job_from_blocks(...)` using `CommandBlock`, `ExecutionProfileBlock`, and `HPCProfileBlock`

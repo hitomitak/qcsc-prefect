@@ -88,6 +88,20 @@ See the [Run Hybrid Workflow](../../../docs/tutorials/run_sqd_workflow.md) tutor
 
 ## Quantum sampling
 
+```text
+Quantum sampling
+├─ real-device → QrmiRuntime
+│                ├─ scheduler="iqp"
+│                │    └─ QRMI → IQP (without Slurm)
+│                └─ scheduler="slurm"
+│                     └─ Slurm → QRMI → QPU
+└─ random      → Existing local random sampling
+```
+
+The block's `scheduler` selects `iqp` or `slurm`; they are runtime settings within
+`real-device`. This algorithm has no `qfw` source; the QFw-SLURM path is only in
+[`closed_loop/sqd_de`](../../closed_loop/sqd_de/README.md).
+
 With `quantum_source = "real-device"`, the flow loads the `QrmiRuntimeBlock` named by
 `runner_name` and sends the LUCJ circuit untranspiled in one `sampler()` call. With
 `quantum_source = "random"`, it returns pseudo-random bitstrings before any circuit is
@@ -101,9 +115,17 @@ block's `transpiler` and `transpile_config` are not used. Where the hook runs de
 the block's scheduler:
 
 - `scheduler = "iqp"`: in the workflow process. Install QRMI there
-  (`pip install "qrmi[ibm]"`, Linux only). The process must reach IBM Quantum.
+  (`pip install "qrmi[ibm]"`; wheels are published for Linux, other platforms build
+  from source with a Rust toolchain). The process must reach IBM Quantum.
 - `scheduler = "slurm"`: on the compute node. Install this package (`algorithms/open_loop/sqd`)
   in the compute-node Python as well, so that the hook can be imported.
+
+With `scheduler = "iqp"`, jobs are not grouped in a session or batch: each
+`sampler()` call is one IQP job. If a submission result is unknown, for example after a
+network error, the job is not resubmitted; check the IBM Quantum dashboard using the
+resource and time in the log before running again. See
+[How to Set Up a QRMI Runtime Block for Direct IQP Execution](../../../docs/howto/howto_setup_qrmi_iqp_runtime.md)
+to create the block.
 
 `create_blocks.py` creates the block from the `[runtime]` table of the TOML file, as
 shown in [Getting Started](#-getting-started). Other keys of the table are

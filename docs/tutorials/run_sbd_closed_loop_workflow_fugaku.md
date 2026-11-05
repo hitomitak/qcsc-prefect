@@ -12,7 +12,7 @@ The goal is to compute the ground state energy of N2-MO state.
 Before starting, make sure:
 
 - You have completed [Step1 : How to Set Up Python Environment on Fugaku Pre/Post Node](../howto/howto_setup_python_env_fugaku.md).
-- You have completed [Step2 : How to Set Up IBM Quantum Access Credentials for Prefect](../howto/howto_setup_prefect_qiskit_fugaku.md).
+- For `Quantum Source = real-device`, you have completed [Step2 : How to Set Up a QRMI Runtime Block for Direct IQP Execution](../howto/howto_setup_qrmi_iqp_runtime.md). The `random` source does not need it.
 
 > [!IMPORTANT]
 > Replace `ra00000`, `u12345` and `vol0000x` with your actual group, account name and mount volume.
@@ -114,7 +114,6 @@ git clone git@github.com:qiskit-community/qcsc-prefect.git
 cd qcsc-prefect
 
 source ~/venv/prefect/bin/activate
-uv pip install prefect-qiskit
 export SSL_CERT_FILE=$(python -c 'import certifi; print(certifi.where())')
 uv pip install --no-deps \
   -e packages/qcsc-prefect-core \
@@ -122,6 +121,7 @@ uv pip install --no-deps \
   -e packages/qcsc-prefect-blocks \
   -e packages/qcsc-prefect-executor \
   -e packages/qcsc-prefect-dice \
+  -e packages/qcsc-prefect-qiskit \
   -e packages/qcsc-prefect-sbd
 
 uv pip install -e algorithms/qcsc_workflow_utility
@@ -301,9 +301,47 @@ In the Prefect console, click **Run** → **Custom run** and set at least:
 > Please treat them as safe starting points for this tutorial, not universal best values.
 > Adjust `sabre_layout_trials` according to your own backend, qubit count, and circuit specification.
 
-`Solver Block Ref` means: "which `SBDSolverJob` preset should this run use?"
-- It is a stable entry point for users.
-- HPC details are still resolved through the underlying 3 blocks.
+`Solver Block Ref` selects the eigensolver of every walker:
+- `sbd_solver_job/<name>`: SBD. Each solve returns carryover determinants, which are
+  kept in the next generation's subspace.
+- `dice_shci_solver_job/<name>`: DICE, **without carryover**. This is not the same
+  calculation as SBD with carryover, and results are not expected to match. The run
+  logs `solver=DICE, carryover=none`, and every row of the `sqd-telemetry` artifact
+  records the solver.
+
+HPC details are still resolved through the underlying 3 blocks of the solver block.
+
+`Quantum Source` controls how SQD obtains bitstrings:
+
+```text
+Quantum sampling
+├─ real-device → QrmiRuntime
+│                ├─ scheduler="iqp"
+│                │    └─ QRMI → IQP (without Slurm)
+│                └─ scheduler="slurm"
+│                     └─ Slurm → QRMI → QPU
+├─ random      → Existing local random sampling
+└─ qfw         → Existing QFw-SLURM execution
+                  └─ QFw → QRMI → QPU
+```
+
+- `real-device`: sample through `QrmiRuntime`, using the `QrmiRuntimeBlock` named
+  `qrmi-runtime`. Its `scheduler` setting selects `iqp` or `slurm`; they are runtime
+  settings within `real-device`. With `iqp`, each walker's `sampler()` call is one IQP
+  job, not grouped in a session or batch, so a run submits (iterations × walkers)
+  jobs. If a submission result is unknown, for example after a network error, the job
+  is not resubmitted: check the IBM Quantum dashboard using the resource and time in
+  the log.
+- `random`: skip quantum sampling and generate deterministic pseudo-random bitstrings
+  with `Random Seed`.
+- `qfw`: the existing QFw-SLURM path. QFw also uses QRMI underneath, but its
+  submission, reservation, transpilation and result handling stay separate from
+  `QrmiRuntime`. See the [QFw-SLURM tutorial](./run_sbd_closed_loop_workflow_qfw-slurm.md).
+
+> [!NOTE]
+> For `real-device` with `scheduler="iqp"`, QRMI runs on the Pre/Post Node, so
+> install `qrmi[ibm]` there (`uv pip install "qrmi[ibm]"`) and make sure the node can
+> reach IBM Quantum. If it cannot, use `random`.
 
 <img src="../images/img-sbd-workflow-paramaters-small.png" alt="params" width="90%"/><br>
 

@@ -47,10 +47,9 @@ You will see these terms:
 - A running local Slurm cluster created from
   [`slurm-docker-cluster`](https://github.com/giovtorres/slurm-docker-cluster)
 
-If you want to run against IBM Quantum Runtime later, you will also need:
-
-- a configured `QuantumRuntime` block such as `ibm-runner`
-- IBM Quantum credentials set up in the Prefect backend you use
+If you want to run against a real quantum backend later, you will also need a
+`QrmiRuntimeBlock` such as `qrmi-runtime` in the Prefect backend you use. See
+[How to Set Up a QRMI Runtime Block for Direct IQP Execution](../howto/howto_setup_qrmi_iqp_runtime.md).
 
 ---
 
@@ -176,17 +175,14 @@ cd /data/qcsc-prefect
 . .venv/bin/activate
 ```
 
-Install Python packages required by the BitCount flow:
+The BitCount flow needs no quantum packages with `--quantum-source random`: it
+imports `qiskit` and `qcsc-prefect-qiskit` only for `real-device`. To use
+`real-device` later (Step 7), install them in the controller virtual environment:
 
 <img src="../images/icon-slurmctld.png" alt="pc" width="50"/><br>
 ```bash
-python -m pip install prefect-qiskit qiskit
+python -m pip install -e packages/qcsc-prefect-qiskit "qrmi[ibm]"
 ```
-
-> [!NOTE]
-> Even when `--quantum-source random` is used, the current implementation still
-> imports `prefect_qiskit` and `qiskit`, so both packages must be installed in
-> the controller virtual environment.
 
 ---
 
@@ -375,19 +371,20 @@ You should see files such as:
 
 ---
 
-## Step 7. Optional: switch to IBM Quantum Runtime
+## Step 7. Optional: switch to a real quantum backend
 
 Once the local Slurm path works in `random` mode, you can switch the same flow
 to a real backend by changing only the quantum-source arguments.
 
-Make sure a `QuantumRuntime` block such as `ibm-runner` already exists in the
-same Prefect backend, then run:
+Make sure a `QrmiRuntimeBlock` such as `qrmi-runtime` already exists in the
+same Prefect backend. With `scheduler="iqp"`, QRMI runs in the controller and
+submits to IBM Quantum directly, so the controller must reach IBM Quantum. Then run:
 
 <img src="../images/icon-slurmctld.png" alt="pc" width="50"/><br>
 ```bash
 python examples/prefect_bitcount_demo/flow_optimized.py \
   --quantum-source real-device \
-  --runtime-block ibm-runner \
+  --runtime-block qrmi-runtime \
   --command-block cmd-bitcount-hist \
   --execution-profile-block exec-bitcount-slurm \
   --hpc-profile-block hpc-slurm-bitcount \

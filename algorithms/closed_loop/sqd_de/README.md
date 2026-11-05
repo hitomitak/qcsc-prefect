@@ -172,6 +172,18 @@ sbd-deploy
 
 `quantum_source` selects how each walker obtains bitstrings:
 
+```text
+Quantum sampling
+├─ real-device → QrmiRuntime
+│                ├─ scheduler="iqp"
+│                │    └─ QRMI → IQP (without Slurm)
+│                └─ scheduler="slurm"
+│                     └─ Slurm → QRMI → QPU
+├─ random      → Existing local random sampling
+└─ qfw         → Existing QFw-SLURM execution
+                  └─ QFw → QRMI → QPU
+```
+
 - `real-device`: sample through `QrmiRuntime`, using the `QrmiRuntimeBlock` named
   `qrmi-runtime`. The block's `scheduler` selects where QRMI runs (see below).
 - `random`: deterministic pseudo-random bitstrings from `random_seed`.
@@ -187,7 +199,8 @@ the SABRE layout and transpiles against the actual Target with the hook
 block's scheduler:
 
 - `scheduler = "iqp"`: in the workflow process. Install QRMI there
-  (`pip install "qrmi[ibm]"`, Linux only). The process must reach IBM Quantum.
+  (`pip install "qrmi[ibm]"`; wheels are published for Linux, other platforms build
+  from source with a Rust toolchain). The process must reach IBM Quantum.
 - `scheduler = "slurm"`: on the compute node. Install this package (`algorithms/closed_loop/sqd_de`)
   in the compute-node Python as well, so that the hook can be imported. Set `root_dir`
   and the three block names described in the
@@ -198,6 +211,13 @@ The `sqd_options` variable is passed to `QrmiRuntime` unchanged. On the `real-de
 path it may contain only `{"params": {"shots": <positive integer>}}`; other primitive
 options (for example twirling) and non-integer shots are rejected before submission
 instead of being ignored. The `random` and `qfw` paths read only the shots, as before.
+
+With `scheduler = "iqp"`, jobs are not grouped in a session or batch: each
+`sampler()` call is one IQP job. If a submission result is unknown, for example after a
+network error, the job is not resubmitted; check the IBM Quantum dashboard using the
+resource and time in the log before running again. See
+[How to Set Up a QRMI Runtime Block for Direct IQP Execution](../../../docs/howto/howto_setup_qrmi_iqp_runtime.md)
+to create the block.
 
 Each walker searches the layout for its own circuit and submits its own job, so a run
 submits (iterations x walkers) jobs. With `iqp`, each job waits in the IBM Quantum queue
@@ -216,7 +236,9 @@ with a Prefect concurrency limit.
 
 The selection is logged at the start of the flow (`solver=..., carryover=...`) and is
 recorded in every row of the `sqd-telemetry` artifact. In both cases the subspace starts
-with the Hartree-Fock determinant and uses one set for alpha and beta.
+with the Hartree-Fock determinant and uses one set for alpha and beta. This workflow
+supports closed-shell molecules only and passes no `spin_sq`, so the SBD input rules
+(closed-shell, `spin_sq = null`) always hold here.
 
 ## Optional integrations
 

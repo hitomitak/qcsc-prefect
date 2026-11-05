@@ -86,6 +86,20 @@ compute nodes can read, for example a `/vol...` location.
 
 ## Quantum sampling
 
+```text
+Quantum sampling
+├─ real-device → QrmiRuntime
+│                ├─ scheduler="iqp"
+│                │    └─ QRMI → IQP (without Slurm)
+│                └─ scheduler="slurm"
+│                     └─ Slurm → QRMI → QPU
+└─ random      → Existing local random sampling
+```
+
+The block's `scheduler` selects `iqp` or `slurm`; they are runtime settings within
+`real-device`. This algorithm has no `qfw` source; the QFw-SLURM path is only in
+[`closed_loop/sqd_de`](../../closed_loop/sqd_de/README.md).
+
 With `quantum_source = "real-device"`, the flow loads the `QrmiRuntimeBlock` named by
 `runner_name` and sends all `krylov_dim` Trotter circuits in one `sampler()` call. Result
 `i` belongs to circuit `i`.
@@ -97,9 +111,17 @@ hook and its configuration, so the block's `transpiler` and `transpile_config` a
 used. Where the hook runs depends on the block's scheduler:
 
 - `scheduler = "iqp"`: in the workflow process. Install QRMI there
-  (`pip install "qrmi[ibm]"`, Linux only). The process must reach IBM Quantum.
+  (`pip install "qrmi[ibm]"`; wheels are published for Linux, other platforms build
+  from source with a Rust toolchain). The process must reach IBM Quantum.
 - `scheduler = "slurm"`: on the compute node. Install this package (`algorithms/open_loop/skqd`)
   in the compute-node Python as well, so that the hook can be imported.
+
+With `scheduler = "iqp"`, jobs are not grouped in a session or batch: each
+`sampler()` call is one IQP job. If a submission result is unknown, for example after a
+network error, the job is not resubmitted; check the IBM Quantum dashboard using the
+resource and time in the log before running again. See
+[How to Set Up a QRMI Runtime Block for Direct IQP Execution](../../../docs/howto/howto_setup_qrmi_iqp_runtime.md)
+to create the block.
 
 `create_blocks.py` creates the block from the `[runtime]` table of the TOML file, as
 shown in [Getting Started](#-getting-started). Other keys of the table are
