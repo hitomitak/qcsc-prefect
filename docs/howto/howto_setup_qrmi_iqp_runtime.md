@@ -48,6 +48,13 @@ batch.
 The algorithm block generators create the block from a `[runtime]` table and read
 the API key from the environment, so the key is never written to a file.
 
+The generators import the algorithm and its solver packages, which the command in
+[Prerequisites](#prerequisites) does not install; with only that command,
+`create_blocks.py` fails with `ModuleNotFoundError`. First complete the installation
+in the algorithm's README (`algorithms/open_loop/sqd/README.md`,
+`algorithms/open_loop/skqd/README.md` or `algorithms/closed_loop/sqd_de/README.md`),
+in the same environment.
+
 The generators also create the algorithm's solver and HPC blocks, so the config file
 needs the algorithm's other settings too (for example `project`, `queue`, `work_dir`
 and the solver executable). Start from the algorithm's example config and follow its
