@@ -15,6 +15,7 @@ from .solvers import (
     solver_class,
     to_sbd_closed_shell,
 )
+from .uhf import UHFElectronicProperties, compute_uhf_integrals_from_fcidump
 
 __all__ = [
     "ElectronicProperties",
@@ -28,4 +29,6 @@ __all__ = [
     "parse_block_ref",
     "solver_class",
     "to_sbd_closed_shell",
+    "UHFElectronicProperties",
+    "compute_uhf_integrals_from_fcidump",
 ]
