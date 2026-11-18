@@ -18,6 +18,14 @@ SBD_DIR="${SBD_DIR:-${SCRIPT_DIR}/sbd}"
 
 # Default portable build flags
 CXXFLAGS=("-std=c++17" "-fopenmp" "-O3")
+# UHF=1 builds the unrestricted driver diag_uhf with -D_UHF (separate alpha/beta integrals,
+# interleaved spin-orbital FCIDUMP; use it with SBDSolverJob(integrals="unrestricted")).
+# Without it the restricted driver diag is built, as before.
+OUTBIN="diag"
+if [ "${UHF:-0}" = "1" ]; then
+    CXXFLAGS+=("-D_UHF")
+    OUTBIN="diag_uhf"
+fi
 
 # Optional CPU-specific optimization:
 # For systems with Intel Sapphire Rapids CPUs, additional architecture-specific
@@ -52,10 +60,10 @@ git -C "$SBD_DIR" checkout --detach "$SBD_COMMIT"
 echo "Using SBD commit: $(git -C "$SBD_DIR" rev-parse HEAD)"
 
 # Clean previous build
-rm -f "$SCRIPT_DIR"/*.o "$SCRIPT_DIR"/diag
+rm -f "$SCRIPT_DIR"/*.o "$SCRIPT_DIR/$OUTBIN"
 
 # Compile and link
 "$CCCOM" "${CXXFLAGS[@]}" -c "$SCRIPT_DIR/main.cc" -o "$SCRIPT_DIR/main.o" -I"$SBD_DIR/include"
-"$CCCOM" "${CXXFLAGS[@]}" -o "$SCRIPT_DIR/diag" "$SCRIPT_DIR/main.o" -lopenblas
+"$CCCOM" "${CXXFLAGS[@]}" -o "$SCRIPT_DIR/$OUTBIN" "$SCRIPT_DIR/main.o" -lopenblas
 
-echo "Build completed: $SCRIPT_DIR/diag"
+echo "Build completed: $SCRIPT_DIR/$OUTBIN"

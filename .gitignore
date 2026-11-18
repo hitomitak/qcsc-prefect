@@ -211,6 +211,7 @@ __marimo__/
 
 # Native SBD build outputs
 packages/qcsc-prefect-sbd/native/diag
+packages/qcsc-prefect-sbd/native/diag_uhf
 packages/qcsc-prefect-sbd/native/diag-gpu
 packages/qcsc-prefect-sbd/native/*.o
 packages/qcsc-prefect-sbd/native/sbd/

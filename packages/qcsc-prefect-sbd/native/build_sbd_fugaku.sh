@@ -11,6 +11,14 @@ SBD_COMMIT="${SBD_COMMIT:-$(cat "$SCRIPT_DIR/SBD_REVISION")}"
 CCCOM="${CCCOM:-mpiFCCpx}"
 CCFLAGS="${CCFLAGS:--Nclang -std=c++17 -stdlib=libc++ -Kfast,openmp -Xpreprocessor -fopenmp}"
 SYSLIB="${SYSLIB:--SSL2}"
+# UHF=1 builds the unrestricted driver diag_uhf with -D_UHF (separate alpha/beta integrals,
+# interleaved spin-orbital FCIDUMP; use it with SBDSolverJob(integrals="unrestricted")).
+# Without it the restricted driver diag is built, as before.
+OUTBIN="diag"
+if [ "${UHF:-0}" = "1" ]; then
+    CCFLAGS="$CCFLAGS -D_UHF"
+    OUTBIN="diag_uhf"
+fi
 
 if ! command -v "$CCCOM" >/dev/null 2>&1; then
     echo "Compiler '$CCCOM' not found in PATH. Load Fugaku compiler/MPI modules first." >&2
@@ -32,12 +40,12 @@ git -C "$SBD_DIR" checkout --detach "$SBD_COMMIT"
 echo "Using SBD commit: $(git -C "$SBD_DIR" rev-parse HEAD)"
 
 # Clean previous build
-rm -f ./*.o ./diag
+rm -f ./*.o "./$OUTBIN"
 
 # Compile and link
 echo "$CCCOM $CCFLAGS -c main.cc -o main.o -I$SBD_DIR/include"
 $CCCOM $CCFLAGS -c main.cc -o main.o -I"$SBD_DIR/include"
-echo "$CCCOM $CCFLAGS $SYSLIB -o diag main.o"
-$CCCOM $CCFLAGS $SYSLIB -o diag main.o
+echo "$CCCOM $CCFLAGS $SYSLIB -o $OUTBIN main.o"
+$CCCOM $CCFLAGS $SYSLIB -o "$OUTBIN" main.o
 
-echo "Build completed: $SCRIPT_DIR/diag"
+echo "Build completed: $SCRIPT_DIR/$OUTBIN"

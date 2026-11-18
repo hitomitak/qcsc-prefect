@@ -307,3 +307,84 @@ def test_package_exports_the_helpers():
 
     assert qcsc_prefect_sbd.create_sbd_blocks is mod.create_sbd_blocks
     assert qcsc_prefect_sbd.register_sbd_block_types is mod.register_sbd_block_types
+
+
+UHF_EXE = "/opt/sbd/bin/diag_uhf"
+
+
+def stored(records):
+    """Block documents as a store keeps them: the last save of a name wins (overwrite=True)."""
+    return {name: model for _, name, _, model in records}
+
+
+def test_unrestricted_blocks_default_to_their_own_names(saved, tmp_path):
+    names = mod.create_sbd_blocks(
+        hpc_target="slurm",
+        root_dir=str(tmp_path / "jobs"),
+        sbd_executable=UHF_EXE,
+        integrals="unrestricted",
+    )
+    assert names == {
+        "command_block_name": "cmd-sbd-uhf-solver",
+        "execution_profile_block_name": "exec-sbd-uhf-slurm",
+        "hpc_profile_block_name": "hpc-slurm-sbd-uhf",
+        "solver_block_name": "sbd-uhf-solver",
+    }
+    assert _block(saved, "command").executable_key == "sbd_uhf_solver"
+    assert _block(saved, "hpc").executable_map == {"sbd_uhf_solver": UHF_EXE}
+    solver = _block(saved, "solver")
+    assert solver.integrals == "unrestricted"
+    assert solver.metrics_artifact_key == "slurm-sbd-uhf-metrics"
+
+
+def test_unrestricted_blocks_leave_the_restricted_profiles_unchanged(saved, tmp_path):
+    # Restricted blocks with the defaults, then unrestricted ones with only the command and
+    # solver names given: the execution and HPC profile names must not fall back to the
+    # restricted defaults, or the restricted HPC profile would point at diag_uhf.
+    rhf = mod.create_sbd_blocks(hpc_target="local", root_dir=str(tmp_path), sbd_executable=EXE)
+    mod.create_sbd_blocks(
+        hpc_target="local",
+        root_dir=str(tmp_path),
+        sbd_executable=UHF_EXE,
+        command_block_name="cmd-sbd-uhf",
+        solver_block_name="sbd-uhf-solver",
+        integrals="unrestricted",
+    )
+    store = stored(saved)
+    assert store[rhf["hpc_profile_block_name"]].executable_map == {"sbd_solver": EXE}
+    assert store[rhf["solver_block_name"]].integrals == "restricted"
+    assert store["hpc-local-sbd-uhf"].executable_map == {"sbd_uhf_solver": UHF_EXE}
+    assert store["sbd-uhf-solver"].hpc_profile_block_name == "hpc-local-sbd-uhf"
+
+
+@pytest.mark.parametrize(
+    ("argument", "name"),
+    [
+        ("command_block_name", "cmd-sbd-solver"),
+        ("execution_profile_block_name", "exec-sbd-local"),
+        ("hpc_profile_block_name", "hpc-local-sbd"),
+        ("solver_block_name", "sbd-solver"),
+    ],
+)
+def test_unrestricted_blocks_refuse_restricted_default_names(saved, tmp_path, argument, name):
+    with pytest.raises(ValueError, match=f"{name!r}"):
+        mod.create_sbd_blocks(
+            hpc_target="local",
+            root_dir=str(tmp_path),
+            sbd_executable=UHF_EXE,
+            integrals="unrestricted",
+            **{argument: name},
+        )
+    assert saved == []
+
+
+def test_create_sbd_blocks_defaults_to_restricted_integrals(saved, tmp_path):
+    names = mod.create_sbd_blocks(hpc_target="local", root_dir=str(tmp_path), sbd_executable=EXE)
+    assert names == {
+        "command_block_name": "cmd-sbd-solver",
+        "execution_profile_block_name": "exec-sbd-local",
+        "hpc_profile_block_name": "hpc-local-sbd",
+        "solver_block_name": "sbd-solver",
+    }
+    assert _block(saved, "hpc").executable_map == {"sbd_solver": EXE}
+    assert _block(saved, "solver").integrals == "restricted"

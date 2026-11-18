@@ -3,6 +3,7 @@
 #include <chrono>
 #include <random>
 #include <deque>
+#include <cstdlib>
 
 #include <unistd.h>
 
@@ -62,7 +63,9 @@ int main(int argc, char * argv[]) {
 
   // Optional file overrides, matching the upstream
   // apps/chemistry_tpb_selected_basis_diagonalization reference:
-  //   --fcidump   path to the FCIDUMP (default fcidump.txt)
+  //   --fcidump   path to the FCIDUMP (default fcidump.txt); its header key QCSC_INTEGRALS
+  //               must match the build (RESTRICTED, the default when absent, or
+  //               SBD_UHF_INTERLEAVED for -D_UHF), see the layout check below
   //   --adetfile  alpha determinant file (.bin packed or .txt bitstrings; LoadAlphaDets
   //               branches on the extension)
   //   --bdetfile  beta determinant file, for a beta set that differs from alpha (open shell).
@@ -98,6 +101,78 @@ int main(int argc, char * argv[]) {
     fcidump = sbd::LoadFCIDump(fcidumpfile);
   }
   sbd::MpiBcast(fcidump,0,comm);
+
+  /**
+     Integral layout check. -D_UHF is a compile-time switch of SBD: such a build reads an
+     interleaved spin-orbital FCIDUMP, the default build a restricted one, and neither file is
+     self-describing (a -D_UHF build runs a restricted file to completion with a wrong
+     Hamiltonian). The FCIDUMP declares its layout with the header key QCSC_INTEGRALS; a file
+     without it is a restricted file, so FCIDUMPs written before this check still work with
+     restricted builds. A mismatch, or a MOLPRO-style block UHF file (IUHF other than 0),
+     aborts before any work. The index range check is secondary: zero integrals are omitted
+     from FCIDUMPs, so the largest index cannot identify the layout by itself. The layout is
+     reported in sbd_build_info.txt.
+   */
+  {
+#if defined(_UHF)
+    const std::string build_layout("SBD_UHF_INTERLEAVED");
+#elif defined(_UHFCPLX)
+    const std::string build_layout("SBD_UHFCPLX_INTERLEAVED");
+#else
+    const std::string build_layout("RESTRICTED");
+#endif
+    std::string file_layout("RESTRICTED");
+    bool has_marker = false;
+    int norb_header = -1;
+    for(const auto & [key,value] : fcidump.header) {
+      if( key == std::string("QCSC_INTEGRALS") ) {
+        file_layout = value;
+        has_marker = true;
+      }
+      if( key == std::string("NORB") ) {
+        norb_header = std::atoi(value.c_str());
+      }
+    }
+    // IUHF=0 is MOLPRO's restricted flag and changes nothing; any other value means
+    // MOLPRO-style block UHF, which no SBD build reads.
+    bool molpro_uhf = false;
+    std::string iuhf_value;
+    if( fcidump.header.count("IUHF") ) {
+      iuhf_value = fcidump.header.at("IUHF");
+      char * end = nullptr;
+      const long iuhf = std::strtol(iuhf_value.c_str(), &end, 10);
+      molpro_uhf = iuhf_value.empty() || *end != '\0' || iuhf != 0;
+    }
+    std::string error;
+    if( molpro_uhf ) {
+      error = "the FCIDUMP has IUHF=" + iuhf_value
+              + " (MOLPRO-style block UHF), which is not an SBD layout";
+    } else if( file_layout != build_layout ) {
+      error = "the FCIDUMP layout is " + file_layout
+              + (has_marker ? "" : " (no QCSC_INTEGRALS key)")
+              + " but this binary reads " + build_layout;
+    } else {
+      const int max_index = (build_layout == "RESTRICTED") ? norb_header : 2 * norb_header;
+      for(const auto & [value,i,j,k,l] : fcidump.integrals) {
+        if( i < 0 || j < 0 || k < 0 || l < 0
+            || i > max_index || j > max_index || k > max_index || l > max_index ) {
+          error = "an integral index is out of range for the " + build_layout + " layout";
+          break;
+        }
+      }
+    }
+    if( !error.empty() ) {
+      if( mpi_rank == 0 ) {
+        std::cerr << "[qcsc] ERROR: " << error << std::endl;
+      }
+      MPI_Abort(comm, 3);
+    }
+    if( mpi_rank == 0 ) {
+      std::cout << "[qcsc] integrals layout: " << build_layout << std::endl;
+      std::ofstream ofs_info("sbd_build_info.txt");
+      ofs_info << "integrals=" << build_layout << std::endl;
+    }
+  }
 
   for(const auto & [key,value] : fcidump.header) {
     if( key == std::string("NORB") ) {
