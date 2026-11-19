@@ -14,7 +14,19 @@ same way as the closed-loop ``sqd_de`` hook:
 - the SABRE layout is searched for each circuit. The source searched it once per flow run (a
   Prefect task with ``cache_policy=RUN_ID``) and reused it for every walker and trial.
 
-The error-aware LUCJ layout is deferred.
+The source's author accepted the per-circuit search. The trade-offs, from that discussion:
+
+- The LUCJ circuits of different walkers differ only in rotation angles, not in two-qubit
+  connectivity, and SABRE is deterministic with ``TRANSPILE_SEED``. Most searches therefore
+  return the same layout, and each costs ``sabre_layout_trials`` of compile time for no gain.
+  The exceptions are circuits whose angles let optimization cancel gates and change the
+  interaction pattern.
+- When the layouts do differ, walkers run on different physical qubits. Walker-to-walker energy
+  differences then include qubit quality as well as the parameters, which can bias the DE
+  selection.
+
+The source's author used the ffsim error-aware LUCJ mapper in practice. That layout is deferred,
+and its effect, and that of per-circuit layouts, should be measured on hardware.
 """
 
 from __future__ import annotations

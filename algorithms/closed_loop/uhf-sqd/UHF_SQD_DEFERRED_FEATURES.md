@@ -398,7 +398,10 @@ with `run_task.py`) turns several of these features on.
 - **Commits.** `e2a2285`, `dc0633d` (kunalroy332), `68ca6b8` (launcher defaults).
 - **Default.** False.
 - **Where it is used.** `roquo/run_bs.toml` and `run_bs_uhf_sqd_advanced_roquo.md`.
-- **Not in the first integration.** Only the source's default SABRE compile policy is ported.
+- **Not in the first integration.** Only the source's default SABRE compile policy is ported, with
+  a layout search for each circuit (the source reused one layout per flow run). The source's
+  author used this error-aware mapper in practice, so it is the layout to compare against when
+  device runs are evaluated.
 - **Where to connect it later.** The `uhf_sqd` QRMI transpiler hook. It needs backend error data
   from the Target at compile time.
 - **Validation needed.** The transpiled circuits match the source on a fake backend.
@@ -526,6 +529,14 @@ with `run_task.py`) turns several of these features on.
   Ray is optional. The PR0 baseline used `SBD_TASK_RUNNER=concurrent`.
 
 ---
+
+## Known issue kept from the source
+
+- **NaN parameter rows in DE mutation.** A walker that failed with a NaN energy in trial 0 keeps
+  an all-NaN population row. `mutation_and_crossover` can draw it as r1..r4, or keep it through
+  crossover, which gives NaN mutants. The same code is in `sqd_de` (both come from `251f68e`).
+  Fixing it, by re-initialising failed walkers or excluding NaN rows, changes the DE draws. It is
+  left for a change shared with `sqd_de`, once a re-initialisation technique is chosen.
 
 ## Connection points the first integration keeps
 

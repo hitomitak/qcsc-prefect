@@ -28,6 +28,9 @@ them later, in [UHF_SQD_DEFERRED_FEATURES.md](UHF_SQD_DEFERRED_FEATURES.md).
 
 ## Setup
 
+A step-by-step walkthrough, from a local run with a random source to Slurm, is in
+[Run the UHF-SQD Closed-loop Workflow](../../../docs/tutorials/run_uhf_sqd_closed_loop_workflow.md).
+
 1. **Install** this directory and its local dependencies, for example
    `uv pip install -e algorithms/closed_loop/uhf-sqd`.
 2. **Build the unrestricted SBD driver** with `UHF=1`:
@@ -158,21 +161,33 @@ workflow is deferred.
 
 The computation of the ported path is the source's. The only changes are these:
 
-- **Behaviour change: the first valid energy of a walker is accepted whatever its sign.** The
-  source compared each walker's first energy with an initial 0.0 and accepted only negative
-  values, so a positive total energy (for example with a large constant term) gave a flow result
-  of 0.0. Later trials keep the source's rule: only a lower energy replaces a walker's.
+- **Behaviour change: the first valid energy of a walker is accepted whatever its sign.**
+  - The source compared each walker's first energy with an initial 0.0, a placeholder from the
+    first SBD workflow that assumed negative total energies. So for model Hamiltonians, or an
+    FCIDUMP whose constant term makes the total positive, the flow result was 0.0.
+  - The first generation is the starting population, with no prior energy to beat. Later trials
+    keep the source's rule: only a lower energy replaces a walker's.
+  - **Known issue kept from the source** (also in `sqd_de`): a walker that failed with a NaN
+    energy in trial 0 keeps an all-NaN parameter row until it succeeds. DE mutation can draw
+    that row, which gives NaN mutants. This is to be revisited together with `sqd_de`, by
+    re-initialising failed walkers or excluding NaN rows.
 
 - **UHF only.** The RHF mode of the source flow is not ported; use `sqd_de`.
 - **Sampling goes through `QuantumSourceBlock`.** A random source draws the same bits as the
   source's `generate_bit_array_uniform` (same seed formula). Reset mitigation on device results
   is the source's, including its fallback to the unmitigated shots when every shot is rejected.
-- **Device compilation: a behaviour change, not yet verified.** The QRMI hook uses the source's
-  SABRE settings (seed, passes, optimization level), but searches the layout for each circuit.
+- **Device compilation: a layout search for each circuit**, accepted by the source's author. The
+  QRMI hook uses the source's SABRE settings (seed, passes, optimization level).
   - The source ran the search as a Prefect task cached on the flow run only, so the layout of
     the first circuit was normally reused for every walker and trial.
-  - Before device runs are published, both are to be compared on the same Target with several
-    walkers: the physical layouts and the compile times. Only the random path is verified
+  - For the same circuit, both give the same compiled circuit.
+  - The trade-offs:
+    - Walkers' LUCJ circuits differ only in angles, and SABRE is seeded, so most searches find
+      the same layout and only cost compile time (`sabre_layout_trials`).
+    - Where layouts differ, walkers use different physical qubits, and qubit quality can bias the
+      DE selection.
+  - The source's author used ffsim's error-aware LUCJ mapper in practice (deferred). Measure these
+    effects on hardware before relying on device results. Only the random path is verified
     against the source.
 - **Options are explicit flow parameters.** The source read some of them from environment
   variables. No environment variable is read except `SBD_LOCAL_STORAGE_DIR` for array storage.

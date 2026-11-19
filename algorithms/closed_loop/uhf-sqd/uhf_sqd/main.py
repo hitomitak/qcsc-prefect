@@ -316,6 +316,11 @@ def mutation_and_crossover(
         )
 
     mutant = np.zeros_like(current_populations, dtype=np.float64)
+    # Known issue kept from the source (251f68e; sqd_de has the same code): the population row of
+    # a walker that has never been accepted, for example one that failed with a NaN energy in
+    # trial 0, is still all NaN. It can be drawn as r1..r4 (or kept by crossover), which makes the
+    # mutant NaN. Re-initialising failed walkers, or excluding NaN rows, would change the DE
+    # draws; revisit this together with sqd_de when a re-initialisation technique is chosen.
     for i in range(num_walkers):
         r1, r2, r3, r4 = MODULE_RNG.choice(
             num_walkers,
@@ -385,9 +390,16 @@ def selection(
             f"{trial_energies[walker_idx]} (ΔE = {delta_e})"
         )
         # Not in the source (behaviour change): a walker's first valid energy is accepted
-        # whatever its sign. The source compared it with the initial 0.0, so a positive total
-        # energy (a large constant term) was never accepted and the flow returned 0.0. A walker
-        # with an all-NaN population has never been accepted.
+        # whatever its sign.
+        # - The source compared it with the initial 0.0 of OptimizerState.energies. That 0.0 is a
+        #   placeholder from the first SBD workflow (251f68e), which assumed negative total
+        #   energies. They are negative for the chemistry it was written for (the Fe-S active
+        #   spaces are around -116 and -327 Ha), but not for model Hamiltonians or an FCIDUMP
+        #   whose constant term makes the total positive. Then no walker was accepted and the
+        #   flow returned 0.0.
+        # - The first generation is the starting population, so there is no prior energy to beat.
+        #   A walker with an all-NaN population has never been accepted. A walker that failed
+        #   (NaN energy) in trial 0 gets its first valid energy in a later trial.
         first_result = bool(np.all(np.isnan(new_state.populations[walker_idx])))
         if first_result or delta_e < 0:
             # Update reference energy and population when the trial gets lower energy
