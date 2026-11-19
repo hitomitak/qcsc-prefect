@@ -1,0 +1,11 @@
+diag_branch_uhf sha256: 35226dea85c7cf93981670c0487d565cff37e734df52d0beb2525218604f8a52
+diag_branch_rhf sha256: 6765763d18336f2a2f54cc9f05a3bb78121dc21177dfb41465d2c65abef25db3
+main.cc (3968e58:algorithms/sbd/native/main.cc) sha256: 0c5fe6e1ba474489f214ffad483850c732b41f469924ab4663879116134a44bb
+SBD r-ccs-cms/sbd revision: 95bf45a5be9ffd977fac7b0aaa359833caf3401a (== origin HEAD on 2026-11-13)
+python: 3.12.15
+compiler: clang version 21.1.8
+OS: macOS 27.0.1 arm64
+
+# Rebuild on 2026-11-17 (Darwin 27.2.0); toolchain prefix <toolchain prefix> (embedded rpath), outputs identical to the first build
+diag_branch_uhf sha256: 97d927010d8140af794f80bfab208b6c1f3924ef6128948dce0ec2c4b1aaeda7
+diag_branch_rhf sha256: 70043fe24f2b4af44b9cd1de592dce71d3d347fb2089a177e49cdc69b3b8809c
