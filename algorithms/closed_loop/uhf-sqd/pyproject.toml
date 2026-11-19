@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uhf-sqd"
+version = "0.1.0"
+description = "Prefect workflow of SQD on a broken-symmetry UHF reference, closed by differential evolution."
+requires-python = ">=3.12"
+dependencies = [
+    "ffsim",
+    "qiskit-addon-sqd",
+    "prefect[aws]>=3.4.14",
+    "pydantic_numpy",
+    "qcsc-prefect-qiskit",
+    "qcsc-prefect-sbd",
+    "qcsc_workflow_utility",
+    "qiskit-ibm-runtime",
+]
+
+[tool.uv.sources]
+qcsc-prefect-core = { path = "../../../packages/qcsc-prefect-core", editable = true }
+qcsc-prefect-adapters = { path = "../../../packages/qcsc-prefect-adapters", editable = true }
+qcsc-prefect-blocks = { path = "../../../packages/qcsc-prefect-blocks", editable = true }
+qcsc-prefect-executor = { path = "../../../packages/qcsc-prefect-executor", editable = true }
+qcsc-prefect-qiskit = { path = "../../../packages/qcsc-prefect-qiskit", editable = true }
+qcsc-prefect-sbd = { path = "../../../packages/qcsc-prefect-sbd", editable = true }
+qcsc_workflow_utility = { path = "../../qcsc_workflow_utility", editable = true }
+
+[tool.setuptools]
+packages = ["uhf_sqd"]
+include-package-data = true
+zip-safe = false
+
+[project.scripts]
+uhf-sqd-deploy = "uhf_sqd.main:deploy"
+uhf-sqd-create-blocks = "uhf_sqd.create_blocks:main"

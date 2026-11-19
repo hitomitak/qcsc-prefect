@@ -89,6 +89,7 @@ jobs:
             -e "algorithms/open_loop/sqd[all]" \
             -e algorithms/open_loop/skqd \
             -e algorithms/closed_loop/sqd_de \
+            -e algorithms/closed_loop/uhf-sqd \
             pytest
 
       - name: Run algorithm tests

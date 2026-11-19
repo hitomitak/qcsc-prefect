@@ -55,6 +55,8 @@ qcsc-prefect/
   - `open_loop/skqd`: sample once, then diagonalize (DICE or SBD).
   - `closed_loop/sqd_de`: SQD with differential evolution of the circuit parameters
     (SBD or DICE).
+  - `closed_loop/uhf-sqd`: the same closed loop on a broken-symmetry UHF reference, with the
+    unrestricted SBD solver.
   - `qcsc_workflow_utility`: chemistry and solver helpers shared by the workflows.
 - `examples/`
   End-to-end runnable examples for Miyabi and Fugaku.
