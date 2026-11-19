@@ -18,8 +18,11 @@ def saved(monkeypatch):
     # Saved QuantumSourceBlocks by name, as Prefect keeps them: sqd_de's device source exists.
     calls = {"sbd": [], "sources": [], "store": {"quantum-source": "qrmi"}}
 
-    def fake_create_sbd_blocks(**kwargs):
-        calls["sbd"].append(kwargs)
+    # The real function's required settings, so that a missing one fails the same way.
+    def fake_create_sbd_blocks(*, hpc_target, root_dir, sbd_executable, **kwargs):
+        calls["sbd"].append(
+            dict(hpc_target=hpc_target, root_dir=root_dir, sbd_executable=sbd_executable, **kwargs)
+        )
         return {"solver_block_name": "sbd-uhf-solver"}
 
     monkeypatch.setattr(qcsc_prefect_sbd, "create_sbd_blocks", fake_create_sbd_blocks)
@@ -107,3 +110,44 @@ def test_an_existing_source_block_is_replaced_only_on_request(saved):
         create_blocks.create_blocks(
             {"quantum_sources": {"x": {**random_source, "overwrite": "yes"}}}
         )
+
+
+SOURCE_ONLY = '[quantum_sources.uhf-sqd-device]\nconfig = { kind = "random" }\n'
+
+
+def test_a_source_only_config_leaves_the_solver_blocks_alone(saved):
+    names = create_blocks.create_blocks(
+        {"quantum_sources": {"uhf-sqd-device": {"config": {"kind": "random"}}}}
+    )
+    assert saved["sbd"] == []  # no SBD block is created or updated
+    assert names == {"quantum_sources": {"uhf-sqd-device": "random"}}
+    assert saved["store"]["uhf-sqd-device"] == "random"
+
+
+def test_a_source_only_toml_can_be_passed_to_the_cli(saved, tmp_path, capsys):
+    path = tmp_path / "device.toml"
+    path.write_text(SOURCE_ONLY)
+    create_blocks.main([str(path)])
+    assert saved["sbd"] == []
+    assert json.loads(capsys.readouterr().out) == {"quantum_sources": {"uhf-sqd-device": "random"}}
+
+
+def test_an_empty_solver_table_is_validated_not_skipped(saved):
+    with pytest.raises(TypeError, match="hpc_target"):
+        create_blocks.create_blocks({"solver": {}, "quantum_sources": {}})
+    assert saved["sbd"] == [] and saved["sources"] == []
+
+
+def test_a_solver_only_config_saves_no_source_block(saved):
+    names = create_blocks.create_blocks(
+        {"solver": {"hpc_target": "local", "root_dir": "/w", "sbd_executable": "/x"}}
+    )
+    assert len(saved["sbd"]) == 1 and saved["sources"] == []
+    assert names == {"solver_block_name": "sbd-uhf-solver", "quantum_sources": {}}
+
+
+def test_both_sections_save_the_solver_and_the_sources(saved):
+    names = create_blocks.create_blocks(create_blocks.load_config(EXAMPLE))
+    assert len(saved["sbd"]) == 1 and saved["sbd"][0]["hpc_target"] == "slurm"
+    assert names["solver_block_name"] == "sbd-uhf-solver"
+    assert names["quantum_sources"] == {"uhf-sqd-random": "random"}

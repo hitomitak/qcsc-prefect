@@ -1,10 +1,15 @@
 """Create the Prefect blocks of the UHF-SQD workflow from a TOML or JSON file.
 
-``[solver]`` holds keyword arguments of ``qcsc_prefect_sbd.create_sbd_blocks``. ``integrals`` is
-always ``"unrestricted"``, so the blocks get the UHF default names (``sbd-uhf-solver`` and so on)
-unless names are given. Davidson settings left out take the defaults of the source's
-``create_blocks.py`` (kunalroy332/qcsc-prefect at 3968e58), listed in ``SOLVER_DEFAULTS``. They
-are loose and do not converge to the exact energy of the subspace; see the README.
+Both sections are optional; only the sections present are processed. A file with only
+``[quantum_sources]`` creates or updates source Blocks and leaves the SBD blocks as they are.
+
+``[solver]`` holds keyword arguments of ``qcsc_prefect_sbd.create_sbd_blocks``. When present,
+even empty, it is passed on and validated as such (an empty table lacks the required settings).
+``integrals`` is always ``"unrestricted"``, so the blocks get the UHF default names
+(``sbd-uhf-solver`` and so on) unless names are given. Davidson settings left out take the
+defaults of the source's ``create_blocks.py`` (kunalroy332/qcsc-prefect at 3968e58), listed in
+``SOLVER_DEFAULTS``. They are loose and do not converge to the exact energy of the subspace; see
+the README.
 
 ``[quantum_sources.<name>]`` tables are saved as ``QuantumSourceBlock`` documents of that name,
 for example ``[quantum_sources.uhf-sqd-random] config = { kind = "random" }``. An existing
@@ -38,18 +43,26 @@ def load_config(path: Path) -> dict[str, Any]:
 
 
 def create_blocks(config: dict[str, Any]) -> dict[str, Any]:
-    """Save the solver blocks and the quantum source blocks; return their names."""
+    """Save the solver blocks and the quantum source blocks of the sections present.
+
+    Returns the names of the saved blocks: the ``create_sbd_blocks`` names when ``[solver]`` is
+    present, and ``quantum_sources`` (name -> kind) in every case.
+    """
     from qcsc_prefect.integrations.qiskit.sources import QuantumSourceBlock
     from qcsc_prefect_sbd import create_sbd_blocks
 
     unknown = set(config) - {"solver", "quantum_sources"}
     if unknown:
         raise ValueError(f"Unknown sections: {', '.join(sorted(unknown))}")
-    solver = dict(config.get("solver", {}))
-    if solver.get("integrals", "unrestricted") != "unrestricted":
-        raise ValueError("UHF-SQD solver blocks read unrestricted integrals; remove 'integrals'.")
-    solver["integrals"] = "unrestricted"
-    names = create_sbd_blocks(**{**SOLVER_DEFAULTS, **solver})
+    names: dict[str, Any] = {}
+    if "solver" in config:  # an empty [solver] table is present, not omitted
+        solver = dict(config["solver"])
+        if solver.get("integrals", "unrestricted") != "unrestricted":
+            raise ValueError(
+                "UHF-SQD solver blocks read unrestricted integrals; remove 'integrals'."
+            )
+        solver["integrals"] = "unrestricted"
+        names = create_sbd_blocks(**{**SOLVER_DEFAULTS, **solver})
 
     sources = {}
     for name, settings in config.get("quantum_sources", {}).items():
