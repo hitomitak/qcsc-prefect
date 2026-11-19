@@ -24,7 +24,8 @@ walltime = "01:00:00"
 [quantum_sources.uhf-sqd-random]
 config = { kind = "random" }
 
-# A device source through a saved QrmiRuntimeBlock. Its compile hook is
-# uhf_sqd.transpilation:transpile, set by the workflow.
+# A device source through a saved QrmiRuntimeBlock. Not supported in this release: the device
+# path has not been run on hardware. Its compile hook is uhf_sqd.transpilation:transpile, set by
+# the workflow.
 # [quantum_sources.uhf-sqd-device]
 # config = { kind = "qrmi", block_name = "qrmi-runtime", tags = ["res: quantum"] }

@@ -8,13 +8,21 @@ SBD diagonalizations to a Slurm cluster.
 [Run SBD Closed-loop Workflow on Slurm](run_sbd_closed_loop_workflow_slurm.md), most steps will
 look familiar. The differences are in the reference, the solver binary and the block names.
 
+> **Scope of this release**
+>
+> - **Supported:** the CPU SBD driver `diag_uhf` and the `random` quantum source.
+> - **Not supported:** GPU SBD builds and quantum devices. Step 7 describes the device path,
+>   which has not been run on hardware.
+> - **Not yet verified:** the Slurm procedure of Step 6 end to end, and runs with more than one
+>   MPI rank.
+
 ## Prerequisites
 
 - A clone of `qcsc-prefect` and a Python 3.12 environment, as in Steps 1 and 2 of the
   [Slurm tutorial](run_sbd_closed_loop_workflow_slurm.md).
 - A running Prefect server, or Prefect Cloud, that your client is connected to. For a Slurm login
   node, see [How to Run and Access a Prefect Server on a Slurm Login Node](../howto/howto_setup_prefect_server_slurm.md).
-- An MPI C++ compiler and OpenBLAS, to build the SBD driver.
+- An MPI C++ compiler and OpenBLAS, to build the CPU SBD driver.
 - For Step 6 only: a Slurm cluster where you can submit jobs.
 
 ## 0. What changes from the SBD closed loop?
@@ -104,7 +112,8 @@ realpath diag_uhf
 The script fetches the pinned SBD revision if needed, compiles `main.cc` with `-D_UHF`, and ends
 with `Build completed: .../native/diag_uhf`. Without `UHF=1`, the same script builds the
 restricted `diag`; the two can live side by side. On Miyabi and Fugaku, use `build_sbd.sh` and
-`build_sbd_fugaku.sh` with `UHF=1`.
+`build_sbd_fugaku.sh` with `UHF=1`. GPU SBD is not supported for `uhf-sqd`: `build_sbd_gpu.sh`
+has no UHF build.
 
 Record the absolute path of `diag_uhf`; it is the `sbd_executable` below.
 
@@ -302,11 +311,17 @@ Each walker then submits its solves as Slurm jobs; follow them with `squeue -u "
 
 > **Note**
 >
-> This Slurm procedure has not been run end to end yet. Nor has a comparison of multi-rank
-> energies with the single-process result of Step 3. Compare them yourself before relying on
-> the Slurm results.
+> This Slurm procedure has not been run end to end yet. Runs with more than one MPI rank, such
+> as `mpiprocs = 4` above, are not verified either: their energies have not been compared with
+> the single-process result of Step 3. Compare them yourself before relying on the Slurm
+> results.
 
 ### Step 7. Sample on a quantum device
+
+> **Not supported in this release**
+>
+> Quantum devices are not supported in the first release of `uhf-sqd`. This step describes the
+> device path that the package contains. It has not been run on hardware.
 
 To sample on hardware, save a `QuantumSourceBlock` of kind `qrmi` that refers to a QRMI runtime
 Block, and pass its name as `quantum_source`. Set up the runtime Block as in

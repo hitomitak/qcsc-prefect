@@ -23,8 +23,20 @@ them later, in [UHF_SQD_DEFERRED_FEATURES.md](UHF_SQD_DEFERRED_FEATURES.md).
 |---|---|
 | BS-UHF reference, UHF integrals, UCCSD t2, per-spin occupancies | `qcsc_workflow_utility.uhf` |
 | Unrestricted SBD solver (`-D_UHF` driver, `integrals="unrestricted"`) | `qcsc-prefect-sbd` |
-| Quantum sources (random, QRMI, QFw) | `QuantumSourceBlock` in `qcsc-prefect-qiskit` |
+| Quantum source (`random` in this release) | `QuantumSourceBlock` in `qcsc-prefect-qiskit` |
 | LUCJ, DE, recovery loop, K-batch subsampling, telemetry, sample pool | `uhf_sqd` (this directory) |
+
+## Scope of this release
+
+| | Status in this release |
+|---|---|
+| SBD solver | CPU `diag_uhf` only. GPU SBD is not supported: `build_sbd_gpu.sh` has no UHF build |
+| Quantum source | `random` only. Quantum devices (`qrmi`, `qfw` sources) are not supported |
+| HPC target | `local`: verified against the source. `slurm`: documented, not yet run end to end |
+| MPI ranks | One rank verified. Runs with more than one rank are not verified: their energies have not been compared with the one-rank result |
+
+The device code paths are in the package: the compile hook, reset mitigation and the sample
+pool. They have not been run on hardware, and the sections that describe them say so.
 
 ## Setup
 
@@ -52,8 +64,10 @@ A step-by-step walkthrough, from a local run with a random source to Slurm, is i
    - `[quantum_sources.<name>]` tables are saved as `QuantumSourceBlock` documents. An existing
      Block of the same name, which another workflow such as `sqd_de` may use, is replaced only
      with `overwrite = true` in its table; otherwise creation stops. The example creates
-     `uhf-sqd-random`. A random source needs no backend. A `qrmi` source uses this package's compile hook
-     `uhf_sqd.transpilation:transpile`, so install `uhf_sqd` where the QRMI compiler runs.
+     `uhf-sqd-random`. A random source needs no backend. Device sources are not supported in
+     this release; a `qrmi` source would use this package's compile hook
+     `uhf_sqd.transpilation:transpile`, so `uhf_sqd` would have to be installed where the QRMI
+     compiler runs.
 
 ## Running
 
@@ -120,6 +134,9 @@ when converged subspace energies are needed, for example `block = 30`, `iteratio
 `tolerance = 1e-10`.
 
 ### Sample pool (device sources)
+
+Device sources are not supported in this release, and this path has not been run on hardware.
+With the supported `random` source, no pool is written and no reset mitigation is applied.
 
 With a source that runs circuits (`requires_circuit`), each walker saves its sample pool before
 any diagonalization. The pool is the shots kept after reset mitigation, one row per shot, so
