@@ -39,6 +39,10 @@ The first integration ports the default computation path of the source flow `rik
 
 The scientific content of that path is preserved, and the PR0 baseline checks that it is.
 
+The first release supports only the `random` source on the CPU SBD driver. The QRMI path and the
+pool save are ported but have not been run on hardware; see "Scope of this release" in
+[README.md](README.md).
+
 **Known limitation kept from the source.** The source's default solver settings (`create_blocks.py`:
 block 4, iteration 1, tolerance 1e-2) do not converge to the exact energy of the subspace. On the
 PR0 H6 full space the result is 9.61 mEh above FCI. The defaults are kept as they are; see
