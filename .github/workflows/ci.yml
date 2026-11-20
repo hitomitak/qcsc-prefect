@@ -92,7 +92,12 @@ jobs:
             -e algorithms/closed_loop/uhf-sqd \
             pytest
 
+      # One thread, as in the native SBD step. The UHF reference tests compare results bit for
+      # bit, and with several OpenMP threads PySCF gives different bits on each run.
       - name: Run algorithm tests
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
         run: uv run --no-sync pytest algorithms
 
       - name: Install native SBD build dependencies
