@@ -60,16 +60,19 @@ Add `--reservation=<name>` if your project runs in a reservation.
 ### 2. Install and connect to Prefect
 
 ```bash
-uv sync
-uv run prefect config view | grep PREFECT_API_URL   # the server or Cloud you use
+uv sync --all-packages
+uv run --no-sync prefect config view | grep PREFECT_API_URL   # the server or Cloud you use
 ```
+
+`--all-packages` installs the workspace packages, Prefect among them. A plain `uv sync`
+installs only the development tools, and removes packages that are not in the lock file.
 
 ### 3. Create the Blocks
 
 ```bash
 cp examples/roquo_prefect_gpu_hello_demo/roquo_gpu.example.toml roquo_gpu.toml
 # Edit roquo_gpu.toml, or give the account and reservation on the command line:
-uv run python examples/roquo_prefect_gpu_hello_demo/create_blocks.py \
+uv run --no-sync python examples/roquo_prefect_gpu_hello_demo/create_blocks.py \
   --config roquo_gpu.toml --account <account> [--reservation <name>]
 ```
 
@@ -82,7 +85,7 @@ If ROQUO wants the GPU as a generic resource, delete the `gpus_per_node` line an
 ### 4. Run the job
 
 ```bash
-uv run python -c "import asyncio; from examples.roquo_prefect_gpu_hello_demo.flow import roquo_gpu_hello_flow; print(asyncio.run(roquo_gpu_hello_flow()))"
+uv run --no-sync python -c "import asyncio; from examples.roquo_prefect_gpu_hello_demo.flow import roquo_gpu_hello_flow; print(asyncio.run(roquo_gpu_hello_flow()))"
 ```
 
 The flow returns the job record:
@@ -98,7 +101,7 @@ table artifact `roquo-gpu-hello-demo-metrics`.
 To check that a failing job is reported, run it with `exit_code=3`:
 
 ```bash
-uv run python -c "import asyncio; from examples.roquo_prefect_gpu_hello_demo.flow import roquo_gpu_hello_flow; print(asyncio.run(roquo_gpu_hello_flow(exit_code=3)))"
+uv run --no-sync python -c "import asyncio; from examples.roquo_prefect_gpu_hello_demo.flow import roquo_gpu_hello_flow; print(asyncio.run(roquo_gpu_hello_flow(exit_code=3)))"
 ```
 
 `exit_status` is then 3 and `state` is `FAILED`. The script also exits with 2 when

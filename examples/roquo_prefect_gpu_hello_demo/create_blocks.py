@@ -1,6 +1,6 @@
 """Create the Prefect Blocks for a one-GPU ROQUO job on the shared Slurm executor.
 
-    uv run python examples/roquo_prefect_gpu_hello_demo/create_blocks.py \
+    uv run --no-sync python examples/roquo_prefect_gpu_hello_demo/create_blocks.py \
         --config roquo_gpu.toml [--account ACCOUNT] [--partition NAME] [--reservation NAME]
 
 ROQUO runs Slurm, so the HPC profile uses ``hpc_target="slurm"`` and the job goes through the

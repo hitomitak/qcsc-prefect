@@ -14,10 +14,11 @@ This example runs one small job on one ROQUO GPU through the shared Slurm execut
 On a ROQUO login node:
 
 ```bash
+uv sync --all-packages
 cp examples/roquo_prefect_gpu_hello_demo/roquo_gpu.example.toml roquo_gpu.toml
-uv run python examples/roquo_prefect_gpu_hello_demo/create_blocks.py \
+uv run --no-sync python examples/roquo_prefect_gpu_hello_demo/create_blocks.py \
   --config roquo_gpu.toml --account <account> [--reservation <name>]
-uv run python -c "import asyncio; from examples.roquo_prefect_gpu_hello_demo.flow import roquo_gpu_hello_flow; print(asyncio.run(roquo_gpu_hello_flow()))"
+uv run --no-sync python -c "import asyncio; from examples.roquo_prefect_gpu_hello_demo.flow import roquo_gpu_hello_flow; print(asyncio.run(roquo_gpu_hello_flow()))"
 ```
 
 The job scripts that these Blocks give are tested in
