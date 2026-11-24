@@ -1,0 +1,22 @@
+# One GPU on ROQUO through the shared Slurm executor (hpc_target = "slurm").
+# Copy this file, set your account, and pass it to create_blocks.py with --config.
+
+account = "YOUR_ROQUO_ACCOUNT"   # #SBATCH --account; "" uses your default account
+partition = "roquo"              # #SBATCH --partition; check the name with sinfo
+reservation = ""                 # #SBATCH --reservation, if your project runs in one
+
+gpus_per_node = 1                # #SBATCH --gpus-per-node; remove it if extra_directives asks
+                                 # for the GPU instead, e.g. "--gres=gpu:1"
+walltime = "00:05:00"
+launcher = "srun"                # "single" runs the script without srun
+modules = []                     # loaded in the job, e.g. ["cuda/13.2"]
+extra_directives = []            # more #SBATCH lines, e.g. ["--gres=gpu:1"]
+
+# The program the job runs. Default: hello_gpu.sh next to create_blocks.py. It must be on a
+# file system that the compute nodes see.
+# executable = "/path/to/hello_gpu.sh"
+
+[blocks]
+command = "cmd-roquo-gpu-hello"
+execution_profile = "exec-roquo-gpu-1"
+hpc_profile = "hpc-roquo-gpu"
