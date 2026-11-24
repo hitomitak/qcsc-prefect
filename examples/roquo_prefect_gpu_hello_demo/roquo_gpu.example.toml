@@ -2,7 +2,7 @@
 # Copy this file, set your account, and pass it to create_blocks.py with --config.
 
 account = "YOUR_ROQUO_ACCOUNT"   # #SBATCH --account; "" uses your default account
-partition = "roquo"              # #SBATCH --partition; check the name with sinfo
+partition = "roquo"              # #SBATCH --partition; the GPU partition (see sinfo)
 reservation = ""                 # #SBATCH --reservation, if your project runs in one
 
 gpus_per_node = 1                # #SBATCH --gpus-per-node; remove it if extra_directives asks

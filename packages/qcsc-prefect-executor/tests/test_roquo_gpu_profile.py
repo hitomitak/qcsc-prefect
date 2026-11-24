@@ -80,6 +80,7 @@ def _directives(script: str) -> list[str]:
 
 
 def test_example_config_gives_one_gpu_on_the_roquo_partition(monkeypatch, tmp_path):
+    # These directives are those of the script that ROQUO ran on 2026-11-24 (job 474667).
     script = _render(monkeypatch, tmp_path, _example_config(), user_args=["3"])
     work_dir = tmp_path.resolve()
     assert _directives(script) == [

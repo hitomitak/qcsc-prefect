@@ -36,6 +36,28 @@ your home directory.
 
 `resource_class="gpu"` selects `queue_gpu` and `project_gpu`.
 
+## ROQUO as checked on 2026-11-24
+
+| Item | Value |
+| --- | --- |
+| Login node | x86_64; `sbatch`, `scontrol`, `sacct`, `scancel` in `/usr/bin`; Slurm 26.05.6 |
+| Partitions | `roquo` (default; 4 GB200 GPUs per node), `roquo_share` (GB200 MIG `1g.23gb` slices), `work` (no GPU) |
+| GPU request | `--gpus-per-node=1` and `--gres=gpu:1` are both accepted |
+| Size of a one-GPU job | ROQUO adjusts it to a quarter node: 1 GPU, 36 cores, 400000 MB, with the warning `[ROQUO-W003]` from `sbatch`. The warning does not stop the submission |
+| Reservation | none was needed |
+| Modules | `cuda/12.8`, `cuda/13.2`, `cuda/13.3`, `nvhpc/25.5`, `nvhpc/26.5`, `hpcx/2.50`, `nvhpc-openmpi/25.5`, `nvhpc-openmpi/26.5` |
+
+On that day the example ran with the Blocks of `roquo_gpu.example.toml` and an account, from
+a login node with Prefect Cloud:
+
+- a job exiting 0 gave `exit_status` 0, state `COMPLETED`, `gres/gpu=1` in `sacct`, and an
+  `output.out` with the GB200 that `CUDA_VISIBLE_DEVICES=0` named;
+- a job exiting 3 gave `exit_status` 3 and state `FAILED`, and the flow logged its
+  `output.err` as an error.
+
+Not checked yet: cancellation, `roquo_share`, more than one GPU, modules loaded in the job,
+and the `--gres` form in a real job.
+
 ## Steps
 
 Run these on a ROQUO login node, from a checkout of qcsc-prefect in your home directory.
@@ -55,7 +77,8 @@ sbatch --test-only --partition=<partition> --account=<account> \
   --gpus-per-node=1 --time=00:05:00 --wrap=true
 ```
 
-Add `--reservation=<name>` if your project runs in a reservation.
+Add `--reservation=<name>` if your project runs in a reservation. On ROQUO, `sbatch` may
+print `[ROQUO-W003]` and adjust the size: a one-GPU job gets a quarter node.
 
 ### 2. Install and connect to Prefect
 
@@ -104,8 +127,9 @@ To check that a failing job is reported, run it with `exit_code=3`:
 uv run --no-sync python -c "import asyncio; from examples.roquo_prefect_gpu_hello_demo.flow import roquo_gpu_hello_flow; print(asyncio.run(roquo_gpu_hello_flow(exit_code=3)))"
 ```
 
-`exit_status` is then 3 and `state` is `FAILED`. The script also exits with 2 when
-`nvidia-smi` cannot list a GPU, for example when the job got none.
+`exit_status` is then 3 and `state` is `FAILED`. The flow itself still completes: it
+returns the job record, and the caller checks `exit_status`. The script also exits with 2
+when `nvidia-smi` cannot list a GPU, for example when the job got none.
 
 ## Troubleshooting
 
