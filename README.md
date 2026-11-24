@@ -55,6 +55,9 @@ qcsc-prefect/
   - `open_loop/skqd`: sample once, then diagonalize (DICE or SBD).
   - `closed_loop/sqd_de`: SQD with differential evolution of the circuit parameters
     (SBD or DICE).
+  - `closed_loop/uhf-sqd`: the same closed loop on a broken-symmetry UHF reference, with the
+    unrestricted CPU SBD solver and random sampling (GPU SBD and quantum devices are not yet
+    supported).
   - `qcsc_workflow_utility`: chemistry and solver helpers shared by the workflows.
 - `examples/`
   End-to-end runnable examples for Miyabi and Fugaku.
@@ -254,6 +257,11 @@ Release notes:
 - The `pypi-publish.yml` workflow validates tag/package version consistency before publishing.
 - The DICE/SBD executable is not installed by `pip`.
 - DICE/SBD must be built separately for each target HPC environment.
+- SBD drivers must be rebuilt from the current `packages/qcsc-prefect-sbd/native/main.cc`, so
+  that they report their integral layout (`sbd_build_info.txt`); check that each HPC profile
+  points at a rebuilt binary. A restricted run on a driver without that report logs a warning,
+  and its energy is not verified; an unrestricted run requires it. The unrestricted driver
+  `diag_uhf` for `algorithms/closed_loop/uhf-sqd` is built with `UHF=1`.
 - The fulqrum solver is not installed by `pip` either; build it per site with
   `packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh`.
 - If a broken release is published, prefer yanking over deleting.

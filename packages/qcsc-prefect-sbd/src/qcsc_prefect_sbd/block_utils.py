@@ -32,12 +32,12 @@ def create_sbd_blocks(
     sbd_executable: str,
     project: str = "",
     queue: str = "",
-    command_block_name: str = "cmd-sbd-solver",
+    command_block_name: str | None = None,
     execution_profile_block_name: str | None = None,
     hpc_profile_block_name: str | None = None,
-    solver_block_name: str = "sbd-solver",
+    solver_block_name: str | None = None,
     command_name: str = "sbd",
-    executable_key: str = "sbd_solver",
+    executable_key: str | None = None,
     profile_name: str = "sbd-mpi",
     launcher: Literal["single", "srun", "mpirun", "mpiexec", "mpiexec.hydra"] | None = None,
     num_nodes: int = 1,
@@ -62,6 +62,7 @@ def create_sbd_blocks(
     carryover_ratio: float = 0.5,
     carryover_type: int = 1,
     solver_mode: Literal["cpu", "gpu"] = "cpu",
+    integrals: Literal["restricted", "unrestricted"] = "restricted",
     slurm_memory: str | None = None,
     gfscache: str | None = None,
     spack_modules: list[str] | None = None,
@@ -71,13 +72,26 @@ def create_sbd_blocks(
     """Create the standard block set required to run SBD on qcsc-prefect.
 
     ``sbd_executable`` is the SBD driver built from ``native/main.cc`` for the
-    target, for example ``native/diag`` or ``native/diag-gpu``.
+    target, for example ``native/diag`` or ``native/diag-gpu``. For a ``-D_UHF`` build
+    (``native/diag_uhf``, from ``UHF=1`` with a CPU build script) pass
+    ``integrals="unrestricted"``.
+
+    Blocks are saved with ``overwrite=True``, and the HPC profile holds the executable
+    path, so the restricted and unrestricted block sets must not share names. Names left
+    unset default to ``cmd-sbd-solver``, ``exec-sbd-<target>``, ``hpc-<target>-sbd`` and
+    ``sbd-solver`` (executable key ``sbd_solver``) for restricted integrals, and to
+    ``cmd-sbd-uhf-solver``, ``exec-sbd-uhf-<target>``, ``hpc-<target>-sbd-uhf`` and
+    ``sbd-uhf-solver`` (executable key ``sbd_uhf_solver``) for unrestricted integrals.
+    Unrestricted blocks named like a restricted default raise ``ValueError`` before any
+    block is saved.
 
     The launcher defaults to ``"single"`` for ``local``, ``"srun"`` for ``slurm``,
     ``"mpiexec.hydra"`` for ``miyabi`` and ``"mpiexec"`` for ``fugaku``.
 
     These checks run before any block is saved:
 
+    - With ``integrals="unrestricted"``, no block name may be a restricted default name,
+      so that an unrestricted block set never replaces a restricted one.
     - Local execution rejects ``modules`` and ``pre_commands``.
     - ``gpus_per_node`` must fit the target and needs ``resource_class="gpu"``
       (see ``validate_gpu_request``).
@@ -97,6 +111,44 @@ def create_sbd_blocks(
     wrappers can translate TOML or CLI config dictionaries into these arguments
     without leaking config-shape coupling into the shared package.
     """
+
+    restricted_names = {
+        "command": "cmd-sbd-solver",
+        "execution profile": f"exec-sbd-{hpc_target}",
+        "HPC profile": f"hpc-{hpc_target}-sbd",
+        "solver": "sbd-solver",
+    }
+    unrestricted = integrals == "unrestricted"
+    default_names = (
+        restricted_names
+        if not unrestricted
+        else {
+            "command": "cmd-sbd-uhf-solver",
+            "execution profile": f"exec-sbd-uhf-{hpc_target}",
+            "HPC profile": f"hpc-{hpc_target}-sbd-uhf",
+            "solver": "sbd-uhf-solver",
+        }
+    )
+    names = {
+        "command": command_block_name or default_names["command"],
+        "execution profile": execution_profile_block_name or default_names["execution profile"],
+        "HPC profile": hpc_profile_block_name or default_names["HPC profile"],
+        "solver": solver_block_name or default_names["solver"],
+    }
+    if unrestricted:
+        clashes = [
+            f"{kind} block {name!r}"
+            for kind, name in names.items()
+            if name == restricted_names[kind]
+        ]
+        if clashes:
+            raise ValueError(
+                "integrals='unrestricted' blocks must not use the restricted default names, "
+                f"which would overwrite the restricted SBD blocks: {', '.join(clashes)}."
+            )
+    command_block_name = names["command"]
+    solver_block_name = names["solver"]
+    resolved_executable_key = executable_key or ("sbd_uhf_solver" if unrestricted else "sbd_solver")
 
     if hpc_target == "local" and (modules or pre_commands):
         unsupported = []
@@ -134,8 +186,8 @@ def create_sbd_blocks(
 
     register_sbd_block_types()
 
-    resolved_exec_block_name = execution_profile_block_name or f"exec-sbd-{hpc_target}"
-    resolved_hpc_block_name = hpc_profile_block_name or f"hpc-{hpc_target}-sbd"
+    resolved_exec_block_name = names["execution profile"]
+    resolved_hpc_block_name = names["HPC profile"]
     default_script_filename = {
         "local": "sbd_solver",
         "slurm": "sbd_solver.slurm",
@@ -143,7 +195,9 @@ def create_sbd_blocks(
         "fugaku": "sbd_solver.pjm",
     }[hpc_target]
     resolved_script_filename = script_filename or default_script_filename
-    resolved_metrics_key = metrics_artifact_key or f"{hpc_target}-sbd-metrics"
+    resolved_metrics_key = metrics_artifact_key or (
+        f"{hpc_target}-sbd-uhf-metrics" if unrestricted else f"{hpc_target}-sbd-metrics"
+    )
     resolved_sbd_executable = str(sbd_executable)
     resolved_environments = dict(environments or {})
     if ompthreads is not None and "OMP_NUM_THREADS" not in resolved_environments:
@@ -155,7 +209,7 @@ def create_sbd_blocks(
 
     CommandBlock(
         command_name=command_name,
-        executable_key=executable_key,
+        executable_key=resolved_executable_key,
         description="SBD selected basis diagonalization driver",
         default_args=[],
     ).save(command_block_name, overwrite=True)
@@ -182,7 +236,7 @@ def create_sbd_blocks(
         queue_gpu=queue,
         project_cpu=project,
         project_gpu=project,
-        executable_map={executable_key: resolved_sbd_executable},
+        executable_map={resolved_executable_key: resolved_sbd_executable},
         slurm_memory=slurm_memory,
         gfscache=gfscache,
         spack_modules=list(spack_modules or []),
@@ -207,6 +261,7 @@ def create_sbd_blocks(
         carryover_ratio=carryover_ratio,
         carryover_type=carryover_type,
         solver_mode=solver_mode,
+        integrals=integrals,
     ).save(solver_block_name, overwrite=True)
 
     return {

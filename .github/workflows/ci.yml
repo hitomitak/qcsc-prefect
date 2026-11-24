@@ -89,9 +89,15 @@ jobs:
             -e "algorithms/open_loop/sqd[all]" \
             -e algorithms/open_loop/skqd \
             -e algorithms/closed_loop/sqd_de \
+            -e algorithms/closed_loop/uhf-sqd \
             pytest
 
+      # One thread, as in the native SBD step. The UHF reference tests compare results bit for
+      # bit, and with several OpenMP threads PySCF gives different bits on each run.
       - name: Run algorithm tests
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
         run: uv run --no-sync pytest algorithms
 
       - name: Install native SBD build dependencies
@@ -99,14 +105,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libopenmpi-dev openmpi-bin libopenblas-dev
 
-      - name: Build and test native SBD CPU driver
+      - name: Build and test native SBD CPU drivers (restricted and -D_UHF)
         env:
           OMP_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
         run: |
           bash packages/qcsc-prefect-sbd/native/build_sbd_slurm.sh
+          UHF=1 bash packages/qcsc-prefect-sbd/native/build_sbd_slurm.sh
           export SBD_NATIVE_BINARY="$PWD/packages/qcsc-prefect-sbd/native/diag"
-          uv run --no-sync pytest packages/qcsc-prefect-sbd/tests/test_sbd_native.py -q
+          export SBD_NATIVE_UHF_BINARY="$PWD/packages/qcsc-prefect-sbd/native/diag_uhf"
+          uv run --no-sync pytest -q packages/qcsc-prefect-sbd/tests/test_sbd_native.py \
+            packages/qcsc-prefect-sbd/tests/test_sbd_native_uhf.py
 
   # Single required status check for branch protection, independent of the matrix.
   ci-ok:

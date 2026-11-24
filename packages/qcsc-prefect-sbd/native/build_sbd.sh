@@ -13,6 +13,14 @@ REPO_URL="${SBD_REPO_URL:-https://github.com/r-ccs-cms/sbd.git}"
 SBD_COMMIT="${SBD_COMMIT:-$(cat "$SCRIPT_DIR/SBD_REVISION")}"
 SBD_DIR="${SBD_DIR:-${SCRIPT_DIR}/sbd}"
 CXXFLAGS=("-std=c++17" "-axSAPPHIRERAPIDS,CORE-AVX512" "-qopenmp" "-O3")
+# UHF=1 builds the unrestricted driver diag_uhf with -D_UHF (separate alpha/beta integrals,
+# interleaved spin-orbital FCIDUMP; use it with SBDSolverJob(integrals="unrestricted")).
+# Without it the restricted driver diag is built, as before.
+OUTBIN="diag"
+if [ "${UHF:-0}" = "1" ]; then
+    CXXFLAGS+=("-D_UHF")
+    OUTBIN="diag_uhf"
+fi
 
 if command -v mpiicpc >/dev/null 2>&1; then
     CCCOM="mpiicpc"
@@ -38,10 +46,10 @@ git -C "$SBD_DIR" checkout --detach "$SBD_COMMIT"
 echo "Using SBD commit: $(git -C "$SBD_DIR" rev-parse HEAD)"
 
 # Clean previous build
-rm -f "$SCRIPT_DIR"/*.o "$SCRIPT_DIR"/diag
+rm -f "$SCRIPT_DIR"/*.o "$SCRIPT_DIR/$OUTBIN"
 
 # Compile and link
 "$CCCOM" "${CXXFLAGS[@]}" -c "$SCRIPT_DIR/main.cc" -o "$SCRIPT_DIR/main.o" -I"$SBD_DIR/include"
-"$CCCOM" "${CXXFLAGS[@]}" -o "$SCRIPT_DIR/diag" "$SCRIPT_DIR/main.o" -qmkl=parallel
+"$CCCOM" "${CXXFLAGS[@]}" -o "$SCRIPT_DIR/$OUTBIN" "$SCRIPT_DIR/main.o" -qmkl=parallel
 
-echo "Build completed: $SCRIPT_DIR/diag"
+echo "Build completed: $SCRIPT_DIR/$OUTBIN"

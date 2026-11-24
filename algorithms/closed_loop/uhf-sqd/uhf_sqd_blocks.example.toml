@@ -1,0 +1,31 @@
+# Blocks of the UHF-SQD workflow. Create them with: uhf-sqd-create-blocks uhf_sqd_blocks.toml
+#
+# [solver] holds keyword arguments of qcsc_prefect_sbd.create_sbd_blocks. integrals is always
+# "unrestricted": the blocks get the UHF default names (sbd-uhf-solver, hpc-<target>-sbd-uhf, ...)
+# unless names are given here. Davidson settings left out take the source's loose defaults
+# (block 4, iteration 1, tolerance 1e-2, carryover_ratio 0.1, carryover_type 0).
+
+[solver]
+hpc_target = "slurm"
+root_dir = "/shared/work/qcsc-prefect/uhf-sqd"
+sbd_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag_uhf"
+queue = "debug"
+num_nodes = 1
+mpiprocs = 4
+walltime = "01:00:00"
+# Converged subspace energies need tighter settings, for example:
+# block = 30
+# iteration = 60
+# tolerance = 1e-10
+
+# A random source needs no backend: uniform bits of width 2 * norb, seeded per walker. An
+# existing Block of the same name is replaced only with overwrite = true. A source Block that
+# another workflow already uses (for example sqd_de's) can be named in FlowParameters instead.
+[quantum_sources.uhf-sqd-random]
+config = { kind = "random" }
+
+# A device source through a saved QrmiRuntimeBlock. Not supported in this release: the device
+# path has not been run on hardware. Its compile hook is uhf_sqd.transpilation:transpile, set by
+# the workflow.
+# [quantum_sources.uhf-sqd-device]
+# config = { kind = "qrmi", block_name = "qrmi-runtime", tags = ["res: quantum"] }

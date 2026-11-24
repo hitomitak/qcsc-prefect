@@ -30,7 +30,8 @@ qcsc-prefect/
 │   │   ├── sqd/
 │   │   └── skqd/
 │   └── closed_loop/
-│       └── sqd_de/
+│       ├── sqd_de/
+│       └── uhf-sqd/
 ├── examples/
 └── docs/
 ```

@@ -12,6 +12,7 @@ from prefect.blocks.core import Block
 from prefect.client.schemas.objects import BlockDocument, BlockType
 from qcsc_prefect_sbd import SBDResult, SBDSolverJob
 from qcsc_prefect_sbd import solver_job as mod
+from sbd_uhf_helpers import uhf_tensors
 
 # Saved document data of a block created before the move, when SBDSolverJob was defined in
 # algorithms/sbd/sbd/solver_job.py. The block type name, slug and fields are unchanged.
@@ -33,15 +34,24 @@ SAVED_DATA = {
     "carryover_ratio": 0.1,
     "solver_mode": "gpu",
 }
-# Schema checksum of the current class, with the carryover_type field. A change here means
-# saving the block registers a new schema version.
-SCHEMA_CHECKSUM = "sha256:f5f57489e6d89ed3dbcf3bae556df81d79a523c1"
+# Schema checksum of the current class, with the carryover_type and integrals fields. A change
+# here means saving the block registers a new schema version. Adding integrals changed it from
+# sha256:f5f57489e6d89ed3dbcf3bae556df81d79a523c1.
+SCHEMA_CHECKSUM = "sha256:81eabbeb342646c571dfed9b3917302d94374277"
 
 
 @pytest.fixture(autouse=True)
 def quiet_logger(monkeypatch):
-    logger = SimpleNamespace(debug=lambda *a, **k: None, info=lambda *a, **k: None)
+    """Logger stub; warnings are kept, formatted, in ``quiet_logger.warnings``."""
+    warnings = []
+    logger = SimpleNamespace(
+        debug=lambda *a, **k: None,
+        info=lambda *a, **k: None,
+        warning=lambda message, *args, **k: warnings.append(message % args),
+        warnings=warnings,
+    )
     monkeypatch.setattr(mod, "get_run_logger", lambda: logger)
+    return logger
 
 
 def test_block_type_is_unchanged_by_the_move():
@@ -82,6 +92,8 @@ def test_block_saved_before_the_move_loads(monkeypatch, loader):
     assert {name: getattr(solver, name) for name in SAVED_DATA} == SAVED_DATA
     # Saved before carryover_type existed: the default keeps the carryover the flow uses.
     assert solver.carryover_type == 1
+    # Saved before integrals existed: a restricted binary, as every block was then.
+    assert solver.integrals == "restricted"
     assert [event["event"] for event in events] == ["prefect.block.sbd-solver-job.loaded"]
 
 
@@ -391,3 +403,203 @@ def test_restricted_open_shell_input_passes():
     mod.check_sbd_input(
         ci_strings=(np.array([HF_2, 5, 6]), np.array([HF_1, 2, 4])), nelec=(2, 1), spin_sq=None
     )
+
+
+# --- Unrestricted (UHF) integrals ----------------------------------------------------------
+
+
+def test_prep_files_unrestricted_writes_marked_fcidump_and_both_det_files(tmp_path: Path):
+    t = uhf_tensors(3)
+    mod._prep_files(
+        work_dir=tmp_path,
+        ci_strings=(np.array([0b011, 0b101]), np.array([0b011, 0b101])),  # equal sets
+        one_body_tensor=t["h1_a"],
+        two_body_tensor=t["h2_aa"],
+        norb=3,
+        nelec=(2, 2),
+        beta_integrals=(t["h1_b"], t["h2_ab"], t["h2_bb"]),
+    )
+    header = (tmp_path / "fcidump.txt").read_text().splitlines()[0]
+    assert header == " &FCI NORB=3,NELEC=4,MS2=0,QCSC_INTEGRALS=SBD_UHF_INTERLEAVED,"
+    # Unrestricted input always has its own beta determinant file, even for equal sets.
+    assert (tmp_path / "BetaDets.bin").read_bytes() == bytes([0b011, 0b101])
+
+
+def test_restricted_prep_files_are_unchanged_by_the_unrestricted_option(tmp_path: Path):
+    mod._prep_files(
+        work_dir=tmp_path,
+        ci_strings=(np.array([0b011]), np.array([0b011])),
+        one_body_tensor=np.eye(3),
+        two_body_tensor=np.zeros((3,) * 4),
+        norb=3,
+        nelec=(2, 2),
+    )
+    text = (tmp_path / "fcidump.txt").read_text()
+    assert "QCSC_INTEGRALS" not in text
+    assert not (tmp_path / "BetaDets.bin").exists()
+
+
+@pytest.mark.parametrize("integrals", ["restricted", "unrestricted"])
+def test_run_rejects_integrals_of_the_other_kind_before_any_job(monkeypatch, integrals):
+    async def fail(**kwargs):
+        raise AssertionError("no job may be submitted")
+
+    monkeypatch.setattr(mod, "run_job_from_blocks", fail)
+    t = uhf_tensors(3)
+    beta = {}
+    if integrals == "restricted":  # restricted block, unrestricted input
+        beta = {
+            "one_body_tensor_b": t["h1_b"],
+            "two_body_tensor_ab": t["h2_ab"],
+            "two_body_tensor_bb": t["h2_bb"],
+        }
+    solver = SBDSolverJob(root_dir="/work", integrals=integrals)
+    with pytest.raises(ValueError, match=f"integrals='{integrals}'"):
+        asyncio.run(
+            solver.run(
+                (np.array([HF_2]), np.array([HF_2])), t["h1_a"], t["h2_aa"], 3, (2, 2), **beta
+            )
+        )
+
+
+def test_run_rejects_partial_unrestricted_input():
+    solver = SBDSolverJob(root_dir="/work", integrals="unrestricted")
+    t = uhf_tensors(3)
+    with pytest.raises(ValueError, match="needs all of"):
+        asyncio.run(
+            solver.run(
+                (np.array([HF_2]), np.array([HF_2])),
+                t["h1_a"],
+                t["h2_aa"],
+                3,
+                (2, 2),
+                one_body_tensor_b=t["h1_b"],
+            )
+        )
+
+
+@pytest.mark.parametrize("block", ["h1_b", "h2_aa", "h2_ab"])
+def test_run_rejects_unrestricted_integrals_without_the_orbital_symmetry(block):
+    t = uhf_tensors(3)
+    t[block] = t[block].copy()
+    t[block].flat[1] += 1e-3  # break i<->j symmetry of one element
+    solver = SBDSolverJob(root_dir="/work", integrals="unrestricted")
+    with pytest.raises(ValueError, match=f"{block} lacks the permutation symmetry"):
+        asyncio.run(
+            solver.run(
+                (np.array([HF_2]), np.array([HF_2])),
+                t["h1_a"],
+                t["h2_aa"],
+                3,
+                (2, 2),
+                one_body_tensor_b=t["h1_b"],
+                two_body_tensor_ab=t["h2_ab"],
+                two_body_tensor_bb=t["h2_bb"],
+            )
+        )
+
+
+def test_run_sbd_inner_unrestricted_passes_both_files_and_checks_the_build(monkeypatch, tmp_path):
+    executed = {}
+
+    async def fake_run_job_from_blocks(**kwargs):
+        executed.update(kwargs)
+        write_outputs(kwargs["work_dir"], bytes([0b11000000]))
+        (kwargs["work_dir"] / "carryover_b.bin").write_bytes(bytes([0b01100000]))
+        (kwargs["work_dir"] / "sbd_build_info.txt").write_text("integrals=SBD_UHF_INTERLEAVED\n")
+        return SimpleNamespace(exit_status=0)
+
+    monkeypatch.setattr(mod, "run_job_from_blocks", fake_run_job_from_blocks)
+    t = uhf_tensors(3)
+    result = asyncio.run(
+        mod._run_sbd_inner.fn(
+            solver=SBDSolverJob(root_dir=str(tmp_path), integrals="unrestricted"),
+            ci_strings=(np.array([0b011]), np.array([0b011])),
+            one_body_tensor=t["h1_a"],
+            two_body_tensor=t["h2_aa"],
+            norb=3,
+            nelec=(2, 2),
+            beta_integrals=(t["h1_b"], t["h2_ab"], t["h2_bb"]),
+        )
+    )
+    args = executed["user_args"]
+    assert args[args.index("--adetfile") + 1] == "AlphaDets.bin"
+    assert args[args.index("--bdetfile") + 1] == "BetaDets.bin"
+    assert result.integrals == "SBD_UHF_INTERLEAVED"
+    assert result.carryover_bitstrings_b.tolist() == [[False, True, True]]
+
+
+@pytest.mark.parametrize(
+    ("reported", "integrals", "separate_beta", "error"),
+    [
+        (None, "restricted", False, None),  # driver built before the check: accepted as before
+        ("RESTRICTED", "restricted", False, None),
+        ("SBD_UHF_INTERLEAVED", "restricted", False, "reported integral layout"),
+        ("RESTRICTED", "unrestricted", True, "reported integral layout"),
+        (None, "unrestricted", True, "did not report its integral layout"),
+        ("SBD_UHF_INTERLEAVED", "unrestricted", True, None),
+    ],
+)
+def test_read_files_checks_the_reported_build(tmp_path, reported, integrals, separate_beta, error):
+    write_outputs(tmp_path, b"")
+    (tmp_path / "carryover_b.bin").write_bytes(b"")
+    if reported is not None:
+        (tmp_path / "sbd_build_info.txt").write_text(f"integrals={reported}\n")
+    kwargs = dict(work_dir=tmp_path, norb=3, separate_beta=separate_beta, integrals=integrals)
+    if error is None:
+        assert mod._read_files(**kwargs).integrals == reported
+    else:
+        with pytest.raises(RuntimeError, match=error):
+            mod._read_files(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("reported", "integrals", "separate_beta"),
+    [
+        (None, "restricted", False),
+        ("RESTRICTED", "restricted", False),
+        ("SBD_UHF_INTERLEAVED", "unrestricted", True),
+    ],
+)
+def test_only_an_unconfirmed_restricted_build_logs_a_warning(
+    quiet_logger, tmp_path, reported, integrals, separate_beta
+):
+    write_outputs(tmp_path, b"")
+    (tmp_path / "carryover_b.bin").write_bytes(b"")
+    if reported is not None:
+        (tmp_path / "sbd_build_info.txt").write_text(f"integrals={reported}\n")
+    result = mod._read_files(
+        work_dir=tmp_path, norb=3, separate_beta=separate_beta, integrals=integrals
+    )
+    assert result.integrals == reported
+    if reported is None:
+        (warning,) = quiet_logger.warnings
+        assert "sbd_build_info.txt is missing" in warning
+        assert "its energy cannot be confirmed to be correct" in warning
+        assert "a -D_UHF binary built before the layout check" in warning
+        assert "Rebuild the driver from native/main.cc" in warning
+        assert "HPCProfileBlock executable" in warning
+    else:
+        assert quiet_logger.warnings == []
+
+
+def test_restricted_run_with_a_driver_built_before_the_check_warns_and_returns_none(
+    quiet_logger, monkeypatch, tmp_path
+):
+    # The whole restricted path with a driver that writes no build info: the run completes as
+    # before, with integrals=None and one warning.
+    async def fake_run_job_from_blocks(**kwargs):
+        write_outputs(kwargs["work_dir"], bytes([0b10100000]))
+        return SimpleNamespace(exit_status=0)
+
+    monkeypatch.setattr(mod, "run_job_from_blocks", fake_run_job_from_blocks)
+    monkeypatch.setattr(mod, "_run_sbd_inner", mod._run_sbd_inner.fn)  # no Prefect API
+    result = asyncio.run(
+        SBDSolverJob(root_dir=str(tmp_path)).run(
+            (np.array([0b011]), np.array([0b011])), np.eye(3), np.zeros((3,) * 4), 3, (2, 2)
+        )
+    )
+    assert result.energy == -1.25
+    assert result.integrals is None
+    assert len(quiet_logger.warnings) == 1
+    assert "cannot be confirmed as a restricted build" in quiet_logger.warnings[0]

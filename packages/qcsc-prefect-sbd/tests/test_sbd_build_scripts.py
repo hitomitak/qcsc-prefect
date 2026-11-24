@@ -11,6 +11,7 @@ import pytest
 
 NATIVE = Path(__file__).resolve().parents[1] / "native"
 SCRIPTS = ["build_sbd.sh", "build_sbd_fugaku.sh", "build_sbd_gpu.sh", "build_sbd_slurm.sh"]
+CPU_SCRIPTS = ["build_sbd.sh", "build_sbd_fugaku.sh", "build_sbd_slurm.sh"]
 
 
 def git(directory, *arguments):
@@ -37,6 +38,20 @@ def git(directory, *arguments):
 @pytest.mark.parametrize("script", SCRIPTS)
 @pytest.mark.parametrize("missing_revision", [False, True])
 def test_build_reused_checkout_at_requested_revision(tmp_path, script, missing_revision):
+    run_build(tmp_path, script, missing_revision=missing_revision)
+
+
+@pytest.mark.parametrize("script", CPU_SCRIPTS)
+@pytest.mark.parametrize("uhf", [False, True])
+def test_uhf_builds_the_unrestricted_driver_only_when_requested(tmp_path, script, uhf):
+    native, calls = run_build(tmp_path, script, uhf=uhf)
+    compile_call = next(call for call in calls if "-c" in call)
+    assert ("-D_UHF" in compile_call) == uhf
+    assert (native / "diag_uhf").exists() == uhf
+    assert (native / "diag").exists() == (not uhf)
+
+
+def run_build(tmp_path, script, *, missing_revision=False, uhf=None):
     remote = tmp_path / "remote"
     remote.mkdir()
     git(remote, "init", "-q")
@@ -71,8 +86,10 @@ def test_build_reused_checkout_at_requested_revision(tmp_path, script, missing_r
     tools.mkdir()
     (tools / "module").write_text("#!/bin/sh\nexit 0\n")
     compiler = tools / "compiler"
+    calls = tmp_path / "compiler_calls.txt"
     compiler.write_text(
         "#!/bin/sh\n"
+        f'echo "$*" >> "{calls}"\n'
         'while [ "$#" -gt 0 ]; do\n'
         '  if [ "$1" = "-o" ]; then shift; touch "$1"; fi\n'
         "  shift\n"
@@ -85,6 +102,9 @@ def test_build_reused_checkout_at_requested_revision(tmp_path, script, missing_r
     environment = dict(os.environ, PATH=f"{tools}:{os.environ['PATH']}", SBD_DIR=str(dependency))
     environment.pop("SBD_COMMIT", None)
     environment.pop("CCCOM", None)
+    environment.pop("UHF", None)
+    if uhf:
+        environment["UHF"] = "1"
     run = subprocess.run(
         ["bash", str(native / script)],
         cwd=tmp_path,
@@ -97,5 +117,7 @@ def test_build_reused_checkout_at_requested_revision(tmp_path, script, missing_r
     assert git(dependency, "rev-parse", "HEAD") == requested
     assert (dependency / "api.txt").read_text() == "current API\n"
     assert f"Using SBD commit: {requested}" in run.stdout
-    expected_binary = "diag-gpu" if script == "build_sbd_gpu.sh" else "diag"
-    assert (native / expected_binary).exists()
+    if uhf is None:
+        expected_binary = "diag-gpu" if script == "build_sbd_gpu.sh" else "diag"
+        assert (native / expected_binary).exists()
+    return native, [line.split() for line in calls.read_text().splitlines()]

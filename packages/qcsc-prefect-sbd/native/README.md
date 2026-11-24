@@ -32,11 +32,49 @@ without it the beta set is the alpha set. GPU builds (`-DSBD_THRUST` with a CUDA
 compiler) bind each rank to GPU `node-local rank % GPU count`, from `SLURM_LOCALID` or
 `OMPI_COMM_WORLD_LOCAL_RANK`, before `MPI_Init`.
 
+### Unrestricted (UHF) driver and the integral layout check
+
+`UHF=1` with a CPU build script (`build_sbd.sh`, `build_sbd_fugaku.sh`, `build_sbd_slurm.sh`)
+compiles `main.cc` with SBD's `-D_UHF` and writes `diag_uhf` next to `diag`. That build reads
+an interleaved spin-orbital FCIDUMP (alpha of spatial orbital p is index 2p+1, beta 2p+2) with
+separate alpha and beta integrals; the default build reads the restricted FCIDUMP.
+
+The two layouts cannot be told apart from the file contents alone (zero integrals are omitted,
+so even the largest index does not identify the layout), and a `-D_UHF` driver given a
+restricted file finishes with a wrong Hamiltonian. The driver therefore checks the header key
+`QCSC_INTEGRALS` against its build before any work and aborts with `[qcsc] ERROR: ...` on a
+mismatch:
+
+| FCIDUMP | `diag` (restricted) | `diag_uhf` (`-D_UHF`) |
+| --- | --- | --- |
+| no `QCSC_INTEGRALS` (all FCIDUMPs written before this check) | runs | aborts |
+| `QCSC_INTEGRALS=RESTRICTED` | runs | aborts |
+| `QCSC_INTEGRALS=SBD_UHF_INTERLEAVED` (`SBDSolverJob` unrestricted) | aborts | runs |
+| `IUHF=0` (MOLPRO's restricted flag) | as without `IUHF` | as without `IUHF` |
+| `IUHF` other than `0` (MOLPRO-style block UHF, not an SBD layout) | aborts | aborts |
+
+An index outside the layout's range also aborts. On success the driver writes
+`sbd_build_info.txt` (`integrals=RESTRICTED` or `integrals=SBD_UHF_INTERLEAVED`), which
+`SBDSolverJob` checks after the job.
+
+Drivers built before this check write no `sbd_build_info.txt`, and none of the aborts above
+apply to them. `SBDSolverJob` still accepts them for restricted input, with a warning and
+`SBDResult.integrals=None`, but cannot confirm the energy: a `-D_UHF` binary built before the
+check and registered as the restricted executable completes on a restricted FCIDUMP with a
+different Hamiltonian. Rebuild both drivers with the scripts here, and point the HPC profiles
+at the rebuilt binaries; see "Drivers built before the layout check" in
+[the package README](../README.md).
+
 After building the CPU executable, run them with:
 
 ```bash
 SBD_NATIVE_BINARY="$(realpath ./diag)" python -m pytest ../tests/test_sbd_native.py -q
+SBD_NATIVE_BINARY="$(realpath ./diag)" SBD_NATIVE_UHF_BINARY="$(realpath ./diag_uhf)" \
+  python -m pytest ../tests/test_sbd_native_uhf.py -q
 ```
+
+`test_sbd_native_uhf.py` compares the UHF driver's full-space energies for an open-shell and a
+broken-symmetry molecule with PySCF FCI, and checks the layout table above.
 
 The tests launch one and two MPI ranks locally, without a scheduler or QPU. CI builds
 the CPU driver with Open MPI and OpenBLAS and runs the same tests on Ubuntu. Fugaku's
@@ -50,6 +88,7 @@ The modified program generates the following output files:
 - `occ_b.txt`: Average occupancies of beta orbitals
 - `carryover.bin`: Carryover bitstrings in `uint8` format with big-endian ordering
 - `carryover_b.bin`: Beta carryover bitstrings in the same format, only with `--bdetfile`
+- `sbd_build_info.txt`: The integral layout of the build (`integrals=RESTRICTED` or `integrals=SBD_UHF_INTERLEAVED`)
 
 These files are consumed by the Prefect integration block to construct a corresponding Python data class.
 

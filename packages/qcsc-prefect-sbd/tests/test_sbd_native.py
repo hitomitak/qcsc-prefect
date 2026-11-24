@@ -34,7 +34,9 @@ def test_native_solver_energy_occupancies_and_carryover(tmp_path, monkeypatch, r
     h2 = np.zeros((norb,) * 4)
     determinants = np.array([1, 1 << (norb - 1)], dtype=np.int64)
     monkeypatch.setattr(
-        solver_job, "get_run_logger", lambda: SimpleNamespace(debug=lambda *args: None)
+        solver_job,
+        "get_run_logger",
+        lambda: SimpleNamespace(debug=lambda *args: None, warning=lambda *args: None),
     )
     solver_job._prep_files(
         work_dir=tmp_path,

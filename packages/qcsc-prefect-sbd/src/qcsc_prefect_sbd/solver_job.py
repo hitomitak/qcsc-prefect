@@ -16,6 +16,16 @@ from pydantic import Field
 from pyscf.tools import fcidump
 from qcsc_prefect_executor.from_blocks import run_job_from_blocks
 
+from .integrals import (
+    BUILD_INFO_FILE,
+    LAYOUTS,
+    RESTRICTED,
+    SBD_UHF_INTERLEAVED,
+    check_unrestricted_integrals,
+    read_build_info,
+    write_sbd_uhf_fcidump,
+)
+
 
 @dataclass(frozen=True)
 class SBDResult:
@@ -39,8 +49,17 @@ class SBDResult:
     carryover_bitstrings_b: np.ndarray | None = None
     """Beta carryover bitstrings, same layout as ``carryover_bitstrings``.
 
-    Set when the alpha and beta determinant sets differ. None for runs with one shared
-    set, where the beta carryover is the alpha carryover.
+    Set when the alpha and beta determinant sets differ, and always with unrestricted
+    integrals. None for runs with one shared set, where the beta carryover is the alpha
+    carryover.
+    """
+
+    integrals: str | None = None
+    """Integral layout the driver reported (``RESTRICTED`` or ``SBD_UHF_INTERLEAVED``).
+
+    None for a restricted driver built before the layout check, which reports nothing. Such
+    a result is not verified: a warning is logged, and its energy cannot be confirmed to be
+    correct (see the README section on drivers built before the check).
     """
 
     @property
@@ -104,9 +123,10 @@ def check_sbd_input(
 ) -> None:
     """Reject input that the SBD solver would silently treat differently from DICE.
 
-    SBD diagonalizes in the product of the alpha and beta determinant sets with
-    restricted (spin-free) integrals, so it solves closed-shell and restricted
-    open-shell (ROHF) problems. The sets may differ, and they necessarily differ when
+    SBD diagonalizes in the product of the alpha and beta determinant sets. With
+    restricted (spin-free) integrals it solves closed-shell and restricted open-shell
+    (ROHF) problems; a ``-D_UHF`` build takes separate alpha/beta integrals (UHF; see
+    ``SBDSolverJob.integrals``). The sets may differ, and they necessarily differ when
     ``nelec[0] != nelec[1]``. Each set must start with its Hartree-Fock determinant,
     ``(1 << nelec[0]) - 1`` for alpha and ``(1 << nelec[1]) - 1`` for beta. SBD has no
     total spin target, so ``spin_sq`` must be None.
@@ -172,8 +192,34 @@ def _prep_files(
     two_body_tensor: np.ndarray,
     norb: int,
     nelec: tuple[int, int],
+    beta_integrals: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
 ) -> None:
     logger = get_run_logger()
+
+    if beta_integrals is not None:
+        # Unrestricted: interleaved spin-orbital FCIDUMP for the -D_UHF binary, with alpha
+        # blocks one_body_tensor / two_body_tensor and beta blocks (h1_b, h2_ab, h2_bb). Both
+        # determinant files are always written, as the alpha and beta orbitals differ.
+        one_body_tensor_b, two_body_tensor_ab, two_body_tensor_bb = beta_integrals
+        logger.debug("Writing unrestricted fcidump.txt file.")
+        write_sbd_uhf_fcidump(
+            work_dir / "fcidump.txt",
+            h1_a=one_body_tensor,
+            h1_b=one_body_tensor_b,
+            h2_aa=two_body_tensor,
+            h2_ab=two_body_tensor_ab,
+            h2_bb=two_body_tensor_bb,
+            norb=norb,
+            nelec=tuple(int(n) for n in nelec),
+        )
+        logger.debug("Writing AlphaDets.bin and BetaDets.bin files.")
+        _write_dets_bin(
+            work_dir / "AlphaDets.bin", ci_strings[0], norb, spin="Alpha", num_elec=int(nelec[0])
+        )
+        _write_dets_bin(
+            work_dir / "BetaDets.bin", ci_strings[1], norb, spin="Beta", num_elec=int(nelec[1])
+        )
+        return
 
     # Write PySCF FCI dump file. A (n_alpha, n_beta) nelec writes MS2 = |n_alpha - n_beta|.
     logger.debug("Writing fcidump.txt file.")
@@ -213,13 +259,50 @@ def _read_carryover_bin(path: Path, norb: int) -> np.ndarray:
     return bits.astype(bool)
 
 
+def _check_build_info(work_dir: Path, expected: str) -> str | None:
+    """Compare the layout the driver reported with the one the input was written for.
+
+    The driver refuses a mismatched FCIDUMP itself; this also catches a driver built before
+    that check. Such a driver reports nothing: accepted with a warning for restricted input,
+    so existing restricted setups keep running, and rejected for unrestricted input, where it
+    cannot be told from a restricted build.
+    """
+    reported = read_build_info(work_dir)
+    if reported is None and expected == RESTRICTED:
+        get_run_logger().warning(
+            "The SBD binary did not report its integral layout (%s is missing in %s), so it "
+            "cannot be confirmed as a restricted build. The run completed, but its energy "
+            "cannot be confirmed to be correct: a -D_UHF binary built before the layout check "
+            "and registered for restricted integrals reads the restricted FCIDUMP as a "
+            "different Hamiltonian without an error. Rebuild the driver from native/main.cc "
+            "and check that the HPCProfileBlock executable points at the rebuilt binary. "
+            "SBDResult.integrals is None for this result.",
+            BUILD_INFO_FILE,
+            work_dir,
+        )
+    if reported is not None and reported != expected:
+        raise RuntimeError(
+            f"The SBD binary reported integral layout {reported}, but the input was written for "
+            f"{expected}. Point the HPCProfileBlock executable at a matching build."
+        )
+    if reported is None and expected == SBD_UHF_INTERLEAVED:
+        raise RuntimeError(
+            "The SBD binary did not report its integral layout (sbd_build_info.txt is missing), "
+            "so it cannot be confirmed as a -D_UHF build. Rebuild it from native/main.cc with "
+            "UHF=1."
+        )
+    return reported
+
+
 def _read_files(
     *,
     work_dir: Path,
     norb: int,
     separate_beta: bool = False,
+    integrals: str = "restricted",
 ) -> SBDResult:
     logger = get_run_logger()
+    reported = _check_build_info(work_dir, LAYOUTS[integrals])
     logger.debug("Reading occ_a.txt and occ_b.txt file.")
     occa = np.atleast_1d(np.loadtxt(work_dir / "occ_a.txt", dtype=np.float64))
     occb = np.atleast_1d(np.loadtxt(work_dir / "occ_b.txt", dtype=np.float64))
@@ -250,6 +333,7 @@ def _read_files(
         carryover_bitstrings_b=carryover_b,
         rdm1=None,
         rdm2=None,
+        integrals=reported,
     )
 
 
@@ -360,6 +444,15 @@ class SBDSolverJob(Block):
         title="Solver Mode",
         description="SBD execution mode.",
     )
+    integrals: Literal["restricted", "unrestricted"] = Field(
+        default="restricted",
+        title="Integrals",
+        description=(
+            "Integral layout of the SBD binary. 'restricted' for the default build; "
+            "'unrestricted' for a -D_UHF build (UHF=1 build script), which takes separate "
+            "alpha/beta integrals. run() rejects input of the other kind before any job."
+        ),
+    )
 
     async def run(
         self,
@@ -369,14 +462,45 @@ class SBDSolverJob(Block):
         norb: int,
         nelec: tuple[int, int],
         spin_sq: float | None = None,
+        *,
+        one_body_tensor_b: np.ndarray | None = None,
+        two_body_tensor_ab: np.ndarray | None = None,
+        two_body_tensor_bb: np.ndarray | None = None,
     ) -> SBDResult:
         """Run SBD solver job and return parsed outputs.
 
-        The arguments match ``DiceSHCISolverJob.run``. SBD solves closed-shell and
-        restricted open-shell problems; input it cannot solve raises ``ValueError``
-        instead of silently giving a different calculation; see ``check_sbd_input``.
+        The positional arguments match ``DiceSHCISolverJob.run``. With the default
+        ``integrals="restricted"`` SBD solves closed-shell and restricted open-shell
+        problems. With ``integrals="unrestricted"`` (a ``-D_UHF`` binary) pass the UHF
+        integrals: alpha blocks as ``one_body_tensor`` / ``two_body_tensor`` (h1_a, h2_aa)
+        and ``one_body_tensor_b`` (h1_b), ``two_body_tensor_ab`` ((aa|bb)) and
+        ``two_body_tensor_bb`` (h2_bb), all in chemist notation. Input the block cannot
+        solve raises ``ValueError`` before any job is submitted; see ``check_sbd_input``.
         """
+        beta = (one_body_tensor_b, two_body_tensor_ab, two_body_tensor_bb)
+        given = [tensor is not None for tensor in beta]
+        if any(given) and not all(given):
+            raise ValueError(
+                "Unrestricted input needs all of one_body_tensor_b, two_body_tensor_ab and "
+                "two_body_tensor_bb."
+            )
+        unrestricted = all(given)
+        if unrestricted != (self.integrals == "unrestricted"):
+            raise ValueError(
+                f"This SBDSolverJob has integrals={self.integrals!r}, but the input is "
+                f"{'unrestricted' if unrestricted else 'restricted'}. Use a block whose binary "
+                "matches the integrals (integrals='unrestricted' for a -D_UHF build)."
+            )
         check_sbd_input(ci_strings=ci_strings, nelec=nelec, spin_sq=spin_sq)
+        if unrestricted:
+            check_unrestricted_integrals(
+                h1_a=one_body_tensor,
+                h1_b=one_body_tensor_b,
+                h2_aa=two_body_tensor,
+                h2_ab=two_body_tensor_ab,
+                h2_bb=two_body_tensor_bb,
+                norb=norb,
+            )
         return await _run_sbd_inner(
             solver=self,
             ci_strings=ci_strings,
@@ -384,6 +508,7 @@ class SBDSolverJob(Block):
             two_body_tensor=two_body_tensor,
             norb=norb,
             nelec=nelec,
+            beta_integrals=beta if unrestricted else None,
         )
 
 
@@ -396,11 +521,13 @@ async def _run_sbd_inner(
     two_body_tensor: np.ndarray,
     norb: int,
     nelec: tuple[int, int],
+    beta_integrals: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
 ) -> SBDResult:
     base_work_dir = Path(solver.root_dir).expanduser().resolve()
     job_work_dir = _make_job_work_dir(base_work_dir)
     logger = get_run_logger()
-    separate_beta = _beta_differs(ci_strings)
+    # Unrestricted input always has its own beta determinant file.
+    separate_beta = beta_integrals is not None or _beta_differs(ci_strings)
 
     t_prep0 = time.perf_counter()
     _prep_files(
@@ -410,6 +537,7 @@ async def _run_sbd_inner(
         two_body_tensor=two_body_tensor,
         norb=norb,
         nelec=nelec,
+        beta_integrals=beta_integrals,
     )
     t_prep = time.perf_counter() - t_prep0
     input_bytes = _dir_size_bytes(job_work_dir)
@@ -448,4 +576,9 @@ async def _run_sbd_inner(
     if result.exit_status != 0:
         raise RuntimeError(f"SBDSolverJob failed: exit_status={result.exit_status}")
 
-    return _read_files(work_dir=job_work_dir, norb=norb, separate_beta=separate_beta)
+    return _read_files(
+        work_dir=job_work_dir,
+        norb=norb,
+        separate_beta=separate_beta,
+        integrals=solver.integrals,
+    )
