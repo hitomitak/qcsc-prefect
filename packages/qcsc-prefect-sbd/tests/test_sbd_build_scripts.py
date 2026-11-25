@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -73,6 +74,90 @@ def test_gpu_build_stops_when_the_wrapper_does_not_call_nvcpp(tmp_path):
     run = run_build(tmp_path, "build_sbd_gpu.sh", uhf=True, wrapper="g++", expect_failure=True)
     assert "'mpic++' calls 'g++', but CCFLAGS are NVIDIA HPC SDK flags" in run.stderr
     assert "Using SBD commit" not in run.stdout
+
+
+# A compiler whose object records the build (uhf or restricted) and whose link copies the
+# object. The UHF link waits until the restricted compile has finished, which is the order in
+# which a shared main.o makes the UHF driver link the restricted object.
+ORDERING_COMPILER = """#!/bin/sh
+[ "$1" = "-show" ] && exit 0
+compile=0; uhf=0; out=""; obj=""; prev=""
+for a in "$@"; do
+  case "$a" in -c) compile=1 ;; -D_UHF) uhf=1 ;; esac
+  if [ "$prev" = "-o" ]; then out="$a"; else case "$a" in *.o) obj="$a" ;; esac; fi
+  prev="$a"
+done
+kind=restricted; [ "$uhf" = 1 ] && kind=uhf
+if [ "$compile" = 1 ]; then
+  echo "$kind" > "$out"; touch "$SIGNALS/$kind-compiled"
+else
+  if [ "$kind" = uhf ]; then
+    i=0
+    while [ ! -e "$SIGNALS/restricted-compiled" ] && [ "$i" -lt 400 ]; do
+      sleep 0.05; i=$((i + 1))
+    done
+  fi
+  cp "$obj" "$out"
+fi
+"""
+
+
+def test_concurrent_gpu_builds_link_their_own_objects(tmp_path):
+    # UHF=1 and UHF=0 builds started together, in an order that a shared main.o would mix up.
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    git(remote, "init", "-q")
+    (remote / "api.txt").write_text("API\n")
+    git(remote, "add", "api.txt")
+    git(remote, "commit", "-qm", "API")
+    dependency = tmp_path / "dependency"
+    subprocess.run(["git", "clone", "-q", str(remote), str(dependency)], check=True)
+    native = tmp_path / "native"
+    native.mkdir()
+    shutil.copy(NATIVE / "build_sbd_gpu.sh", native / "build_sbd_gpu.sh")
+    shutil.copy(NATIVE / "main.cc", native / "main.cc")
+    (native / "SBD_REVISION").write_text(git(remote, "rev-parse", "HEAD") + "\n")
+    tools, signals = tmp_path / "bin", tmp_path / "signals"
+    tools.mkdir()
+    signals.mkdir()
+    (tools / "mpic++").write_text(ORDERING_COMPILER)
+    (tools / "mpic++").chmod(0o755)
+    environment = dict(
+        os.environ,
+        PATH=f"{tools}:{os.environ['PATH']}",
+        SBD_DIR=str(dependency),
+        SIGNALS=str(signals),
+    )
+    for name in ("SBD_COMMIT", "CCCOM", "UHF", "OMPI_CXX", "OMPI_CC", "WARNFLAGS"):
+        environment.pop(name, None)
+
+    def start(uhf):
+        return subprocess.Popen(
+            ["bash", str(native / "build_sbd_gpu.sh")],
+            env={**environment, "UHF": "1" if uhf else "0"},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+
+    first = start(uhf=True)
+    for _ in range(400):  # the UHF build has compiled; it now waits to link
+        if (signals / "uhf-compiled").exists():
+            break
+        time.sleep(0.05)
+    second = start(uhf=False)
+    outputs = [first.communicate(timeout=60)[0], second.communicate(timeout=60)[0]]
+    assert (first.returncode, second.returncode) == (0, 0), outputs
+    assert (native / "diag-gpu_uhf").read_text() == "uhf\n"
+    assert (native / "diag-gpu").read_text() == "restricted\n"
+    # Only the drivers are left in the native directory.
+    assert sorted(p.name for p in native.iterdir()) == [
+        "SBD_REVISION",
+        "build_sbd_gpu.sh",
+        "diag-gpu",
+        "diag-gpu_uhf",
+        "main.cc",
+    ]
 
 
 def run_build(

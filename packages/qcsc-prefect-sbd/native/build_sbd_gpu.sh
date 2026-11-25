@@ -67,13 +67,15 @@ fi
 git -C "$SBD_DIR" checkout --detach "$SBD_COMMIT"
 echo "Using SBD commit: $(git -C "$SBD_DIR" rev-parse HEAD)"
 
-# Clean previous build
-rm -f "$SCRIPT_DIR"/*.o "$SCRIPT_DIR/$OUTBIN"
-
-# Compile and link
-echo "$CCCOM $CCFLAGS $WARNFLAGS -c main.cc -o main.o -I$SBD_DIR/include"
-$CCCOM $CCFLAGS $WARNFLAGS -c main.cc -o main.o -I"$SBD_DIR/include"
-echo "$CCCOM $CCFLAGS $SYSLIB -o $OUTBIN main.o"
-$CCCOM $CCFLAGS $SYSLIB -o "$OUTBIN" main.o
+# Compile and link in a directory of this build only: builds of diag-gpu and diag-gpu_uhf can run
+# at the same time, and a shared main.o would let one link the other's object.
+rm -f "$SCRIPT_DIR/$OUTBIN"
+BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sbd-gpu-build.XXXXXX")"
+trap 'rm -rf "$BUILD_DIR"' EXIT
+echo "$CCCOM $CCFLAGS $WARNFLAGS -c main.cc -o $BUILD_DIR/main.o -I$SBD_DIR/include"
+$CCCOM $CCFLAGS $WARNFLAGS -c main.cc -o "$BUILD_DIR/main.o" -I"$SBD_DIR/include"
+echo "$CCCOM $CCFLAGS $SYSLIB -o $BUILD_DIR/$OUTBIN $BUILD_DIR/main.o"
+$CCCOM $CCFLAGS $SYSLIB -o "$BUILD_DIR/$OUTBIN" "$BUILD_DIR/main.o"
+mv -f "$BUILD_DIR/$OUTBIN" "$SCRIPT_DIR/$OUTBIN"
 
 echo "Build completed: $SCRIPT_DIR/$OUTBIN"
