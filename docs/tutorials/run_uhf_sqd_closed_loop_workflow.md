@@ -112,8 +112,8 @@ realpath diag_uhf
 The script fetches the pinned SBD revision if needed, compiles `main.cc` with `-D_UHF`, and ends
 with `Build completed: .../native/diag_uhf`. Without `UHF=1`, the same script builds the
 restricted `diag`; the two can live side by side. On Miyabi and Fugaku, use `build_sbd.sh` and
-`build_sbd_fugaku.sh` with `UHF=1`. GPU SBD is not supported for `uhf-sqd`: `build_sbd_gpu.sh`
-has no UHF build.
+`build_sbd_fugaku.sh` with `UHF=1`. GPU SBD is not supported for `uhf-sqd` yet: `UHF=1` with
+`build_sbd_gpu.sh` builds `diag-gpu_uhf`, but that driver is not validated.
 
 Record the absolute path of `diag_uhf`; it is the `sbd_executable` below.
 

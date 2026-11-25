@@ -30,7 +30,7 @@ them later, in [UHF_SQD_DEFERRED_FEATURES.md](UHF_SQD_DEFERRED_FEATURES.md).
 
 | | Status in this release |
 |---|---|
-| SBD solver | CPU `diag_uhf` only. GPU SBD is not supported: `build_sbd_gpu.sh` has no UHF build |
+| SBD solver | CPU `diag_uhf` only. GPU SBD is not supported yet: the GPU driver `diag-gpu_uhf` (`UHF=1` with `build_sbd_gpu.sh`) is not validated |
 | Quantum source | `random` only. Quantum devices (`qrmi`, `qfw` sources) are not supported |
 | HPC target | `local`: verified against the source. `slurm`: documented, not yet run end to end |
 | MPI ranks | One rank verified. Runs with more than one rank are not verified: their energies have not been compared with the one-rank result |

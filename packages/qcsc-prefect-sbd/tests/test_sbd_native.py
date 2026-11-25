@@ -2,6 +2,10 @@
 
 Set SBD_NATIVE_BINARY to a built diag executable to enable these tests. CI builds
 the pinned upstream revision first; normal Python-only installations can skip them.
+
+SBD_NATIVE_LAUNCHER (default ``mpiexec``) starts the driver with ``-n <ranks>``. The driver
+runs with SBD_NATIVE_OMP_THREADS OpenMP threads per rank, 1 by default; GPU builds need more,
+because they stop at startup with one thread.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ import pytest
 from qcsc_prefect_sbd import solver_job
 
 NATIVE_BINARY = os.environ.get("SBD_NATIVE_BINARY")
+OMP_THREADS = os.environ.get("SBD_NATIVE_OMP_THREADS") or "1"
 pytestmark = pytest.mark.skipif(
     not NATIVE_BINARY, reason="Set SBD_NATIVE_BINARY to test real SBD/MPI"
 )
@@ -52,7 +57,7 @@ def test_native_solver_energy_occupancies_and_carryover(tmp_path, monkeypatch, r
     )
     command = launcher + ["-n", str(ranks), str(Path(NATIVE_BINARY).resolve())]
     command += solver_job._build_solver_args(solver)
-    environment = dict(os.environ, OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1")
+    environment = dict(os.environ, OMP_NUM_THREADS=OMP_THREADS, OPENBLAS_NUM_THREADS="1")
     run = subprocess.run(
         command, cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=90
     )
