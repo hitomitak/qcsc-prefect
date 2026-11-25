@@ -32,8 +32,8 @@ them later, in [UHF_SQD_DEFERRED_FEATURES.md](UHF_SQD_DEFERRED_FEATURES.md).
 |---|---|
 | SBD solver | CPU `diag_uhf`. On ROQUO also `diag-gpu_uhf` with one GPU per solve ([uhf_sqd_blocks.roquo-gpu.example.toml](uhf_sqd_blocks.roquo-gpu.example.toml), checked on 2026-11-25). Several GPUs per solve and other GPU sites are not supported |
 | Quantum source | `random` only. Quantum devices (`qrmi`, `qfw` sources) are not supported |
-| HPC target | `local`: verified against the source. `slurm`: documented, not yet run end to end |
-| MPI ranks | One rank verified. Runs with more than one rank are not verified: their energies have not been compared with the one-rank result |
+| HPC target | `local`: verified against the source. `slurm`: run end to end on ROQUO with one GPU per solve (2026-11-25). The CPU Slurm procedure is documented but not yet run end to end |
+| MPI ranks | One rank verified, on CPUs and on one GPU. Runs with more than one rank are not verified: their energies have not been compared with the one-rank result |
 
 The device code paths are in the package: the compile hook, reset mitigation and the sample
 pool. They have not been run on hardware, and the sections that describe them say so.
