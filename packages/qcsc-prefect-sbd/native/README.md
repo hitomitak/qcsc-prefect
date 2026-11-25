@@ -184,12 +184,12 @@ salloc --account=<account> --partition=roquo --gpus-per-node=1 --time=00:30:00
 SBD_NATIVE_LAUNCHER="srun --gpus-per-node=1" SBD_NATIVE_OMP_THREADS=8 \
 SBD_NATIVE_BINARY="$(realpath diag-gpu)" SBD_NATIVE_UHF_BINARY="$(realpath diag-gpu_uhf)" \
   uv run --no-sync python -m pytest ../tests/test_sbd_native.py ../tests/test_sbd_native_uhf.py \
-  -q -k "not -2] and not [2-"
+  -q -k "not -2]"
 exit
 ```
 
-`-k` leaves out the two-rank cases: with one GPU, two ranks share it, and `diag-gpu` passes GPU
-buffers to MPI, which needs a CUDA-aware MPI.
+`-k "not -2]"` leaves out the two-rank cases (their test ids end in `-2]`): with one GPU, two
+ranks share it, and `diag-gpu` passes GPU buffers to MPI, which needs a CUDA-aware MPI.
 
 ## Building the Executable on Fugaku
 
