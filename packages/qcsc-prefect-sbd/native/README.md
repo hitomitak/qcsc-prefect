@@ -181,19 +181,44 @@ GPU.
 
 The native tests run the drivers under `SBD_NATIVE_LAUNCHER`, so the Python side can stay on a
 login node while the drivers run on a GPU node. GPU builds stop at startup with one OpenMP
-thread, so set `SBD_NATIVE_OMP_THREADS`. On ROQUO, from the login node:
+thread, so set `SBD_NATIVE_OMP_THREADS`.
+
+On ROQUO, the check of 2026-11-25 used a launcher like the one below. It starts the driver on the
+allocated GPU node, with the modules the driver was built with:
+
+```bash
+cat > ~/sbd-gpu-launch.sh <<'END'
+#!/bin/bash
+# SBD_NATIVE_LAUNCHER for one GPU: called as `sbd-gpu-launch.sh -n N driver args...`.
+[ "$1" = "-n" ] || { echo "usage: sbd-gpu-launch.sh -n N driver args..." >&2; exit 2; }
+ranks=$2; shift 2
+exec srun --mpi=pmix -n "$ranks" --gpus-per-node=1 --cpus-per-task="${SBD_NATIVE_OMP_THREADS:-8}" \
+  bash -c 'type module >/dev/null 2>&1 || source /etc/profile.d/lmod.sh 2>/dev/null \
+             || source /etc/profile.d/modules.sh 2>/dev/null
+           module load cuda/13.2 nvhpc/26.5 && module load hpcx/2.50
+           exec "$@"' bash "$@"
+END
+chmod +x ~/sbd-gpu-launch.sh
+```
+
+Then, from `packages/qcsc-prefect-sbd/native` on the login node:
 
 ```bash
 salloc --account=<account> --partition=roquo --gpus-per-node=1 --time=00:30:00
-SBD_NATIVE_LAUNCHER="srun --gpus-per-node=1" SBD_NATIVE_OMP_THREADS=8 \
+SBD_NATIVE_LAUNCHER=~/sbd-gpu-launch.sh SBD_NATIVE_OMP_THREADS=8 \
 SBD_NATIVE_BINARY="$(realpath diag-gpu)" SBD_NATIVE_UHF_BINARY="$(realpath diag-gpu_uhf)" \
   uv run --no-sync python -m pytest ../tests/test_sbd_native.py ../tests/test_sbd_native_uhf.py \
-  -q -k "not -2]"
+  -q -k "not -2]" --basetemp="$(git rev-parse --show-toplevel)/work/native-gpu-tests"
 exit
 ```
 
-`-k "not -2]"` leaves out the two-rank cases (their test ids end in `-2]`): with one GPU, two
-ranks share it, and `diag-gpu` passes GPU buffers to MPI, which needs a CUDA-aware MPI.
+- **`--basetemp`.** The tests write each driver's input (FCIDUMP and determinant files) to their
+  temporary directory, and the driver runs there, on the GPU node. pytest's default is under
+  `TMPDIR`, which can be local to the login node. `--basetemp` puts it on storage that the GPU
+  node sees, independent of `TMPDIR`. pytest empties this directory at each run, so give it one
+  of its own.
+- **`-k "not -2]"`.** It leaves out the two-rank cases, whose test ids end in `-2]`. With one GPU,
+  two ranks share it, and `diag-gpu` passes GPU buffers to MPI, which needs a CUDA-aware MPI.
 
 ## Building the Executable on Fugaku
 
