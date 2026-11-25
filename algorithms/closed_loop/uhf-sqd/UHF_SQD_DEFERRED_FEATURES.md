@@ -301,7 +301,8 @@ with `run_task.py`) turns several of these features on.
 - **Not in the first integration.** CPU only.
 - **Connected so far.** `packages/qcsc-prefect-sbd/native/build_sbd_gpu.sh` builds the 1-GPU
   `diag-gpu_uhf` with `UHF=1`, at the pinned `SBD_REVISION`, and points an Open MPI wrapper at
-  `nvc++`. It is not validated yet. `MPI=1` (multi-GPU) is still deferred.
+  `nvc++`. On ROQUO (2026-11-25) it agrees with the CPU driver within 2.1e-14 Eh on NH2 and H6, and
+  the NH2 flow runs with one GPU per solve. `MPI=1` (multi-GPU) is still deferred.
 - **Where to connect the rest later.**
   - `MPI=1` in the same script.
   - The integral-layout marker and the build-info check of `qcsc-prefect-sbd` apply unchanged.

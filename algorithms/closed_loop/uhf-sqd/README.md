@@ -30,7 +30,7 @@ them later, in [UHF_SQD_DEFERRED_FEATURES.md](UHF_SQD_DEFERRED_FEATURES.md).
 
 | | Status in this release |
 |---|---|
-| SBD solver | CPU `diag_uhf` only. GPU SBD is not supported yet: the GPU driver `diag-gpu_uhf` (`UHF=1` with `build_sbd_gpu.sh`) is not validated |
+| SBD solver | CPU `diag_uhf`. On ROQUO also `diag-gpu_uhf` with one GPU per solve ([uhf_sqd_blocks.roquo-gpu.example.toml](uhf_sqd_blocks.roquo-gpu.example.toml), checked on 2026-11-25). Several GPUs per solve and other GPU sites are not supported |
 | Quantum source | `random` only. Quantum devices (`qrmi`, `qfw` sources) are not supported |
 | HPC target | `local`: verified against the source. `slurm`: documented, not yet run end to end |
 | MPI ranks | One rank verified. Runs with more than one rank are not verified: their energies have not been compared with the one-rank result |

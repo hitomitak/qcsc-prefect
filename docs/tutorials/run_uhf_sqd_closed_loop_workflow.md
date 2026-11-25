@@ -2,7 +2,7 @@
 
 This tutorial runs `uhf-sqd`, the closed-loop SQD workflow on a broken-symmetry UHF (BS-UHF)
 reference. It runs on your workstation first, with a random quantum source, and then submits the
-SBD diagonalizations to a Slurm cluster.
+SBD diagonalizations to a Slurm cluster, on CPUs or on one GPU per solve on ROQUO.
 
 `uhf-sqd` is the unrestricted counterpart of the SBD closed loop (`sqd_de`). If you have run
 [Run SBD Closed-loop Workflow on Slurm](run_sbd_closed_loop_workflow_slurm.md), most steps will
@@ -10,11 +10,12 @@ look familiar. The differences are in the reference, the solver binary and the b
 
 > **Scope of this release**
 >
-> - **Supported:** the CPU SBD driver `diag_uhf` and the `random` quantum source.
-> - **Not supported:** GPU SBD builds and quantum devices. Step 7 describes the device path,
->   which has not been run on hardware.
-> - **Not yet verified:** the Slurm procedure of Step 6 end to end, and runs with more than one
->   MPI rank.
+> - **Supported:** the CPU SBD driver `diag_uhf` and the `random` quantum source. On ROQUO, the
+>   GPU driver `diag-gpu_uhf` with one GPU per solve (Step 7, checked on 2026-11-25).
+> - **Not supported:** other GPU setups (several GPUs per solve, other sites) and quantum devices.
+>   Step 8 describes the device path, which has not been run on hardware.
+> - **Not yet verified:** the CPU Slurm procedure of Step 6 end to end, and runs with more than
+>   one MPI rank.
 
 ## Prerequisites
 
@@ -23,7 +24,7 @@ look familiar. The differences are in the reference, the solver binary and the b
 - A running Prefect server, or Prefect Cloud, that your client is connected to. For a Slurm login
   node, see [How to Run and Access a Prefect Server on a Slurm Login Node](../howto/howto_setup_prefect_server_slurm.md).
 - An MPI C++ compiler and OpenBLAS, to build the CPU SBD driver.
-- For Step 6 only: a Slurm cluster where you can submit jobs.
+- For Step 6 only: a Slurm cluster where you can submit jobs. For Step 7: an account on ROQUO.
 
 ## 0. What changes from the SBD closed loop?
 
@@ -112,8 +113,8 @@ realpath diag_uhf
 The script fetches the pinned SBD revision if needed, compiles `main.cc` with `-D_UHF`, and ends
 with `Build completed: .../native/diag_uhf`. Without `UHF=1`, the same script builds the
 restricted `diag`; the two can live side by side. On Miyabi and Fugaku, use `build_sbd.sh` and
-`build_sbd_fugaku.sh` with `UHF=1`. GPU SBD is not supported for `uhf-sqd` yet: `UHF=1` with
-`build_sbd_gpu.sh` builds `diag-gpu_uhf`, but that driver is not validated.
+`build_sbd_fugaku.sh` with `UHF=1`. For ROQUO's GPUs, Step 7 builds `diag-gpu_uhf` with
+`build_sbd_gpu.sh`.
 
 Record the absolute path of `diag_uhf`; it is the `sbd_executable` below.
 
@@ -316,7 +317,77 @@ Each walker then submits its solves as Slurm jobs; follow them with `squeue -u "
 > the single-process result of Step 3. Compare them yourself before relying on the Slurm
 > results.
 
-### Step 7. Sample on a quantum device
+### Step 7. Run the solver on one GPU on ROQUO
+
+On ROQUO, each solve can run on one GB200 GPU. The flow runs on the login node, as in Step 6,
+and each solve is a one-GPU Slurm job (`hpc_target = "slurm"`).
+
+**Build `diag-gpu_uhf` on a compute node.** ROQUO's compute nodes are aarch64; its login node
+is x86_64. Follow "ROQUO" in
+[native/README.md](https://github.com/qiskit-community/qcsc-prefect/blob/main/packages/qcsc-prefect-sbd/native/README.md):
+
+```bash
+srun --account=<account> --partition=roquo --gpus-per-node=1 --time=01:00:00 --pty bash
+module load cuda/13.2 nvhpc/26.5 && module load hpcx/2.50
+export PATH=/opt/nvidia/hpc_sdk/Linux_aarch64/26.5/compilers/bin:$PATH
+cd packages/qcsc-prefect-sbd/native && UHF=1 bash build_sbd_gpu.sh   # -> diag-gpu_uhf
+exit
+```
+
+**Create the blocks** from
+[uhf_sqd_blocks.roquo-gpu.example.toml](https://github.com/qiskit-community/qcsc-prefect/blob/main/algorithms/closed_loop/uhf-sqd/uhf_sqd_blocks.roquo-gpu.example.toml).
+Copy it, then set `project` (your account), `root_dir` (under your home directory, which the
+compute nodes see) and `sbd_executable` (the absolute path of `diag-gpu_uhf`):
+
+```bash
+cp algorithms/closed_loop/uhf-sqd/uhf_sqd_blocks.roquo-gpu.example.toml uhf_sqd_roquo_gpu.toml
+uhf-sqd-create-blocks uhf_sqd_roquo_gpu.toml
+```
+
+The file sets:
+
+- the partition `roquo`, one GPU and `solver_mode = "gpu"`;
+- 36 OpenMP threads, because ROQUO gives a one-GPU job a quarter node (`[ROQUO-W003]` from
+  `sbatch`);
+- `srun --mpi=pmix`, and the modules the driver was built with;
+- block names of its own (solver block `sbd-uhf-solver-roquo-gpu`).
+
+The Davidson settings are the same loose defaults as on CPUs.
+
+**Run the flow** on the login node, with the solver block of this step. If the random source of
+Step 3 is in another Prefect workspace, create it here as in Step 3:
+
+```python
+from uhf_sqd.flow_params import FlowParameters
+from uhf_sqd.main import uhf_sqd_de
+
+energy = uhf_sqd_de(parameters=FlowParameters(
+    fcidump="/path/to/qcsc-prefect/algorithms/closed_loop/uhf-sqd/data/fcidump_NH2_STO3G.txt",
+    solver_block_ref="sbd_solver_job/sbd-uhf-solver-roquo-gpu",
+))
+```
+
+Each walker submits its solve as a Slurm job of one GPU. Each job's output begins with
+`[qcsc] integrals layout: SBD_UHF_INTERLEAVED`. The result is the same as on CPUs: about
+-54.8726 Eh for NH2.
+
+> **Checked on ROQUO, 2026-11-25** (branch `sbd-gpu-uhf`, SBD `95bf45a`, cuda 13.2, nvhpc 26.5,
+> hpcx 2.50, one rank per solve)
+>
+> - **The NH2 flow** above completed. Its 4 solves ran as 4 one-GPU jobs, about 36 s each
+>   including the queue. Its energy, -54.87256711207442, differs by 7e-15 Eh from the CPU run
+>   with the same settings.
+> - **Solver alone.** `diag-gpu_uhf` and the CPU `diag_uhf` were given the same integrals and
+>   determinants, with tight Davidson settings: 36 subspaces of NH2 and stretched H6, including
+>   both full spaces. The energies agree within 2.1e-14 Eh and the occupancies within 3.0e-14.
+> - **Native tests.** The one-rank cases of the native tests pass on one GPU: energies against
+>   FCI, occupancies, and the integral-layout checks.
+>
+> Not checked: several GPUs per solve, several ranks on one GPU, and larger molecules. Each
+> solve waits in the queue on its own; running the flow and its solves inside one allocation is
+> not supported yet.
+
+### Step 8. Sample on a quantum device
 
 > **Not supported in this release**
 >
@@ -339,7 +410,7 @@ uhf-sqd-create-blocks uhf_sqd_device.toml
 ```
 
 A file with only `[quantum_sources]` creates or updates the source Blocks and leaves the SBD
-blocks of Steps 3 and 6 unchanged. A `[solver]` table, even an empty one, is always processed:
+blocks of Steps 3, 6 and 7 unchanged. A `[solver]` table, even an empty one, is always processed:
 an empty one fails because the required settings are missing.
 
 Then run the flow with `quantum_source="uhf-sqd-device"`.
