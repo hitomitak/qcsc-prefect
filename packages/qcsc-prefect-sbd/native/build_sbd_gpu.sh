@@ -30,6 +30,7 @@ fi
 # The default flags are NVIDIA HPC SDK flags, so the MPI wrapper must call nvc++. On Miyabi-G it
 # does. An Open MPI wrapper that calls another compiler (on ROQUO, hpcx's mpic++ calls g++) is
 # pointed at nvc++ when nvc++ is on PATH; a wrapper that still calls another compiler stops here.
+backend=""
 if [[ "$CCFLAGS" == *"-gpu="* || "$CCFLAGS" == *"-cuda"* ]]; then
     if command -v nvc++ >/dev/null 2>&1; then
         export OMPI_CXX="${OMPI_CXX:-nvc++}"
@@ -40,6 +41,15 @@ if [[ "$CCFLAGS" == *"-gpu="* || "$CCFLAGS" == *"-cuda"* ]]; then
         echo "'$CCCOM' calls '$backend', but CCFLAGS are NVIDIA HPC SDK flags, which need nvc++." \
             "Load the NVIDIA HPC SDK so that nvc++ is on PATH." >&2
         exit 1
+    fi
+fi
+
+# nvc++ warns about unused variables in the SBD headers, and recommends nvcc for the <<<>>>
+# kernels that nvc++ -cuda builds. Neither affects the build; WARNFLAGS="" shows them again.
+if [[ -z "${WARNFLAGS+x}" ]]; then
+    WARNFLAGS=""
+    if [[ "$(basename "$backend")" == nvc++* ]]; then
+        WARNFLAGS="--diag_suppress declared_but_not_referenced,set_but_not_used,cuda_compile"
     fi
 fi
 
@@ -61,8 +71,8 @@ echo "Using SBD commit: $(git -C "$SBD_DIR" rev-parse HEAD)"
 rm -f "$SCRIPT_DIR"/*.o "$SCRIPT_DIR/$OUTBIN"
 
 # Compile and link
-echo "$CCCOM $CCFLAGS -c main.cc -o main.o -I$SBD_DIR/include"
-$CCCOM $CCFLAGS -c main.cc -o main.o -I"$SBD_DIR/include"
+echo "$CCCOM $CCFLAGS $WARNFLAGS -c main.cc -o main.o -I$SBD_DIR/include"
+$CCCOM $CCFLAGS $WARNFLAGS -c main.cc -o main.o -I"$SBD_DIR/include"
 echo "$CCCOM $CCFLAGS $SYSLIB -o $OUTBIN main.o"
 $CCCOM $CCFLAGS $SYSLIB -o "$OUTBIN" main.o
 

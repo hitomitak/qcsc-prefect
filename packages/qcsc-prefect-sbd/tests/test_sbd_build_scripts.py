@@ -50,6 +50,8 @@ def test_uhf_builds_the_unrestricted_driver_only_when_requested(tmp_path, script
     native, calls = run_build(tmp_path, script, uhf=uhf)
     compile_call = next(call for call in calls if "-c" in call)
     assert ("-D_UHF" in compile_call) == uhf
+    # The recording compiler is not nvc++, so no nvc++ option is added.
+    assert "--diag_suppress" not in compile_call
     restricted, unrestricted = DRIVERS[script]
     assert (native / unrestricted).exists() == uhf
     assert (native / restricted).exists() == (not uhf)
@@ -62,6 +64,8 @@ def test_gpu_build_points_an_open_mpi_wrapper_at_nvcpp(tmp_path):
     wrapper_calls = [call for call in calls if call[0].startswith("OMPI_CXX=")]
     assert [call[0] for call in wrapper_calls] == ["OMPI_CXX=nvc++"] * 2  # compile and link
     assert "-c" in wrapper_calls[0]
+    # With nvc++ behind the wrapper, the harmless nvc++ warnings are suppressed.
+    assert "--diag_suppress" in wrapper_calls[0]
     assert (native / "diag-gpu_uhf").exists()
 
 

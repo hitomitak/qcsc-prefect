@@ -170,7 +170,8 @@ UHF=1 bash build_sbd_gpu.sh      # diag-gpu_uhf
 ```
 
 `hpcx/2.50`'s `mpic++` calls `g++` by default; with `nvc++` on `PATH` the script points it at
-`nvc++`. These are the steps of the UHF-SQD source workflow, which built `diag-gpu_uhf` this way
+`nvc++`. With `nvc++`, the script suppresses its harmless warnings about the SBD headers (unused
+variables, and `cuda_compile`, which recommends nvcc); `WARNFLAGS=""` shows them. These are the steps of the UHF-SQD source workflow, which built `diag-gpu_uhf` this way
 on ROQUO. They are not yet checked with this repository.
 
 ### Running the native tests on GPUs
