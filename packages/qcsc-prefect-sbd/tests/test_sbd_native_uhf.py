@@ -283,8 +283,10 @@ def test_restricted_driver_reads_a_restricted_fcidump_with_iuhf_0(tmp_path):
         assert run.returncode == 0, run.stdout + run.stderr
         result = solver_job._read_files(work_dir=work_dir, norb=p.norb, separate_beta=True)
         assert result.integrals == "RESTRICTED"
-        energies[value] = (work_dir / "davidson_energy.txt").read_bytes()
-    assert energies["0"] == energies[None]
+        energies[value] = result.energy
+    # Not byte for byte: a GPU build with several threads gives different last digits from run
+    # to run (1e-14 on ROQUO). A different Hamiltonian would move the energy far more than 1e-10.
+    assert energies["0"] == pytest.approx(energies[None], abs=1e-10)
 
 
 def test_uhf_driver_still_refuses_a_restricted_fcidump_with_iuhf_0(tmp_path):
