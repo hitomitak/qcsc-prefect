@@ -24,6 +24,10 @@ dependencies = [
     "numpy",
     "prefect",
     "prefect-qiskit",
+    # prefect-qiskit 0.2.1 puts cachetools.cached on a pydantic Block method. cachetools 8 returns
+    # a non-function there, and pydantic then refuses the class on import. prefect 3.9.5 allows
+    # cachetools 8. Remove this bound once prefect-qiskit works with it.
+    "cachetools<8",
     "pydantic",
     "pydantic_numpy",
     "qiskit",
