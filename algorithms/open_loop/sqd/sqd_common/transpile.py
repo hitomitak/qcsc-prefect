@@ -2,7 +2,7 @@
 
 This module imports only Qiskit and qiskit-ibm-runtime. The QRMI worker loads
 ``transpile_for_target`` on the compute node, which therefore needs neither
-ffsim nor Prefect-Qiskit nor the rest of the workflow.
+ffsim nor the rest of the workflow.
 """
 
 from __future__ import annotations

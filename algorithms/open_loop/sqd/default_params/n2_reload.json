@@ -10,7 +10,6 @@
   },
   "sampling": {
     "quantum_source": "real-device",
-    "runner_name": "ibm-runner",
     "qiskit_runtime_job_id": "YOUR_QISKIT_RUNTIME_JOB_ID"
   },
   "sqd": {

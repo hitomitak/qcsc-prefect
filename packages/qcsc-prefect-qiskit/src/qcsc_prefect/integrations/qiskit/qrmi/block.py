@@ -14,6 +14,7 @@ from prefect.types import SecretDict
 from pydantic import ConfigDict, Field, ValidationInfo, create_model, field_validator
 
 from qiskit import QuantumCircuit
+from qiskit.primitives import PrimitiveResult
 
 from .config_file import API_KEY_SETTING, config_path, crn_region, read_config
 from .runtime import DEFAULT_TRANSPILER, PreparedCircuit, QrmiRuntime
@@ -311,6 +312,48 @@ class QrmiRuntimeBlock(Block):
             "qcsc-qrmi refresh."
         )
 
+    def iqp_resource_config(self) -> dict[str, str]:
+        """QRMI settings for IBM Quantum from this host: the fields and this host's API key.
+
+        ``scheduler="iqp"`` samples with them. Reloading a finished job by its ID uses them
+        with either scheduler, so the block of a Slurm run can read an IQP job too.
+
+        Raises:
+            ValueError: If this host has no API key.
+        """
+        extra = self.resource_config.get_secret_value() if self.resource_config else {}
+        # A legacy block's resource_config keeps its endpoints and key; a changed
+        # field still wins.
+        config = {**self.qrmi_settings(), **extra}
+        if self.endpoint != DEFAULT_ENDPOINT or self.instance or self.service_crn:
+            config["QRMI_IBM_QCS_ENDPOINT"] = self.api_endpoint()
+        if self.iam_endpoint != DEFAULT_IAM_ENDPOINT:
+            config["QRMI_IBM_QCS_IAM_ENDPOINT"] = self.iam_endpoint
+        if self.crn():
+            config["QRMI_IBM_QCS_SERVICE_CRN"] = self.crn()
+        # qrmi_config.json, then the environment, then a legacy resource_config.
+        key = self.api_key()
+        if key:
+            config[API_KEY_SETTING] = key
+        # QRMI's IQP path submits jobs without a session.
+        config.pop("QRMI_IBM_QCS_SESSION_MODE", None)
+        if not config.get(API_KEY_SETTING):
+            raise ValueError(
+                f"IBM Quantum through QRMI on this host needs an API key: run qcsc-qrmi login "
+                f"(it writes {config_path()}), or set {API_KEY_SETTING}."
+            )
+        return config
+
+    async def aload_job_result(self, job_id: str) -> PrimitiveResult:
+        """The result of the finished IBM Quantum job ``job_id``, read through QRMI.
+
+        The job is read with this block's instance and backend and this host's API key
+        (``iqp_resource_config``), whatever the scheduler. It is never stopped.
+        """
+        from .iqp import load_iqp_job
+
+        return await load_iqp_job(self.resource, self.iqp_resource_config(), job_id)
+
     def get_runtime(
         self,
         prepare: Callable[[QuantumCircuit], PreparedCircuit] | None = None,
@@ -319,27 +362,7 @@ class QrmiRuntimeBlock(Block):
         config = None
         submit_settings = None
         if self.scheduler == "iqp":
-            extra = self.resource_config.get_secret_value() if self.resource_config else {}
-            # A legacy block's resource_config keeps its endpoints and key; a changed
-            # field still wins.
-            config = {**self.qrmi_settings(), **extra}
-            if self.endpoint != DEFAULT_ENDPOINT or self.instance or self.service_crn:
-                config["QRMI_IBM_QCS_ENDPOINT"] = self.api_endpoint()
-            if self.iam_endpoint != DEFAULT_IAM_ENDPOINT:
-                config["QRMI_IBM_QCS_IAM_ENDPOINT"] = self.iam_endpoint
-            if self.crn():
-                config["QRMI_IBM_QCS_SERVICE_CRN"] = self.crn()
-            # qrmi_config.json, then the environment, then a legacy resource_config.
-            key = self.api_key()
-            if key:
-                config[API_KEY_SETTING] = key
-            # QRMI's IQP path submits jobs without a session.
-            config.pop("QRMI_IBM_QCS_SESSION_MODE", None)
-            if not config.get(API_KEY_SETTING):
-                raise ValueError(
-                    f"scheduler 'iqp' needs an API key: run qcsc-qrmi login (it writes "
-                    f"{config_path()}), or set {API_KEY_SETTING}."
-                )
+            config = self.iqp_resource_config()
         else:
             submit_settings = self.qrmi_settings()
         return QrmiRuntime(

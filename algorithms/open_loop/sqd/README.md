@@ -75,7 +75,7 @@ and fields in this order, following the Qiskit Patterns stages:
 | --- | --- |
 | `molecule` | `{atom, basis, symmetry}` or `{fcidump_file}`, plus `spin_sq` (number or `null`, default `null`) |
 | `circuit` | `n_lucj_layers` (1), `compress` (on), `compress_maxiter` (50), `qpu_topology` (`heavy-hex`) |
-| `sampling` | `quantum_source`, `shots` (100000), `runtime_block_name`, `random_seed`, `qrmi_result_dir`, `qiskit_runtime_job_id`, `runner_name` (reload only) |
+| `sampling` | `quantum_source`, `shots` (100000), `runtime_block_name`, `random_seed`, `qrmi_result_dir`, `qiskit_runtime_job_id`, `runner_name` (deprecated, ignored) |
 | `sqd` | `subspace_dim` (1000000), `num_batches` (4), `max_iterations` (5), `carryover_fraction` (0.5), `checkpoint` (on), `resume_checkpoint` |
 | `advanced_block_name` | Advanced SQD Settings block, default `sqd-advanced-settings` |
 | `solver_block_ref` | Solver Block Override, empty by default: `<block type slug>/<block name>` to run with another solver block than the advanced block names |
@@ -188,8 +188,11 @@ with the `pip install` command to run.
   - For `scheduler = "slurm"`, copy its `qrmi_result_dir` into
     `sampling.qrmi_result_dir` of a new run.
   - For `scheduler = "iqp"`, copy its `qiskit_runtime_job_id` into
-    `sampling.qiskit_runtime_job_id`. The job is read with the credentials of the
-    IBM `QuantumRuntime` block named by `sampling.runner_name` (default `ibm-runner`).
+    `sampling.qiskit_runtime_job_id`. The job is read through QRMI, with the instance
+    of the QRMI Runtime Block (`sampling.runtime_block_name`, whatever its scheduler)
+    and this host's API key from `qcsc-qrmi login`. QRMI must be installed in the
+    workflow process for this (`pip install "qrmi[ibm]"`, Linux only).
+    `sampling.runner_name` is deprecated and ignored.
 
   The new run then loads those samples instead of sampling, so you can change
   `sqd` (for example `subspace_dim`) or the solver without QPU time. The reload
@@ -433,8 +436,8 @@ runs depends on the block's scheduler:
 - `scheduler = "slurm"`: on the compute node, inside a Slurm job that holds the QPU.
   The Python that runs the QRMI worker needs QRMI and its `task_runner`,
   `qcsc-prefect-qiskit` (the worker, which imports Prefect), and this package from the
-  same revision. The hook imports only Qiskit and qiskit-ibm-runtime, so ffsim,
-  Prefect-Qiskit and the solvers are not needed there. Install them into that Python,
+  same revision. The hook imports only Qiskit and qiskit-ibm-runtime, so ffsim
+  and the solvers are not needed there. Install them into that Python,
   `~/venv/qcsc-node` in [Python environments](#python-environments), check the
   imports, and set its path as the top-level `python_executable`. If the QRMI worker
   environment already has `qcsc-prefect-qiskit`, only the last three commands are
@@ -500,8 +503,8 @@ Run the tests in `algorithms/open_loop/sqd/tests` from the repository root:
 uv run pytest algorithms/open_loop/sqd/tests
 ```
 
-Tests skip when their dependencies are missing. The flow tests need `ffsim`,
-`prefect-qiskit` and `qcsc_workflow_utility`; the fulqrum comparison needs a fulqrum
+Tests skip when their dependencies are missing. The flow tests need `ffsim` and
+`qcsc_workflow_utility`; the fulqrum comparison needs a fulqrum
 build. `test_sqd_flow.py` runs the flow with each solver stand-in.
 `test_sqd_common_flow.py` checks that each stage receives the exact object the
 previous stage returned, which is what the Prefect graph arrows depend on.

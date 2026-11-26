@@ -200,7 +200,7 @@ async def run_sqd_pattern(parameters: FlowParameters, artifact_key: str) -> floa
     elif sampling.qiskit_runtime_job_id is not None:
         bool_array = await load_runtime_job(
             job_id=sampling.qiskit_runtime_job_id,
-            runner_name=sampling.runner_name,
+            runtime_block_name=sampling.runtime_block_name,
             use_reset_mitigation=advanced.use_reset_mitigation,
         )
     else:

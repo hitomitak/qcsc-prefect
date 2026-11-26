@@ -12,7 +12,6 @@ from pathlib import Path
 import numpy as np
 from prefect import get_run_logger, task
 from prefect.artifacts import create_table_artifact
-from prefect_qiskit.runtime import QuantumRuntime
 from qiskit.primitives import PrimitiveResult
 from qiskit.primitives.containers import BitArray
 from qiskit_addon_sqd.counts import generate_bit_array_uniform
@@ -94,16 +93,6 @@ async def record_sampling_source(*, bool_array: np.ndarray, shots: int, **source
             "qrmi_result_dir (Slurm) into the Sampling parameters of a new run to reuse them."
         ),
     )
-
-
-async def _load_runtime(runner_name: str) -> QuantumRuntime:
-    try:
-        return await QuantumRuntime.load(runner_name)
-    except ValueError as exc:
-        raise RuntimeError(
-            f"QuantumRuntime block '{runner_name}' is not defined. It is needed only to "
-            "reload an IBM Quantum job by qiskit_runtime_job_id."
-        ) from exc
 
 
 async def load_qrmi_block(block_name: str):
@@ -254,30 +243,34 @@ async def quantum_sampling(
 )
 async def load_runtime_job(
     job_id: str,
-    runner_name: str,
+    runtime_block_name: str,
     use_reset_mitigation: bool,
 ) -> np.ndarray:
-    """Load the samples of a finished IBM Quantum Runtime job.
+    """Load the samples of a finished IBM Quantum job, through QRMI.
 
     Args:
-        job_id: Qiskit Runtime job ID.
-        runner_name: QuantumRuntime block whose credentials can read the job.
+        job_id: IBM Quantum job ID, for example the ``qiskit_runtime_job_id`` of an IQP run.
+        runtime_block_name: QrmiRuntimeBlock whose instance reads the job, with this host's
+            API key. Its scheduler does not matter.
         use_reset_mitigation: Whether the job was sampled with reset mitigation.
 
     Returns:
         Sampled bitstrings as a 2D bool array.
     """
     logger = get_run_logger()
-    runtime = await _load_runtime(runner_name)
-    logger.info("Loading samples from Qiskit Runtime job %s.", job_id)
-    client = runtime.credentials.get_client()
-    pub_result = await client.get_primitive_result(job_id=job_id)
+    block = await load_qrmi_block(runtime_block_name)
+    logger.info(
+        "Loading samples from IBM Quantum job %s through QRMI (block %s).",
+        job_id,
+        runtime_block_name,
+    )
+    pub_result = await block.aload_job_result(job_id)
     bool_array, num_shots = extract_bool_array(pub_result, use_reset_mitigation)
     await record_sampling_source(
         bool_array=bool_array,
         shots=num_shots,
-        source="ibm-runtime (reloaded)",
-        resource=runtime.resource_name,
+        source="qrmi-iqp (reloaded)",
+        resource=block.resource,
         qiskit_runtime_job_id=job_id,
     )
     return bool_array

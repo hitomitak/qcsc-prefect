@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from qrmi_stubs import QrmiBlockStub
 
-for _mod in ("ffsim", "prefect_qiskit", "pydantic_numpy", "pyscf", "qiskit_addon_sqd"):
+for _mod in ("ffsim", "pydantic_numpy", "pyscf", "qiskit_addon_sqd"):
     pytest.importorskip(_mod)
 
 import qcsc_workflow_utility.chem as chem  # noqa: E402
@@ -73,7 +73,7 @@ def test_flow_parameters_defaults():
     assert params.sampling.quantum_source == "real-device"
     assert params.sampling.shots == 100_000
     assert params.sampling.runtime_block_name == "qrmi-runtime"
-    assert params.sampling.runner_name == "ibm-runner"
+    assert params.sampling.runner_name is None
     assert params.advanced_block_name == "sqd-advanced-settings"
     assert params.solver_block_ref is None
     defaults = advanced_mod.AdvancedSettings()
@@ -514,33 +514,38 @@ def test_missing_runtime_block_explains_random_fallback(monkeypatch, lih):
 
 
 @pytest.mark.parametrize("reset", [False, True])
-def test_load_runtime_job_reads_the_job_result(monkeypatch, offline, reset):
+def test_load_runtime_job_reads_the_job_through_the_qrmi_block(monkeypatch, offline, reset):
     seen = []
 
-    class Client:
-        async def get_primitive_result(self, job_id):
+    class Block:
+        resource = "ibm_test"
+
+        async def aload_job_result(self, job_id):
             seen.append(job_id)
             return sample_result(reset)
 
-    runtime = SimpleNamespace(
-        resource_name="ibm_test", credentials=SimpleNamespace(get_client=lambda: Client())
-    )
-
     async def load(name):
-        assert name == "ibm-runner"
-        return runtime
+        assert name == "qrmi-runtime"
+        return Block()
 
-    monkeypatch.setattr(sampling.QuantumRuntime, "load", staticmethod(load))
+    monkeypatch.setattr(sampling, "load_qrmi_block", load)
     bool_array = asyncio.run(
-        sampling.load_runtime_job.fn("d123", "ibm-runner", use_reset_mitigation=reset)
+        sampling.load_runtime_job.fn("d123", "qrmi-runtime", use_reset_mitigation=reset)
     )
     assert seen == ["d123"]
     assert len(bool_array) == (2 if reset else 4)
     row = offline[0]["table"][0]
+    assert row["source"] == "qrmi-iqp (reloaded)" and row["resource"] == "ibm_test"
     assert row["qiskit_runtime_job_id"] == "d123" and row["shots"] == 4
     assert row["shots_kept"] == len(bool_array)
     # A reload builds no circuit, so it records no topology.
     assert row["qpu_topology"] is None
+
+
+def test_runner_name_is_deprecated_and_ignored():
+    with pytest.warns(FutureWarning, match="runner_name is deprecated and ignored"):
+        params = flow_params.SamplingParameters(qiskit_runtime_job_id="d7", runner_name="r")
+    assert params.runtime_block_name == "qrmi-runtime"
 
 
 def _qrmi_job_dir(tmp_path, reset, schema=2):

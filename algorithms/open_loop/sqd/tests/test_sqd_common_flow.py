@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 from qrmi_stubs import QrmiBlockStub
 
-for _mod in ("ffsim", "prefect_qiskit", "pydantic_numpy", "pyscf", "qiskit_addon_sqd"):
+for _mod in ("ffsim", "pydantic_numpy", "pyscf", "qiskit_addon_sqd"):
     pytest.importorskip(_mod)
 
 from sqd_common import flow, sampling, solvers, topology  # noqa: E402
@@ -226,9 +226,9 @@ def test_random_source_skips_optimize_and_execute(stages):
     "sampling, stage, expected",
     [
         (
-            {"qiskit_runtime_job_id": "d123", "runner_name": "r"},
+            {"qiskit_runtime_job_id": "d123", "runtime_block_name": "qrmi-iqp"},
             "load_runtime_job",
-            {"job_id": "d123", "runner_name": "r"},
+            {"job_id": "d123", "runtime_block_name": "qrmi-iqp"},
         ),
         ({"qrmi_result_dir": "/jobs/abc"}, "load_qrmi_result", {"work_dir": "/jobs/abc"}),
     ],

@@ -5,14 +5,14 @@ deployment's run form in the Prefect UI shows every setting of a run in one
 place, grouped by the Qiskit Patterns stage it controls.
 """
 
+import warnings
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-# QrmiRuntimeBlock that samples, and the IBM QuantumRuntime block that reloads a job.
+# QrmiRuntimeBlock that samples, and that reloads an IBM Quantum job by its ID.
 DEFAULT_QRMI_BLOCK_NAME = "qrmi-runtime"
-DEFAULT_RUNTIME_BLOCK_NAME = "ibm-runner"
 DEFAULT_SOLVER_BLOCK_REF = "fulqrum_solver_job/sqd-fulqrum-solver"
 DEFAULT_ADVANCED_BLOCK_NAME = "sqd-advanced-settings"
 # Run-form fields moved to the Advanced SQD Settings block, with their last run-form defaults.
@@ -256,21 +256,22 @@ class SamplingParameters(BaseModel):
         title="QRMI Runtime Block",
         json_schema_extra=_at(2),
     )
-    runner_name: str = Field(
-        default=DEFAULT_RUNTIME_BLOCK_NAME,
+    runner_name: str | None = Field(
+        default=None,
         description=(
-            "IBM QuantumRuntime block whose credentials read the job of Load from Qiskit "
-            "Runtime Job ID. Not used for sampling."
+            "Deprecated and ignored: Load from Qiskit Runtime Job ID now reads the job "
+            "through the QRMI Runtime Block. To be removed in the next release."
         ),
-        title="Quantum Runtime Block (reload)",
+        title="Quantum Runtime Block (reload, deprecated)",
         json_schema_extra=_at(6),
     )
     qiskit_runtime_job_id: str | None = Field(
         default=None,
         description=(
             "Load the samples of a finished IBM Quantum job (for example the job_id of an "
-            "IQP run in the sqd-sampling-source artifact) instead of sampling. Uses the "
-            "credentials of the Quantum Runtime Block (reload)."
+            "IQP run in the sqd-sampling-source artifact) instead of sampling. The job is "
+            "read through QRMI with the instance of the QRMI Runtime Block, whatever its "
+            "scheduler, and this host's API key."
         ),
         title="Load from Qiskit Runtime Job ID",
         json_schema_extra=_at(5),
@@ -297,6 +298,14 @@ class SamplingParameters(BaseModel):
             raise ValueError("Set at most one of qiskit_runtime_job_id and qrmi_result_dir.")
         if self.quantum_source == "random" and reloads:
             raise ValueError(f"Quantum Source 'random' cannot be combined with {reloads[0]}.")
+        if self.runner_name is not None:
+            warnings.warn(
+                "sampling.runner_name is deprecated and ignored: a job is reloaded through "
+                "the QRMI Runtime Block (sampling.runtime_block_name). Remove runner_name; "
+                "it will be removed in the next release.",
+                FutureWarning,
+                stacklevel=2,
+            )
         return self
 
     @model_validator(mode="before")

@@ -19,7 +19,6 @@ from qrmi_stubs import QrmiBlockStub
 np = pytest.importorskip("numpy")
 pytest.importorskip("ffsim")
 pytest.importorskip("pydantic_numpy")
-pytest.importorskip("prefect_qiskit")
 pytest.importorskip("qcsc_prefect.integrations.qiskit.qrmi")
 
 from pyscf import lib  # noqa: E402
@@ -259,9 +258,6 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
         (work_dir / "result.json").write_text(json.dumps(sample_result(reset), cls=RuntimeEncoder))
         return SimpleNamespace(job_id="73", state="COMPLETED", exit_status=0)
 
-    async def reject_ibm(*args, **kwargs):
-        pytest.fail("QRMI sampling must not load an IBM Runtime block")
-
     async def load_block(name):
         assert name == "qrmi-runtime"
         return QrmiBlockStub(slurm_runtime(tmp_path))
@@ -285,7 +281,6 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
     monkeypatch.setattr(sampling, "build_lucj_circuit", lucj.build_lucj_circuit.fn)
     monkeypatch.setattr(sampling, "create_table_artifact", artifact)
     monkeypatch.setattr(postprocess, "create_table_artifact", artifact)
-    monkeypatch.setattr(sampling.QuantumRuntime, "load", reject_ibm)
     monkeypatch.setattr(sampling, "load_qrmi_block", load_block)
     monkeypatch.setattr(postprocess.flow_run, "get_id", lambda: "run")
     sampling_params = SamplingParameters(shots=4)
