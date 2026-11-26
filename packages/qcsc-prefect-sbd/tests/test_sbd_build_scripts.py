@@ -102,7 +102,8 @@ fi
 """
 
 
-def test_concurrent_gpu_builds_link_their_own_objects(tmp_path):
+@pytest.mark.parametrize("script", SCRIPTS)
+def test_concurrent_builds_link_their_own_objects(tmp_path, script):
     # UHF=1 and UHF=0 builds started together, in an order that a shared main.o would mix up.
     remote = tmp_path / "remote"
     remote.mkdir()
@@ -114,14 +115,18 @@ def test_concurrent_gpu_builds_link_their_own_objects(tmp_path):
     subprocess.run(["git", "clone", "-q", str(remote), str(dependency)], check=True)
     native = tmp_path / "native"
     native.mkdir()
-    shutil.copy(NATIVE / "build_sbd_gpu.sh", native / "build_sbd_gpu.sh")
+    shutil.copy(NATIVE / script, native / script)
     shutil.copy(NATIVE / "main.cc", native / "main.cc")
     (native / "SBD_REVISION").write_text(git(remote, "rev-parse", "HEAD") + "\n")
     tools, signals = tmp_path / "bin", tmp_path / "signals"
     tools.mkdir()
     signals.mkdir()
-    (tools / "mpic++").write_text(ORDERING_COMPILER)
-    (tools / "mpic++").chmod(0o755)
+    (tools / "module").write_text("#!/bin/sh\nexit 0\n")
+    (tools / "module").chmod(0o755)
+    (tools / "compiler").write_text(ORDERING_COMPILER)
+    (tools / "compiler").chmod(0o755)
+    for name in ("mpiicpc", "mpiicpx", "mpiFCCpx", "mpic++", "mpicxx"):
+        (tools / name).symlink_to(tools / "compiler")
     environment = dict(
         os.environ,
         PATH=f"{tools}:{os.environ['PATH']}",
@@ -133,7 +138,7 @@ def test_concurrent_gpu_builds_link_their_own_objects(tmp_path):
 
     def start(uhf):
         return subprocess.Popen(
-            ["bash", str(native / "build_sbd_gpu.sh")],
+            ["bash", str(native / script)],
             env={**environment, "UHF": "1" if uhf else "0"},
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -148,16 +153,13 @@ def test_concurrent_gpu_builds_link_their_own_objects(tmp_path):
     second = start(uhf=False)
     outputs = [first.communicate(timeout=60)[0], second.communicate(timeout=60)[0]]
     assert (first.returncode, second.returncode) == (0, 0), outputs
-    assert (native / "diag-gpu_uhf").read_text() == "uhf\n"
-    assert (native / "diag-gpu").read_text() == "restricted\n"
+    restricted, unrestricted = DRIVERS[script]
+    assert (native / unrestricted).read_text() == "uhf\n"
+    assert (native / restricted).read_text() == "restricted\n"
     # Only the drivers are left in the native directory.
-    assert sorted(p.name for p in native.iterdir()) == [
-        "SBD_REVISION",
-        "build_sbd_gpu.sh",
-        "diag-gpu",
-        "diag-gpu_uhf",
-        "main.cc",
-    ]
+    assert sorted(p.name for p in native.iterdir()) == sorted(
+        ["SBD_REVISION", script, "main.cc", restricted, unrestricted]
+    )
 
 
 def run_build(

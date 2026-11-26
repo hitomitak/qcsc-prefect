@@ -67,10 +67,10 @@ fi
 git -C "$SBD_DIR" checkout --detach "$SBD_COMMIT"
 echo "Using SBD commit: $(git -C "$SBD_DIR" rev-parse HEAD)"
 
-# Compile and link in a directory of this build only: builds of diag-gpu and diag-gpu_uhf can run
-# at the same time, and a shared main.o would let one link the other's object.
+# Compile and link in a directory of this build only: builds of the restricted and the UHF
+# driver can run at the same time, and a shared main.o would let one link the other's object.
 rm -f "$SCRIPT_DIR/$OUTBIN"
-BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sbd-gpu-build.XXXXXX")"
+BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sbd-build.XXXXXX")"
 trap 'rm -rf "$BUILD_DIR"' EXIT
 echo "$CCCOM $CCFLAGS $WARNFLAGS -c main.cc -o $BUILD_DIR/main.o -I$SBD_DIR/include"
 $CCCOM $CCFLAGS $WARNFLAGS -c main.cc -o "$BUILD_DIR/main.o" -I"$SBD_DIR/include"
