@@ -228,7 +228,8 @@ def test_random_source_skips_optimize_and_execute(stages):
         (
             {"qiskit_runtime_job_id": "d123", "runtime_block_name": "qrmi-iqp"},
             "load_runtime_job",
-            {"job_id": "d123", "runtime_block_name": "qrmi-iqp"},
+            # The register width the reload checks is 2 x norb of the mapped molecule.
+            {"job_id": "d123", "runtime_block_name": "qrmi-iqp", "num_bits": 6},
         ),
         ({"qrmi_result_dir": "/jobs/abc"}, "load_qrmi_result", {"work_dir": "/jobs/abc"}),
     ],

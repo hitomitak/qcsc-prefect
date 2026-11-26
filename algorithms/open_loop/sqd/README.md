@@ -194,6 +194,12 @@ with the `pip install` command to run.
     workflow process for this (`pip install "qrmi[ibm]"`, Linux only).
     `sampling.runner_name` is deprecated and ignored.
 
+    The job must have one PUB with the registers this run would sample: `meas` of
+    `2 x norb` bits, plus `test` of the same width and shots with reset mitigation.
+    Otherwise the run stops, naming the job ID. The `sqd-sampling-source` artifact of
+    such a reload leaves `resource` empty, because QRMI does not report the backend
+    the job ran on.
+
   The new run then loads those samples instead of sampling, so you can change
   `sqd` (for example `subspace_dim`) or the solver without QPU time. The reload
   uses Reset Mitigation of the Advanced SQD Settings block, so keep it as it was in

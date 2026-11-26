@@ -202,6 +202,7 @@ async def run_sqd_pattern(parameters: FlowParameters, artifact_key: str) -> floa
             job_id=sampling.qiskit_runtime_job_id,
             runtime_block_name=sampling.runtime_block_name,
             use_reset_mitigation=advanced.use_reset_mitigation,
+            num_bits=2 * elec_props.num_orbitals,
         )
     else:
         # Optimize

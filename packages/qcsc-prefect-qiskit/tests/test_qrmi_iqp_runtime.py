@@ -1040,11 +1040,12 @@ def test_a_finished_job_is_reloaded_by_id_and_never_stopped(fake):
     result = anyio.run(lambda: iqp_mod.load_iqp_job("ibm_test", dict(CONFIG), "d123"))
 
     assert result[0].data.meas.get_counts() == {"11": 4}
+    # Only the resource QRMI read through: the backend the job ran on is not known.
     assert result.metadata["qcsc_qrmi"] == {
-        "resource": "ibm_test",
         "mode": "reload",
         "job_id": "d123",
         "status": "DONE",
+        "qrmi_resource": "ibm_test",
     }
     (resource,) = fake.resources
     assert resource.id == "ibm_test" and resource.config == CONFIG
@@ -1065,7 +1066,7 @@ def test_a_job_that_is_not_done_is_not_reloaded(fake, polls_before_final, final,
     fake.polls_before_final = polls_before_final
     fake.final = final
     earlier_job(fake)
-    with pytest.raises(iqp_mod.IqpJobFailed, match=f"d123 on ibm_test is {status}"):
+    with pytest.raises(iqp_mod.IqpJobFailed, match=f"IQP job d123 is {status};"):
         anyio.run(lambda: iqp_mod.load_iqp_job("ibm_test", dict(CONFIG), "d123"))
     gc.collect()
     # It is neither waited for nor stopped.
