@@ -1,0 +1,32 @@
+# UHF-SQD on ROQUO with one GB200 GPU per solve. Create the blocks with:
+#   uhf-sqd-create-blocks uhf_sqd_blocks.roquo-gpu.toml
+#
+# hpc_target = "slurm": each solve is a Slurm job of one GPU, submitted from the login node where
+# the flow runs. Build diag-gpu_uhf first, on a compute node ("ROQUO" in
+# packages/qcsc-prefect-sbd/native/README.md). Davidson settings left out take the source's
+# loose defaults, as in uhf_sqd_blocks.example.toml.
+
+[solver]
+hpc_target = "slurm"
+queue = "roquo"                    # the GPU partition
+project = "YOUR_ROQUO_ACCOUNT"     # the Slurm account
+# On a file system that the login node and the compute nodes both see:
+root_dir = "/path/to/work/uhf-sqd-gpu"
+sbd_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag-gpu_uhf"
+
+solver_mode = "gpu"
+resource_class = "gpu"
+gpus_per_node = 1
+num_nodes = 1
+mpiprocs = 1
+ompthreads = 36                    # ROQUO gives a one-GPU job a quarter node: 36 cores
+launcher = "srun"
+mpi_options = ["--mpi=pmix"]
+modules = ["cuda/13.2", "nvhpc/26.5", "hpcx/2.50"]
+walltime = "00:20:00"
+
+# Names of their own, so that blocks of other targets stay as they are.
+command_block_name = "cmd-sbd-uhf-solver-roquo-gpu"
+execution_profile_block_name = "exec-sbd-uhf-roquo-gpu"
+hpc_profile_block_name = "hpc-roquo-gpu-sbd-uhf"
+solver_block_name = "sbd-uhf-solver-roquo-gpu"

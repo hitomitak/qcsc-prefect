@@ -59,11 +59,13 @@ fi
 git -C "$SBD_DIR" checkout --detach "$SBD_COMMIT"
 echo "Using SBD commit: $(git -C "$SBD_DIR" rev-parse HEAD)"
 
-# Clean previous build
-rm -f "$SCRIPT_DIR"/*.o "$SCRIPT_DIR/$OUTBIN"
-
-# Compile and link
-"$CCCOM" "${CXXFLAGS[@]}" -c "$SCRIPT_DIR/main.cc" -o "$SCRIPT_DIR/main.o" -I"$SBD_DIR/include"
-"$CCCOM" "${CXXFLAGS[@]}" -o "$SCRIPT_DIR/$OUTBIN" "$SCRIPT_DIR/main.o" -lopenblas
+# Compile and link in a directory of this build only: builds of the restricted and the UHF
+# driver can run at the same time, and a shared main.o would let one link the other's object.
+rm -f "$SCRIPT_DIR/$OUTBIN"
+BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sbd-build.XXXXXX")"
+trap 'rm -rf "$BUILD_DIR"' EXIT
+"$CCCOM" "${CXXFLAGS[@]}" -c "$SCRIPT_DIR/main.cc" -o "$BUILD_DIR/main.o" -I"$SBD_DIR/include"
+"$CCCOM" "${CXXFLAGS[@]}" -o "$BUILD_DIR/$OUTBIN" "$BUILD_DIR/main.o" -lopenblas
+mv -f "$BUILD_DIR/$OUTBIN" "$SCRIPT_DIR/$OUTBIN"
 
 echo "Build completed: $SCRIPT_DIR/$OUTBIN"

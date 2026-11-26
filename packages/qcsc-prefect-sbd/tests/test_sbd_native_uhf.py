@@ -1,8 +1,9 @@
 """Run the -D_UHF SBD driver on small UHF problems and check it against PySCF FCI.
 
 Set SBD_NATIVE_UHF_BINARY to a driver built with ``UHF=1`` (``native/diag_uhf``) and
-SBD_NATIVE_BINARY to the restricted driver (``native/diag``); SBD_NATIVE_LAUNCHER as in
-test_sbd_native.py. Normal Python-only installations skip these tests.
+SBD_NATIVE_BINARY to the restricted driver (``native/diag``); SBD_NATIVE_LAUNCHER and
+SBD_NATIVE_OMP_THREADS as in test_sbd_native.py. For the GPU drivers, use ``native/diag-gpu_uhf``
+and ``native/diag-gpu`` with several threads. Normal Python-only installations skip these tests.
 
 The reference energy is PySCF FCI on the restricted (RO)HF integrals of the same molecule.
 With every orbital active, full-space FCI does not depend on the orbital basis, so the UHF
@@ -26,6 +27,7 @@ from qcsc_prefect_sbd import solver_job
 
 UHF_BINARY = os.environ.get("SBD_NATIVE_UHF_BINARY")
 RHF_BINARY = os.environ.get("SBD_NATIVE_BINARY")
+OMP_THREADS = os.environ.get("SBD_NATIVE_OMP_THREADS") or "1"
 pytestmark = pytest.mark.skipif(
     not (UHF_BINARY and RHF_BINARY),
     reason="Set SBD_NATIVE_UHF_BINARY and SBD_NATIVE_BINARY to test the UHF SBD driver",
@@ -108,7 +110,7 @@ def all_strings(norb, n_elec):
 def run_driver(binary, work_dir, args, ranks=1):
     launcher = shlex.split(os.environ.get("SBD_NATIVE_LAUNCHER", "mpiexec"))
     command = launcher + ["-n", str(ranks), str(Path(binary).resolve())] + args
-    environment = dict(os.environ, OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1")
+    environment = dict(os.environ, OMP_NUM_THREADS=OMP_THREADS, OPENBLAS_NUM_THREADS="1")
     return subprocess.run(
         command, cwd=work_dir, env=environment, capture_output=True, text=True, timeout=300
     )
@@ -281,8 +283,10 @@ def test_restricted_driver_reads_a_restricted_fcidump_with_iuhf_0(tmp_path):
         assert run.returncode == 0, run.stdout + run.stderr
         result = solver_job._read_files(work_dir=work_dir, norb=p.norb, separate_beta=True)
         assert result.integrals == "RESTRICTED"
-        energies[value] = (work_dir / "davidson_energy.txt").read_bytes()
-    assert energies["0"] == energies[None]
+        energies[value] = result.energy
+    # Not byte for byte: a GPU build with several threads gives different last digits from run
+    # to run (1e-14 on ROQUO). A different Hamiltonian would move the energy far more than 1e-10.
+    assert energies["0"] == pytest.approx(energies[None], abs=1e-10)
 
 
 def test_uhf_driver_still_refuses_a_restricted_fcidump_with_iuhf_0(tmp_path):

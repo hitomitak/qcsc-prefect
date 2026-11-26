@@ -299,9 +299,12 @@ with `run_task.py`) turns several of these features on.
 - **Where it is used.** `docs/howto/howto_setup_qcsc_prefect_roquo.md`, the ROQUO tutorials, and
   the archived ROQUO GPU tutorial.
 - **Not in the first integration.** CPU only.
-- **Where to connect it later.**
-  - `packages/qcsc-prefect-sbd/native/build_sbd_gpu.sh` with `UHF=1`, at the pinned
-    `SBD_REVISION`.
+- **Connected so far.** `packages/qcsc-prefect-sbd/native/build_sbd_gpu.sh` builds the 1-GPU
+  `diag-gpu_uhf` with `UHF=1`, at the pinned `SBD_REVISION`, and points an Open MPI wrapper at
+  `nvc++`. On ROQUO (2026-11-25) it agrees with the CPU driver within 2.1e-14 Eh on NH2 and H6, and
+  the NH2 flow runs with one GPU per solve. `MPI=1` (multi-GPU) is still deferred.
+- **Where to connect the rest later.**
+  - `MPI=1` in the same script.
   - The integral-layout marker and the build-info check of `qcsc-prefect-sbd` apply unchanged.
 - **Caveats.**
   - `smoke_inputs.py` uses equal alpha and beta integrals. It cannot catch alpha/beta block

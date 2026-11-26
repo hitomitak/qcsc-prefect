@@ -56,8 +56,8 @@ qcsc-prefect/
   - `closed_loop/sqd_de`: SQD with differential evolution of the circuit parameters
     (SBD or DICE).
   - `closed_loop/uhf-sqd`: the same closed loop on a broken-symmetry UHF reference, with the
-    unrestricted CPU SBD solver and random sampling (GPU SBD and quantum devices are not yet
-    supported).
+    unrestricted SBD solver and random sampling: on CPUs, or on one GPU per solve on ROQUO.
+    Several GPUs per solve and quantum devices are not yet supported.
   - `qcsc_workflow_utility`: chemistry and solver helpers shared by the workflows.
 - `examples/`
   End-to-end runnable examples for Miyabi and Fugaku.
