@@ -49,7 +49,7 @@ if os.getenv("SLURM_INTEGRATION", "").strip().lower() not in {"1", "true", "yes"
     pytest.skip("Set SLURM_INTEGRATION=1 to run the Slurm round trip.", allow_module_level=True)
 if shutil.which("sbatch") is None:
     pytest.skip("sbatch not found. Run on a Slurm login node.", allow_module_level=True)
-for _mod in ("ffsim", "prefect_qiskit", "pydantic_numpy", "pyscf"):
+for _mod in ("ffsim", "pydantic_numpy", "pyscf"):
     pytest.importorskip(_mod)
 pytest.importorskip("qcsc_prefect.integrations.qiskit.qrmi")
 

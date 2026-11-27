@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 from qrmi_stubs import QrmiBlockStub
 
-for _mod in ("ffsim", "prefect_qiskit", "pydantic_numpy", "pyscf", "qiskit_addon_sqd"):
+for _mod in ("ffsim", "pydantic_numpy", "pyscf", "qiskit_addon_sqd"):
     pytest.importorskip(_mod)
 
 from sqd_common import flow, sampling, solvers, topology  # noqa: E402
@@ -226,9 +226,10 @@ def test_random_source_skips_optimize_and_execute(stages):
     "sampling, stage, expected",
     [
         (
-            {"qiskit_runtime_job_id": "d123", "runner_name": "r"},
+            {"qiskit_runtime_job_id": "d123", "runtime_block_name": "qrmi-iqp"},
             "load_runtime_job",
-            {"job_id": "d123", "runner_name": "r"},
+            # The register width the reload checks is 2 x norb of the mapped molecule.
+            {"job_id": "d123", "runtime_block_name": "qrmi-iqp", "num_bits": 6},
         ),
         ({"qrmi_result_dir": "/jobs/abc"}, "load_qrmi_result", {"work_dir": "/jobs/abc"}),
     ],

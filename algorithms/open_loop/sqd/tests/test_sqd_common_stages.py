@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from qrmi_stubs import QrmiBlockStub
 
-for _mod in ("ffsim", "prefect_qiskit", "pydantic_numpy", "pyscf", "qiskit_addon_sqd"):
+for _mod in ("ffsim", "pydantic_numpy", "pyscf", "qiskit_addon_sqd"):
     pytest.importorskip(_mod)
 
 import qcsc_workflow_utility.chem as chem  # noqa: E402
@@ -73,7 +73,7 @@ def test_flow_parameters_defaults():
     assert params.sampling.quantum_source == "real-device"
     assert params.sampling.shots == 100_000
     assert params.sampling.runtime_block_name == "qrmi-runtime"
-    assert params.sampling.runner_name == "ibm-runner"
+    assert params.sampling.runner_name is None
     assert params.advanced_block_name == "sqd-advanced-settings"
     assert params.solver_block_ref is None
     defaults = advanced_mod.AdvancedSettings()
@@ -513,34 +513,101 @@ def test_missing_runtime_block_explains_random_fallback(monkeypatch, lih):
         )
 
 
-@pytest.mark.parametrize("reset", [False, True])
-def test_load_runtime_job_reads_the_job_result(monkeypatch, offline, reset):
+def _reload(monkeypatch, result, *, reset, num_bits=4):
     seen = []
 
-    class Client:
-        async def get_primitive_result(self, job_id):
-            seen.append(job_id)
-            return sample_result(reset)
+    class Block:
+        resource = "ibm_now"
 
-    runtime = SimpleNamespace(
-        resource_name="ibm_test", credentials=SimpleNamespace(get_client=lambda: Client())
-    )
+        async def aload_job_result(self, job_id):
+            seen.append(job_id)
+            return result
 
     async def load(name):
-        assert name == "ibm-runner"
-        return runtime
+        assert name == "qrmi-runtime"
+        return Block()
 
-    monkeypatch.setattr(sampling.QuantumRuntime, "load", staticmethod(load))
+    monkeypatch.setattr(sampling, "load_qrmi_block", load)
     bool_array = asyncio.run(
-        sampling.load_runtime_job.fn("d123", "ibm-runner", use_reset_mitigation=reset)
+        sampling.load_runtime_job.fn(
+            "d123", "qrmi-runtime", use_reset_mitigation=reset, num_bits=num_bits
+        )
     )
     assert seen == ["d123"]
+    return bool_array
+
+
+@pytest.mark.parametrize("reset", [False, True])
+def test_load_runtime_job_reads_the_job_through_the_qrmi_block(monkeypatch, offline, reset):
+    bool_array = _reload(monkeypatch, sample_result(reset), reset=reset)
     assert len(bool_array) == (2 if reset else 4)
     row = offline[0]["table"][0]
+    assert row["source"] == "qrmi-iqp (reloaded)"
+    # QRMI does not report the backend the job ran on; the block's QPU is not recorded.
+    assert row["resource"] is None
     assert row["qiskit_runtime_job_id"] == "d123" and row["shots"] == 4
     assert row["shots_kept"] == len(bool_array)
     # A reload builds no circuit, so it records no topology.
     assert row["qpu_topology"] is None
+
+
+def _pubs(*registers):
+    """A result with one PUB per mapping of register name -> (bitstrings, width)."""
+    return PrimitiveResult(
+        [
+            SamplerPubResult(
+                DataBin(
+                    **{
+                        name: BitArray.from_samples(strings, num_bits=width)
+                        for name, (strings, width) in pub.items()
+                    }
+                ),
+                metadata={},
+            )
+            for pub in registers
+        ],
+        metadata={},
+    )
+
+
+MEAS4 = (["0101", "0110", "1001", "1010"], 4)
+
+
+@pytest.mark.parametrize(
+    ("result", "reset", "num_bits", "message"),
+    [
+        (_pubs({"meas": MEAS4}, {"meas": MEAS4}), False, 4, "has 2 PUBs"),
+        (_pubs({"c": MEAS4}), False, 4, r"registers \['c'\]; expected \['meas'\]\.$"),
+        (_pubs({"meas": MEAS4}), False, 6, "'meas' has 4 bits; this molecule needs 6"),
+        (_pubs({"meas": MEAS4}), True, 4, "Reset Mitigation in the Advanced SQD Settings"),
+        (
+            _pubs({"meas": MEAS4, "test": (["0000"] * 4, 4)}),
+            False,
+            4,
+            "Reset Mitigation in the Advanced SQD Settings",
+        ),
+        (
+            _pubs({"meas": MEAS4, "test": (["0000"] * 3, 4)}),
+            True,
+            4,
+            "'test' has 3 shots and 'meas' 4",
+        ),
+    ],
+)
+def test_a_reloaded_result_that_is_not_this_runs_shape_fails_with_the_job_id(
+    monkeypatch, offline, result, reset, num_bits, message
+):
+    with pytest.raises(ValueError, match=message) as excinfo:
+        _reload(monkeypatch, result, reset=reset, num_bits=num_bits)
+    assert str(excinfo.value).startswith("IBM Quantum job d123")
+    # Nothing is recorded for a rejected job.
+    assert offline == []
+
+
+def test_runner_name_is_deprecated_and_ignored():
+    with pytest.warns(FutureWarning, match="runner_name is deprecated and ignored"):
+        params = flow_params.SamplingParameters(qiskit_runtime_job_id="d7", runner_name="r")
+    assert params.runtime_block_name == "qrmi-runtime"
 
 
 def _qrmi_job_dir(tmp_path, reset, schema=2):

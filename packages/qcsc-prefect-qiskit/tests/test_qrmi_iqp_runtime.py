@@ -1014,3 +1014,82 @@ def test_the_live_check_runs_its_real_imports(monkeypatch):
     assert block_mod._live_backend_names("k", eu, "ibm_berlin") == {"ibm_berlin"}
     assert block_mod._live_backend_names("k", eu, "ibm_kingston") == set()
     assert opened[0] == {"channel": "ibm_quantum_platform", "token": "k", "instance": eu}
+
+
+# ---------------------------------------------------------------- reload by job ID
+
+
+def earlier_job(fake, job_id="d123", registers=None, shots=4):
+    """A job that another process submitted: known to the fake service, not started here."""
+    job = {
+        "id": job_id,
+        "parameters": {},
+        "registers": registers or [{"meas": 2}],
+        "shots": shots,
+        "polls": 0,
+        "stopped": False,
+    }
+    fake.jobs.append(job)
+    return job
+
+
+def test_a_finished_job_is_reloaded_by_id_and_never_stopped(fake):
+    fake.polls_before_final = 0
+    fake.bits = ["1"]
+    earlier_job(fake)
+    result = anyio.run(lambda: iqp_mod.load_iqp_job("ibm_test", dict(CONFIG), "d123"))
+
+    assert result[0].data.meas.get_counts() == {"11": 4}
+    # Only the resource QRMI read through: the backend the job ran on is not known.
+    assert result.metadata["qcsc_qrmi"] == {
+        "mode": "reload",
+        "job_id": "d123",
+        "status": "DONE",
+        "qrmi_resource": "ibm_test",
+    }
+    (resource,) = fake.resources
+    assert resource.id == "ibm_test" and resource.config == CONFIG
+    # Read only: no submission, no session, no stop, even after the job object is collected.
+    gc.collect()
+    assert fake.calls == ["from_config", "task_status", "task_result"]
+
+
+@pytest.mark.parametrize(
+    ("polls_before_final", "final", "status"),
+    [
+        (5, TaskStatus.Completed, "QUEUED"),
+        (0, TaskStatus.Failed, "ERROR"),
+        (0, TaskStatus.Cancelled, "CANCELLED"),
+    ],
+)
+def test_a_job_that_is_not_done_is_not_reloaded(fake, polls_before_final, final, status):
+    fake.polls_before_final = polls_before_final
+    fake.final = final
+    earlier_job(fake)
+    with pytest.raises(iqp_mod.IqpJobFailed, match=f"IQP job d123 is {status};"):
+        anyio.run(lambda: iqp_mod.load_iqp_job("ibm_test", dict(CONFIG), "d123"))
+    gc.collect()
+    # It is neither waited for nor stopped.
+    assert fake.calls == ["from_config", "task_status"]
+
+
+def test_the_block_of_a_slurm_run_can_reload_an_iqp_job(fake, monkeypatch, no_api_key):
+    monkeypatch.setenv("QRMI_IBM_QCS_IAM_APIKEY", "env-key")
+    fake.polls_before_final = 0
+    earlier_job(fake)
+    block = QrmiRuntimeBlock(scheduler="slurm", resource="ibm_test", service_crn="crn:v1:x")
+    result = anyio.run(lambda: block.aload_job_result("d123"))
+
+    assert result.metadata["qcsc_qrmi"]["job_id"] == "d123"
+    (resource,) = fake.resources
+    # The block's CRN and endpoints with this host's API key, and no session setting.
+    assert resource.config["QRMI_IBM_QCS_IAM_APIKEY"] == "env-key"
+    assert resource.config["QRMI_IBM_QCS_SERVICE_CRN"] == "crn:v1:x"
+    assert "QRMI_IBM_QCS_SESSION_MODE" not in resource.config
+
+
+def test_a_reload_without_an_api_key_fails_before_any_qrmi_call(fake, no_api_key):
+    block = QrmiRuntimeBlock(scheduler="slurm", resource="ibm_test", service_crn="crn:v1:x")
+    with pytest.raises(ValueError, match="needs an API key: run qcsc-qrmi login"):
+        anyio.run(lambda: block.aload_job_result("d123"))
+    assert fake.calls == []

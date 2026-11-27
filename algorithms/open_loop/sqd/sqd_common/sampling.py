@@ -12,7 +12,6 @@ from pathlib import Path
 import numpy as np
 from prefect import get_run_logger, task
 from prefect.artifacts import create_table_artifact
-from prefect_qiskit.runtime import QuantumRuntime
 from qiskit.primitives import PrimitiveResult
 from qiskit.primitives.containers import BitArray
 from qiskit_addon_sqd.counts import generate_bit_array_uniform
@@ -70,6 +69,49 @@ def random_bool_array(sampling_params: SamplingParameters, norb: int) -> np.ndar
     ).to_bool_array()
 
 
+def check_reloaded_result(result, *, num_bits: int, use_reset_mitigation: bool, where: str) -> None:
+    """Check that a reloaded result is what this run would have sampled.
+
+    SQD reads the first PUB only, so the result must have exactly one. Its registers
+    must be ``meas`` of ``num_bits`` bits and, with reset mitigation, ``test`` of the
+    same width and number of shots; without it, there is no ``test``.
+
+    Raises:
+        ValueError: Naming ``where`` (the job) and the mismatch.
+    """
+    if not isinstance(result, PrimitiveResult):
+        raise ValueError(f"{where} returned {type(result).__name__}, not a PrimitiveResult.")
+    if len(result) != 1:
+        raise ValueError(
+            f"{where} has {len(result)} PUBs; SQD reloads a job of one PUB, the LUCJ circuit."
+        )
+    data = result[0].data
+    expected = ["meas", "test"] if use_reset_mitigation else ["meas"]
+    if sorted(data.keys()) != sorted(expected):
+        hint = (
+            " Reset Mitigation in the Advanced SQD Settings must be as in the sampling run."
+            if set(data.keys()) in ({"meas"}, {"meas", "test"})
+            else ""
+        )
+        raise ValueError(
+            f"{where} has the registers {sorted(data.keys())}; expected {expected}.{hint}"
+        )
+    for name in expected:
+        bits = data[name]
+        if not isinstance(bits, BitArray) or bits.shape != ():
+            raise ValueError(f"{where}: register {name!r} is not one BitArray of shots.")
+        if bits.num_bits != num_bits:
+            raise ValueError(
+                f"{where}: register {name!r} has {bits.num_bits} bits; this molecule needs "
+                f"{num_bits} (2 x {num_bits // 2} orbitals)."
+            )
+    if use_reset_mitigation and data.test.num_shots != data.meas.num_shots:
+        raise ValueError(
+            f"{where}: 'test' has {data.test.num_shots} shots and 'meas' "
+            f"{data.meas.num_shots}; reset mitigation needs the same shots."
+        )
+
+
 async def record_sampling_source(*, bool_array: np.ndarray, shots: int, **source) -> None:
     """Write the ``sqd-sampling-source`` artifact, so a later run can reload the samples.
 
@@ -94,16 +136,6 @@ async def record_sampling_source(*, bool_array: np.ndarray, shots: int, **source
             "qrmi_result_dir (Slurm) into the Sampling parameters of a new run to reuse them."
         ),
     )
-
-
-async def _load_runtime(runner_name: str) -> QuantumRuntime:
-    try:
-        return await QuantumRuntime.load(runner_name)
-    except ValueError as exc:
-        raise RuntimeError(
-            f"QuantumRuntime block '{runner_name}' is not defined. It is needed only to "
-            "reload an IBM Quantum job by qiskit_runtime_job_id."
-        ) from exc
 
 
 async def load_qrmi_block(block_name: str):
@@ -254,30 +286,47 @@ async def quantum_sampling(
 )
 async def load_runtime_job(
     job_id: str,
-    runner_name: str,
+    runtime_block_name: str,
     use_reset_mitigation: bool,
+    num_bits: int,
 ) -> np.ndarray:
-    """Load the samples of a finished IBM Quantum Runtime job.
+    """Load the samples of a finished IBM Quantum job, through QRMI.
 
     Args:
-        job_id: Qiskit Runtime job ID.
-        runner_name: QuantumRuntime block whose credentials can read the job.
+        job_id: IBM Quantum job ID, for example the ``qiskit_runtime_job_id`` of an IQP run.
+        runtime_block_name: QrmiRuntimeBlock whose instance reads the job, with this host's
+            API key. Its scheduler does not matter.
         use_reset_mitigation: Whether the job was sampled with reset mitigation.
+        num_bits: Width of the measured register, ``2 * norb`` of the molecule.
 
     Returns:
         Sampled bitstrings as a 2D bool array.
+
+    Raises:
+        ValueError: If the job's result is not one PUB with the registers of this run.
     """
     logger = get_run_logger()
-    runtime = await _load_runtime(runner_name)
-    logger.info("Loading samples from Qiskit Runtime job %s.", job_id)
-    client = runtime.credentials.get_client()
-    pub_result = await client.get_primitive_result(job_id=job_id)
+    block = await load_qrmi_block(runtime_block_name)
+    logger.info(
+        "Loading samples from IBM Quantum job %s through QRMI (block %s).",
+        job_id,
+        runtime_block_name,
+    )
+    pub_result = await block.aload_job_result(job_id)
+    check_reloaded_result(
+        pub_result,
+        num_bits=num_bits,
+        use_reset_mitigation=use_reset_mitigation,
+        where=f"IBM Quantum job {job_id}",
+    )
     bool_array, num_shots = extract_bool_array(pub_result, use_reset_mitigation)
     await record_sampling_source(
         bool_array=bool_array,
         shots=num_shots,
-        source="ibm-runtime (reloaded)",
-        resource=runtime.resource_name,
+        source="qrmi-iqp (reloaded)",
+        # QRMI reads the job by ID and does not report the backend it ran on; the block's
+        # backend may have changed since, so none is recorded.
+        resource=None,
         qiskit_runtime_job_id=job_id,
     )
     return bool_array

@@ -180,6 +180,44 @@ async def sample_on_iqp(circuits, shots, registers, configs, runtime) -> Primiti
     return result
 
 
+async def load_iqp_job(resource: str, resource_config, job_id: str) -> PrimitiveResult:
+    """The result of the finished IBM Quantum job ``job_id``, read through QRMI.
+
+    QRMI reads the job and its results by ID, so the job may come from another process
+    or an earlier run. ``resource`` and ``resource_config`` are those of
+    ``QrmiRuntimeBlock.iqp_resource_config``. ``resource`` is only the QRMI resource the
+    job is read through: QRMI does not report the backend the job ran on, and the
+    result's ``qcsc_qrmi`` metadata records none. A job that has not finished, or that
+    ended as ERROR or CANCELLED, raises ``IqpJobFailed`` without waiting. The job is
+    never stopped. The caller checks that the result has the PUBs and registers it needs.
+    """
+    from qrmi import QuantumResource, ResourceType
+    from qrmi.primitives import RuntimeJobV2
+
+    qrmi_resource = await _call(
+        lambda: QuantumResource.from_config(
+            resource, ResourceType.IBMQuantumComputeService, dict(resource_config)
+        )
+    )
+    # delete_job=False: reading a job must never stop it.
+    job = RuntimeJobV2(qrmi_resource, job_id, delete_job=False)
+    status = _status_name(await _call(job.status))
+    if status != "DONE":
+        raise IqpJobFailed(f"IQP job {job_id} is {status}; only a DONE job can be reloaded")
+    result = await _call(job.result)
+    if not isinstance(result, PrimitiveResult):
+        raise RuntimeError(
+            f"IQP job {job_id} returned {type(result).__name__}; expected PrimitiveResult"
+        )
+    result.metadata["qcsc_qrmi"] = {
+        "mode": "reload",
+        "job_id": job_id,
+        "status": status,
+        "qrmi_resource": resource,
+    }
+    return result
+
+
 async def _cancel_once(job, record, logger) -> None:
     """Try job.cancel() once, after any running QRMI call, even while being cancelled."""
     try:
