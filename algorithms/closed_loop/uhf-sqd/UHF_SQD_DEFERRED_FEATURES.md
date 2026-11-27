@@ -39,9 +39,10 @@ The first integration ports the default computation path of the source flow `rik
 
 The scientific content of that path is preserved, and the PR0 baseline checks that it is.
 
-The first release supports only the `random` source on the CPU SBD driver. The QRMI path and the
-pool save are ported but have not been run on hardware; see "Scope of this release" in
-[README.md](README.md).
+What the first release has run, and where, is in "Scope of this release" in
+[README.md](README.md): the `random` source on the CPU driver (verified against the source) and
+on one ROQUO GPU per solve. The multi-GPU driver (section 6), the QRMI path and the pool save are
+ported, and are tested offline, but have not been run on ROQUO or on hardware yet.
 
 **Known limitation kept from the source.** The source's default solver settings (`create_blocks.py`:
 block 4, iteration 1, tolerance 1e-2) do not converge to the exact energy of the subspace. On the
@@ -298,22 +299,34 @@ with `run_task.py`) turns several of these features on.
   `run_bs.toml` `[solver]` section.
 - **Where it is used.** `docs/howto/howto_setup_qcsc_prefect_roquo.md`, the ROQUO tutorials, and
   the archived ROQUO GPU tutorial.
-- **Not in the first integration.** CPU only.
-- **Connected so far.** `packages/qcsc-prefect-sbd/native/build_sbd_gpu.sh` builds the 1-GPU
-  `diag-gpu_uhf` with `UHF=1`, at the pinned `SBD_REVISION`, and points an Open MPI wrapper at
-  `nvc++`. On ROQUO (2026-11-25) it agrees with the CPU driver within 2.1e-14 Eh on NH2 and H6, and
-  the NH2 flow runs with one GPU per solve. `MPI=1` (multi-GPU) is still deferred.
-- **Where to connect the rest later.**
-  - `MPI=1` in the same script.
+- **Connected so far.**
+  - `packages/qcsc-prefect-sbd/native/build_sbd_gpu.sh` builds the 1-GPU `diag-gpu_uhf` with
+    `UHF=1`, at the pinned `SBD_REVISION`, and points an Open MPI wrapper at `nvc++`. On ROQUO
+    (2026-11-25) it agrees with the CPU driver within 2.1e-14 Eh on NH2 and H6, and the NH2 flow
+    runs with one GPU per solve.
+  - `MPI=1` in the same script builds `diag-gpu_uhf-mpi` (the source's
+    `diag-gpu_uhf-mpi-hpcx250`) with the source's defines, NCCL from the NVIDIA HPC SDK, and the
+    check for PR79, PR84 and the NCCL helpers. `uhf_sqd_blocks.roquo-multigpu.example.toml` runs
+    a solve on two GPUs of one node (Step 8 of the tutorial). The build, the blocks and the job
+    script are tested offline, and the CPU driver passes the split-determinant FCI tests on two
+    ranks in CI. **Not yet run on ROQUO.**
   - The integral-layout marker and the build-info check of `qcsc-prefect-sbd` apply unchanged.
+- **Not in the first integration.**
+  - Several nodes per solve, and GPU sites other than ROQUO.
+  - `CUBLAS=1` (`-DSBD_USE_CUBLAS`), which did not compile on SBD `main` in 2026-10.
+  - `smoke_gpu.sh` and `smoke_inputs.py`: the native tests on two GPUs replace them (see the
+    caveat below).
+- **Where to connect the rest later.** A site profile and its blocks; the driver and the
+  `SBDSolverJob` grid fields need no change.
 - **Caveats.**
   - `smoke_inputs.py` uses equal alpha and beta integrals. It cannot catch alpha/beta block
     mix-ups, and it never runs the RHF binary.
   - The source build scripts do not pin the SBD revision.
 - **Validation needed.**
-  - Full-space FCI comparison with alpha and beta integrals that differ, plus BS-UHF, on 1 and N
-    GPUs.
-  - The layout-mismatch tests on GPU builds.
+  - On one GPU: done on ROQUO (2026-11-25), the native tests (full-space FCI with alpha and beta
+    integrals that differ, BS-UHF, and the layout-mismatch tests) and the flow.
+  - On two GPUs: the two-rank native tests with `diag-gpu_uhf-mpi` (native README, "ROQUO"),
+    then Step 8 of the tutorial, whose job output must show each rank on its own GPU.
 
 ## 7. ROQUO launcher stack
 
@@ -515,11 +528,23 @@ with `run_task.py`) turns several of these features on.
 
 ## 17. Examples and data that depend on deferred features
 
+The example of the first release is the NH2 doublet in `data/`, run in every step of the
+tutorial. The source's two examples are deferred:
+
 - `examples/sbd_uhf_recover_any_molecule/` (`run_recover.py`, README, `walkthrough.ipynb`) needs
   sections 2 and 3, and uses the AF-group settings (ported as explicit parameters).
+  - **Port it with** sample-pool loading (section 2) and checkpoint and resume (section 3).
+  - **Accepted when** it runs from the tutorial's NH2 (or another FCIDUMP in the repository) and
+    a pool that the flow saved, and its energies match the run that produced the pool.
 - `examples/fe4s4_hci_from_bsuhf_reference/` uses the heat-bath CI app `sbd::gdb` (`544fa29` and
   others). It is not SQD, it relies on non-public pool data, and its Fugaku job scripts include a
   project group.
+  - **Port it with** SBD's HCI app (its build scripts and a solver block).
+  - **Accepted when** it can be reproduced from inputs that can be published: an FCIDUMP and,
+    if it needs one, a sample pool that are in the repository or produced by a documented run,
+    and job scripts without a project group. The 9 MB Fe4S4 FCIDUMP stays out of the repository
+    (#79).
+
 - `examples/roquo_gpu_prefect_hello_demo/` belongs with section 7.
 - The large data files `algorithms/sbd/data/fcidump_Fe4S4_MO.txt` (replaced in `90b67f4`) and
   `fe2s2_40q.fcidump` are excluded by #79. Note that the upstream file with the same Fe4S4 name

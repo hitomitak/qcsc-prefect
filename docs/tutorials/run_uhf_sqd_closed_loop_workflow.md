@@ -1,8 +1,9 @@
 # Run the UHF-SQD Closed-loop Workflow (qcsc-prefect)
 
 This tutorial runs `uhf-sqd`, the closed-loop SQD workflow on a broken-symmetry UHF (BS-UHF)
-reference. It runs on your workstation first, with a random quantum source, and then submits the
-SBD diagonalizations to a Slurm cluster, on CPUs or on one GPU per solve on ROQUO.
+reference, on the NH2 doublet that ships with the workflow. It runs on your workstation first,
+with a random quantum source, and then submits the SBD diagonalizations to a Slurm cluster: on
+CPUs, or on ROQUO on one or several GPUs per solve. The last step samples on an IBM Quantum QPU.
 
 `uhf-sqd` is the unrestricted counterpart of the SBD closed loop (`sqd_de`). If you have run
 [Run SBD Closed-loop Workflow on Slurm](run_sbd_closed_loop_workflow_slurm.md), most steps will
@@ -10,12 +11,18 @@ look familiar. The differences are in the reference, the solver binary and the b
 
 > **Scope of this release**
 >
-> - **Supported:** the CPU SBD driver `diag_uhf` and the `random` quantum source. On ROQUO, the
->   GPU driver `diag-gpu_uhf` with one GPU per solve (Step 7, checked on 2026-11-25).
-> - **Not supported:** other GPU setups (several GPUs per solve, other sites) and quantum devices.
->   Step 8 describes the device path, which has not been run on hardware.
-> - **Not yet verified:** the CPU Slurm procedure of Step 6 end to end, and runs with more than
->   one MPI rank.
+> | Path | Status |
+> |---|---|
+> | Local CPU, `random` source (Steps 3 to 5) | verified bit for bit against the source workflow |
+> | ROQUO, one GPU per solve (Step 7) | run end to end on 2026-11-25 |
+> | ROQUO, several GPUs per solve on one node (Step 8) | **not yet run on ROQUO** |
+> | IBM Quantum QPU through QRMI, `scheduler = "iqp"` (Step 9) | **not yet run on hardware** |
+> | CPU Slurm (Step 6) | documented, **not yet run end to end** |
+> | QRMI through Slurm and SPANK (end of Step 9) | described, not run for `uhf-sqd` |
+>
+> The native CPU driver is compared with FCI in CI on 1 and 2 MPI ranks. The whole workflow has
+> been run with one rank per solve only, except as stated in Step 8. Other GPU sites, several
+> nodes per solve, and running the flow and its solves inside one allocation are not supported.
 
 ## Prerequisites
 
@@ -24,7 +31,10 @@ look familiar. The differences are in the reference, the solver binary and the b
 - A running Prefect server, or Prefect Cloud, that your client is connected to. For a Slurm login
   node, see [How to Run and Access a Prefect Server on a Slurm Login Node](../howto/howto_setup_prefect_server_slurm.md).
 - An MPI C++ compiler and OpenBLAS, to build the CPU SBD driver.
-- For Step 6 only: a Slurm cluster where you can submit jobs. For Step 7: an account on ROQUO.
+- For Step 6 only: a Slurm cluster where you can submit jobs. For Steps 7 and 8: an account on
+  ROQUO.
+- For Step 9: an IBM Cloud API key with access to an IBM Quantum instance, and a Linux workflow
+  host that reaches IBM Quantum (QRMI publishes Linux wheels only).
 
 ## 0. What changes from the SBD closed loop?
 
@@ -113,8 +123,8 @@ realpath diag_uhf
 The script fetches the pinned SBD revision if needed, compiles `main.cc` with `-D_UHF`, and ends
 with `Build completed: .../native/diag_uhf`. Without `UHF=1`, the same script builds the
 restricted `diag`; the two can live side by side. On Miyabi and Fugaku, use `build_sbd.sh` and
-`build_sbd_fugaku.sh` with `UHF=1`. For ROQUO's GPUs, Step 7 builds `diag-gpu_uhf` with
-`build_sbd_gpu.sh`.
+`build_sbd_fugaku.sh` with `UHF=1`. For ROQUO's GPUs, Steps 7 and 8 build `diag-gpu_uhf` and
+`diag-gpu_uhf-mpi` with `build_sbd_gpu.sh`.
 
 Record the absolute path of `diag_uhf`; it is the `sbd_executable` below.
 
@@ -261,7 +271,7 @@ reference={"af_groups": {
 The guess is used only if its solution is lower. The log line `Reference: E_UHF=... <S^2>=...`
 shows the reference that was used.
 
-### Step 6. Run the solver on Slurm and deploy
+### Step 6. Run the solver on Slurm and deploy (not yet run end to end)
 
 Build `diag_uhf` on the cluster (Step 2), then create `uhf_sqd_slurm.toml` from
 [uhf_sqd_blocks.example.toml](https://github.com/qiskit-community/qcsc-prefect/blob/main/algorithms/closed_loop/uhf-sqd/uhf_sqd_blocks.example.toml):
@@ -310,12 +320,13 @@ set at least:
 
 Each walker then submits its solves as Slurm jobs; follow them with `squeue -u "$USER"`.
 
-> **Note**
+> **Not yet run end to end**
 >
-> This Slurm procedure has not been run end to end yet. Runs with more than one MPI rank, such
-> as `mpiprocs = 4` above, are not verified either: their energies have not been compared with
-> the single-process result of Step 3. Compare them yourself before relying on the Slurm
-> results.
+> This CPU Slurm procedure has not been run end to end. The CPU driver itself is compared with
+> FCI in CI on 1 and 2 MPI ranks, but a workflow run with `mpiprocs = 4` as above has not been
+> compared with the single-process result of Step 3. Run NH2 with the settings of Step 3 and
+> compare the energies before relying on the Slurm results. The Slurm path itself (submission,
+> monitoring, exit status and logs) was run on ROQUO with GPUs in Steps 7 and 8.
 
 ### Step 7. Run the solver on one GPU on ROQUO
 
@@ -383,62 +394,246 @@ Each walker submits its solve as a Slurm job of one GPU. Each job's output begin
 > - **Native tests.** The one-rank cases of the native tests pass on one GPU: energies against
 >   FCI, occupancies, and the integral-layout checks.
 >
-> Not checked: several GPUs per solve, several ranks on one GPU, and larger molecules. Each
-> solve waits in the queue on its own; running the flow and its solves inside one allocation is
-> not supported yet.
+> Not checked: several ranks on one GPU, and larger molecules. Several GPUs per solve are
+> Step 8. Each solve waits in the queue on its own; running the flow and its solves inside one
+> allocation is not supported yet (issue #85).
 
-### Step 8. Sample on a quantum device
+### Step 8. Run each solve on several GPUs on ROQUO (not yet run on ROQUO)
 
-> **Not supported in this release**
+A solve can also use several GPUs of one node, one MPI rank per GPU. SBD then splits the
+determinants over the ranks, so a subspace that does not fit in the memory of one GPU can still
+be solved. The flow is the same as in Step 7; only the driver and the solver blocks change.
+
+This is different from running several solves inside one allocation (issue #85): here each solve
+is still one Slurm job, of several GPUs.
+
+> **Not yet run on ROQUO**
 >
-> Quantum devices are not supported in the first release of `uhf-sqd`. This step describes the
-> device path that the package contains. It has not been run on hardware.
+> The build, the blocks and the job script of this step are tested offline (the job script is
+> rendered in the tests), and the CPU driver passes the split-determinant FCI tests on 2 ranks in
+> CI. The multi-GPU driver has not been run on ROQUO yet.
 
-To sample on hardware, save a `QuantumSourceBlock` of kind `qrmi` that refers to a QRMI runtime
-Block, and pass its name as `quantum_source`. Set up the runtime Block as in
-[How to use a quantum source](../howto/howto_use_quantum_source.md).
+**Build `diag-gpu_uhf-mpi` on a compute node**, with the same modules as in Step 7. `MPI=1`
+adds NCCL, which the NVIDIA HPC SDK provides, and stages MPI messages through host memory,
+because `hpcx/2.50` is not a CUDA-aware MPI:
 
-Put the table in its own file, for example `uhf_sqd_device.toml`, and pass it to the same command:
+```bash
+srun --account=<account> --partition=roquo --gpus-per-node=1 --time=01:00:00 --pty bash
+module load cuda/13.2 nvhpc/26.5 && module load hpcx/2.50
+export PATH=/opt/nvidia/hpc_sdk/Linux_aarch64/26.5/compilers/bin:$PATH
+cd packages/qcsc-prefect-sbd/native && MPI=1 UHF=1 bash build_sbd_gpu.sh   # -> diag-gpu_uhf-mpi
+exit
+```
+
+The script prints the NCCL directories it found, and stops if the driver has unresolved
+libraries. If NCCL is elsewhere, set `NCCL_INCLUDE` and `NCCL_LIB` to `nccl.h` and
+`libnccl.so`. See "ROQUO" in
+[native/README.md](https://github.com/qiskit-community/qcsc-prefect/blob/main/packages/qcsc-prefect-sbd/native/README.md)
+for the defines and for running the native tests on two GPUs.
+
+**Create the blocks** from
+[uhf_sqd_blocks.roquo-multigpu.example.toml](https://github.com/qiskit-community/qcsc-prefect/blob/main/algorithms/closed_loop/uhf-sqd/uhf_sqd_blocks.roquo-multigpu.example.toml),
+with `project`, `root_dir` and `sbd_executable` set as in Step 7:
+
+```bash
+cp algorithms/closed_loop/uhf-sqd/uhf_sqd_blocks.roquo-multigpu.example.toml uhf_sqd_roquo_multigpu.toml
+uhf-sqd-create-blocks uhf_sqd_roquo_multigpu.toml
+```
+
+| Setting | Value in the example | Why |
+|---|---|---|
+| `sbd_executable` | `.../native/diag-gpu_uhf-mpi` | the `MPI=1 UHF=1` driver |
+| `gpus_per_node`, `mpiprocs` | 2, 2 | one rank per GPU, on one node |
+| `ompthreads` | 36 | OpenMP threads per rank; ROQUO gives 36 cores per GPU |
+| `task_comm_size`, `adet_comm_size`, `bdet_comm_size` | 1, 1, 2 | SBD's communicator grid; the beta determinants are split over the two ranks. The product must divide the number of ranks |
+| `mpi_options` | `--mpi=pmix`, `--cpus-per-task=36` | `srun` does not take `--cpus-per-task` from `sbatch` (Slurm 22.05 and later) |
+| block names | `sbd-uhf-solver-roquo-multigpu` and others | the blocks of Step 7 stay as they are |
+
+Each rank sees every GPU of the job, and the driver takes GPU (node-local rank) modulo (number of
+GPUs). So do not add `--gpu-bind`. For a whole node, set `gpus_per_node = 4`, `mpiprocs = 4`,
+`adet_comm_size = 2` and `bdet_comm_size = 2`, the grid of the UHF-SQD source's ROQUO runs.
+
+**Run the flow** as in Step 7, with the solver block of this step:
+
+```python
+energy = uhf_sqd_de(parameters=FlowParameters(
+    fcidump="/path/to/qcsc-prefect/algorithms/closed_loop/uhf-sqd/data/fcidump_NH2_STO3G.txt",
+    solver_block_ref="sbd_solver_job/sbd-uhf-solver-roquo-multigpu",
+))
+```
+
+**Check that the ranks used different GPUs.** Each solve's job directory under `root_dir` has the
+driver's output in `output.out`. With more than one rank, the driver prints the GPU of each rank:
+
+```bash
+grep -h '^\[gpu\]\|integrals layout' /path/to/work/uhf-sqd-multigpu/job_*/output.out | sort | uniq -c
+```
+
+Each job should show `[gpu] rank 0/2 uses CUDA device 0`, `[gpu] rank 1/2 uses CUDA device 1`
+and `[qcsc] integrals layout: SBD_UHF_INTERLEAVED`. The flow returns about -54.8726 Eh for NH2,
+as in Steps 3 and 7.
+
+### Step 9. Sample on an IBM Quantum QPU (not yet run on hardware)
+
+The walkers can sample their LUCJ circuits on an IBM Quantum QPU instead of drawing random bits.
+The first route below is QRMI's direct IQP execution (`scheduler = "iqp"`): QRMI runs in the
+workflow process and submits one IBM Quantum job per walker and trial, without a session. The
+solves use any solver block of the earlier steps.
+
+> **Not yet run on hardware**
+>
+> The device path is tested offline: the flow runs on NH2 through the real QRMI source, the IQP
+> runtime and the compile hooks, with a fake QRMI module and the Target of a fake heavy-hex
+> backend (`test_uhf_sqd_device_path.py`). It has not been run on a QPU. The reload of an
+> earlier IBM Quantum job by its ID, checked on hardware for the open-loop `sqd` workflow, is not
+> part of `uhf-sqd`.
+
+**Where it runs.** Sampling and compilation run in the workflow process, so the workflow host
+must be a Linux machine (QRMI publishes Linux wheels only) that reaches the IBM Quantum API and
+IBM Cloud IAM, for example the ROQUO login node. The solves run wherever their solver block says.
+
+**1. Install QRMI** in the Python environment of the flow, after the workflow (Step 1):
+
+```bash
+uv pip install "qrmi[ibm]"
+python -c "import qrmi; print('qrmi', qrmi.__file__)"
+```
+
+`uv sync` removes packages that are not in the lock file. If you run it, install QRMI again
+afterwards.
+
+**2. Store the API key and choose the instance and the backend** with `qcsc-qrmi login`:
+
+```bash
+qcsc-qrmi login
+qcsc-qrmi list
+```
+
+`login` asks for the IBM Cloud API key, lists the IBM Quantum instances and backends it can use,
+and asks for a default instance and backend. It writes the key to `~/.qiskit/qrmi_config.json`
+(mode 600, or `$QRMI_CONFIG`) and saves a QRMI Runtime block named `qrmi-runtime` with your
+instances and backends. The key is never stored in a block. See
+[QRMI Sampler](../howto/howto_qrmi_slurm_sampler.md#set-up-access-with-qcsc-qrmi-login).
+
+**3. Save a QRMI Runtime block for direct IQP execution.** A new `qrmi-runtime` block is saved for
+Slurm, and the open-loop `sqd` workflow may use it, so save one of its own for `uhf-sqd`. It keeps
+the instance and the backend that `login` saved; `scheduler = "iqp"` uses no Slurm settings:
+
+```python
+from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
+
+login = QrmiRuntimeBlock.load("qrmi-runtime")
+settings = login.settings() | {
+    "scheduler": "iqp",
+    "root_dir": None,
+    "command_block_name": None,
+    "execution_profile_block_name": None,
+    "hpc_profile_block_name": None,
+    # "resource": "ibm_kingston",   # another backend of the instance
+}
+QrmiRuntimeBlock(**settings).save("uhf-sqd-iqp", overwrite=True)
+print(QrmiRuntimeBlock.load("uhf-sqd-iqp").instance, QrmiRuntimeBlock.load("uhf-sqd-iqp").resource)
+```
+
+Check that the instance can use the backend before any job:
+
+```bash
+qcsc-qrmi check --block uhf-sqd-iqp
+```
+
+**4. Save the source Block.** Put the table in its own file, for example `uhf_sqd_qpu.toml`:
 
 ```toml
-[quantum_sources.uhf-sqd-device]
-config = { kind = "qrmi", block_name = "qrmi-runtime", tags = ["res: quantum"] }
+[quantum_sources.uhf-sqd-qpu]
+config = { kind = "qrmi", block_name = "uhf-sqd-iqp" }
 ```
 
 ```bash
-uhf-sqd-create-blocks uhf_sqd_device.toml
+uhf-sqd-create-blocks uhf_sqd_qpu.toml
 ```
 
 A file with only `[quantum_sources]` creates or updates the source Blocks and leaves the SBD
-blocks of Steps 3, 6 and 7 unchanged. A `[solver]` table, even an empty one, is always processed:
-an empty one fails because the required settings are missing.
+blocks of Steps 3, 6, 7 and 8 unchanged. A `[solver]` table, even an empty one, is always
+processed: an empty one fails because the required settings are missing. `tags` in `config`, for
+example `tags = ["res: qpu"]`, are applied to the sampling task, so that a Prefect concurrency
+limit can use them.
 
-Then run the flow with `quantum_source="uhf-sqd-device"`.
+**5. Run a small smoke test**: one walker, one trial and few shots, so that one small QPU job is
+submitted. On the ROQUO login node, the one-GPU solver block of Step 7 is a natural choice; on a
+workstation, the local block of Step 3.
 
-- **Sharing a source Block.** A source Block that another workflow already uses can be named
-  directly in the flow parameters. You do not need to create it again.
+```python
+from uhf_sqd.flow_params import FlowParameters
+from uhf_sqd.main import uhf_sqd_de
+
+energy = uhf_sqd_de(parameters=FlowParameters(
+    fcidump="/path/to/qcsc-prefect/algorithms/closed_loop/uhf-sqd/data/fcidump_NH2_STO3G.txt",
+    quantum_source="uhf-sqd-qpu",
+    solver_block_ref="sbd_solver_job/sbd-uhf-solver-roquo-gpu",
+    sampler={"shots": 1000},
+    de_params={"num_walkers": 1, "iterations": 1},
+))
+print(energy)
+```
+
+NH2 has 7 orbitals, so the circuit has 14 qubits, measured into `meas` (14 bits) and, with reset
+mitigation (the default), first into `test` (14 bits). Before the job is submitted, the circuit is
+compiled on the workflow host for the backend's Target, with a SABRE layout search of
+`circ_params.sabre_layout_trials` (default 1024) trials; this can take a few minutes. Lower it
+for a quick check.
+
+**6. Check the run.**
+
+- **The flow log**, in this order: `Reference: E_UHF=...`, `Sampling from <backend>
+  (shots=1000)`, `Submitted IQP job <job ID> to <backend>`, `IQP job <job ID> completed on
+  <backend>`, `[persist] <n>-shot pool (trial 0 walker 0) saved: ...`, then the solve. The job ID
+  is also on the IBM Quantum dashboard.
+- **The flow run** is Completed in the Prefect UI, and the returned energy is a finite number.
+  This step checks the workflow, not the accuracy: a 1000-shot, one-walker run is not expected
+  to reach the energy of Step 3.
+- **The `uhf-sqd-telemetry` artifact** has one row. Its device fields:
+  - `reset_test_passed_shots`: the shots whose `test` register was all zeros;
+  - `shot_retention_rate`: those shots over `shots`;
+  - `reset_mitigation_fallback`: `true` if no shot passed and all were used. On a QPU this should
+    be `false`;
+  - `raw_samples_path`: the saved sample pool (`raw_samples_t00_w0_<id>.npz`), with the FCIDUMP
+    sha256, the reference key and the bit layout.
+- **The solve** completed as in the step of its solver block.
+
+**If something fails**
+
+| Message | Meaning |
+|---|---|
+| `scheduler 'iqp' needs an API key: run qcsc-qrmi login` | this host has no `qrmi_config.json` with a key, and `QRMI_IBM_QCS_IAM_APIKEY` is not set |
+| `ModuleNotFoundError: No module named 'qrmi'` | QRMI is not installed in the flow's environment (step 1), or the host is not Linux |
+| `scheduler="iqp" does not use root_dir, ...` | the block still has Slurm settings; save it as in step 3 |
+| `IqpJobFailed: IQP job <id> on <backend> ended as ERROR` | IBM Quantum rejected or failed the job; see the job on the dashboard |
+| `IqpSubmissionUnknown` | submission raised, so it is unknown whether a job exists. It is not resubmitted; check the dashboard before running again |
+
+If the flow process stops while it waits for a job, the job can keep running on IBM Quantum;
+cancel it on the dashboard. A job that has finished is never stopped.
+
+**Notes on the device path**
+
 - **Compilation.** The workflow compiles each LUCJ circuit with its own SABRE layout search, using
-  the hook `uhf_sqd.transpilation:transpile`. Install `uhf_sqd` wherever the QRMI compiler runs.
-- **Reset mitigation.** It keeps the shots whose `test` register is all zeros. If none pass, all
-  shots are used and a warning is logged. The telemetry records `reset_test_passed_shots`,
-  `reset_mitigation_fallback` and `shot_retention_rate`.
-- **Sample pool.** Before any diagonalization, each walker saves its shots after reset mitigation
-  as `raw_samples_t<trial>_w<walker>_<id>.npz`. The telemetry field `raw_samples_path` records
-  where. Each pool records the FCIDUMP sha256, the reference key and the bit layout, so that it
-  can be matched with its reference later.
+  the hook `uhf_sqd.transpilation:transpile`. With `scheduler = "iqp"` it runs in the workflow
+  process.
+- **Reset mitigation** keeps the shots whose `test` register is all zeros. If none pass, all
+  shots are used and a warning is logged.
+- **Sample pool.** Before any diagonalization, each walker saves its shots after reset mitigation.
+  Loading a pool back into a run is not supported yet (`UHF_SQD_DEFERRED_FEATURES.md`, section 2).
+- **Layouts and DE.** The source reused one SABRE layout for a whole flow run; `uhf-sqd` searches
+  one per circuit. Walkers' circuits differ only in angles, so the layouts are mostly the same,
+  and the extra searches cost compile time. Where layouts differ, walkers run on different
+  physical qubits, and energy differences between walkers include qubit quality. Check the
+  layouts before comparing walkers on hardware.
 
-> **Note**
->
-> The random path of `uhf-sqd` is verified bit for bit against the source workflow it was ported
-> from. The device path is not yet verified on hardware.
->
-> - **Layout search.** The source reused one SABRE layout for a whole flow run; `uhf-sqd`
->   searches one per circuit. Walkers' circuits differ only in angles, so the layouts are mostly
->   the same and the extra searches cost compile time (lower `sabre_layout_trials` if that
->   matters).
-> - **Effect on DE.** Where layouts differ, walkers run on different physical qubits. Energy
->   differences between walkers then include qubit quality.
-> - **Before comparing walkers on hardware,** check the layouts that the runs used.
+**Through Slurm and SPANK.** A QRMI Runtime block with `scheduler = "slurm"` samples inside a
+Slurm job that holds the QPU through the QRMI SPANK plugin; the same source Block kind refers to
+it. This needs an administrator: the SPANK plugin and `qrmi_config.json` on the compute nodes,
+and QRMI, `task_runner`, `qcsc-prefect-qiskit` and `uhf_sqd` (for the compile hook) in the
+compute-node Python. See [QRMI Sampler](../howto/howto_qrmi_slurm_sampler.md). This route is
+used by the open-loop `sqd` workflow; it has not been run for `uhf-sqd`.
 
 ## 3. Troubleshooting
 

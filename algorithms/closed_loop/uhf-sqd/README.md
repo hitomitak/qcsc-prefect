@@ -23,25 +23,28 @@ them later, in [UHF_SQD_DEFERRED_FEATURES.md](UHF_SQD_DEFERRED_FEATURES.md).
 |---|---|
 | BS-UHF reference, UHF integrals, UCCSD t2, per-spin occupancies | `qcsc_workflow_utility.uhf` |
 | Unrestricted SBD solver (`-D_UHF` driver, `integrals="unrestricted"`) | `qcsc-prefect-sbd` |
-| Quantum source (`random` in this release) | `QuantumSourceBlock` in `qcsc-prefect-qiskit` |
+| Quantum source (`random`, or `qrmi` for an IBM Quantum QPU) | `QuantumSourceBlock` in `qcsc-prefect-qiskit` |
 | LUCJ, DE, recovery loop, K-batch subsampling, telemetry, sample pool | `uhf_sqd` (this directory) |
 
 ## Scope of this release
 
 | | Status in this release |
 |---|---|
-| SBD solver | CPU `diag_uhf`. On ROQUO also `diag-gpu_uhf` with one GPU per solve ([uhf_sqd_blocks.roquo-gpu.example.toml](uhf_sqd_blocks.roquo-gpu.example.toml), checked on 2026-11-25). Several GPUs per solve and other GPU sites are not supported |
-| Quantum source | `random` only. Quantum devices (`qrmi`, `qfw` sources) are not supported |
-| HPC target | `local`: verified against the source. `slurm`: run end to end on ROQUO with one GPU per solve (2026-11-25). The CPU Slurm procedure is documented but not yet run end to end |
-| MPI ranks | One rank verified, on CPUs and on one GPU. Runs with more than one rank are not verified: their energies have not been compared with the one-rank result |
+| SBD solver | CPU `diag_uhf`: verified against the source. On ROQUO, `diag-gpu_uhf` with one GPU per solve ([uhf_sqd_blocks.roquo-gpu.example.toml](uhf_sqd_blocks.roquo-gpu.example.toml)): run end to end on 2026-11-25. `diag-gpu_uhf-mpi` with several GPUs of one node per solve ([uhf_sqd_blocks.roquo-multigpu.example.toml](uhf_sqd_blocks.roquo-multigpu.example.toml)): **not yet run on ROQUO**. Other GPU sites and several nodes per solve are not supported |
+| Quantum source | `random`: verified against the source. `qrmi` on an IBM Quantum QPU with `scheduler = "iqp"`: tested offline with a fake QRMI, **not yet run on hardware**. QRMI through Slurm and SPANK, and `qfw`, are not run for `uhf-sqd` |
+| HPC target | `local`: verified against the source. `slurm`: run end to end on ROQUO with one GPU per solve (2026-11-25). The CPU Slurm procedure is documented but **not yet run end to end** |
+| MPI ranks | The CPU driver is compared with FCI in CI on 1 and 2 ranks, including split determinants. The workflow has run with one rank per solve; runs with more ranks have not been compared with the one-rank result |
 
-The device code paths are in the package: the compile hook, reset mitigation and the sample
-pool. They have not been run on hardware, and the sections that describe them say so.
+Each step of the [tutorial](../../../docs/tutorials/run_uhf_sqd_closed_loop_workflow.md) says
+how far it has been run.
 
 ## Setup
 
-A step-by-step walkthrough, from a local run with a random source to Slurm, is in
+A step-by-step walkthrough on the NH2 doublet in `data/`, from a local run with a random source to
+Slurm, ROQUO GPUs and an IBM Quantum QPU, is in
 [Run the UHF-SQD Closed-loop Workflow](../../../docs/tutorials/run_uhf_sqd_closed_loop_workflow.md).
+NH2 is the example of this release; the source's two examples depend on deferred features
+([UHF_SQD_DEFERRED_FEATURES.md](UHF_SQD_DEFERRED_FEATURES.md), section 17).
 
 1. **Install** this directory and its local dependencies, for example
    `uv pip install -e algorithms/closed_loop/uhf-sqd`.
@@ -64,10 +67,10 @@ A step-by-step walkthrough, from a local run with a random source to Slurm, is i
    - `[quantum_sources.<name>]` tables are saved as `QuantumSourceBlock` documents. An existing
      Block of the same name, which another workflow such as `sqd_de` may use, is replaced only
      with `overwrite = true` in its table; otherwise creation stops. The example creates
-     `uhf-sqd-random`. A random source needs no backend. Device sources are not supported in
-     this release; a `qrmi` source would use this package's compile hook
-     `uhf_sqd.transpilation:transpile`, so `uhf_sqd` would have to be installed where the QRMI
-     compiler runs.
+     `uhf-sqd-random`. A random source needs no backend. A `qrmi` source uses this package's
+     compile hook `uhf_sqd.transpilation:transpile`, so `uhf_sqd` must be installed where the
+     QRMI compiler runs: the workflow process for `scheduler = "iqp"`. See Step 9 of the
+     tutorial.
 
 ## Running
 
@@ -135,8 +138,8 @@ when converged subspace energies are needed, for example `block = 30`, `iteratio
 
 ### Sample pool (device sources)
 
-Device sources are not supported in this release, and this path has not been run on hardware.
-With the supported `random` source, no pool is written and no reset mitigation is applied.
+This path has not been run on hardware yet (see the scope above). With the `random` source, no
+pool is written and no reset mitigation is applied.
 
 With a source that runs circuits (`requires_circuit`), each walker saves its sample pool before
 any diagonalization. The pool is the shots kept after reset mitigation, one row per shot, so
@@ -213,6 +216,24 @@ The computation of the ported path is the source's. The only changes are these:
 - **The pool `ref_meta` has the additive keys** described above, and its width follows its
   length.
 - **Reset-mitigation telemetry** adds `reset_test_passed_shots` and `reset_mitigation_fallback`.
+
+## Documents of the source
+
+The source's two documents are not carried over as files. Their content for the features of
+this release is in the [tutorial](../../../docs/tutorials/run_uhf_sqd_closed_loop_workflow.md)
+and this README; the features they describe that are not ported are listed in
+[UHF_SQD_DEFERRED_FEATURES.md](UHF_SQD_DEFERRED_FEATURES.md). The originals, at the ported
+revision:
+
+- [`docs/archive/run_uhf_bsuhf_any_molecule.md`](https://github.com/kunalroy332/qcsc-prefect/blob/3968e585f7ca8137c127e5ee9f4fb383322d3d0d/docs/archive/run_uhf_bsuhf_any_molecule.md),
+  running RHF, UHF and BS-UHF SQD for any molecule on Fugaku and ROQUO. Choosing the reference,
+  building the drivers, and a single-flow run are in the tutorial (Steps 2 to 9). Its multi-step
+  recovery with checkpoint and resume (section 3 of the deferred-features note) and its ROQUO
+  launcher, with job sizing and monitoring (section 7), are deferred.
+- [`docs/UHF_CHANGES_REPORT.md`](https://github.com/kunalroy332/qcsc-prefect/blob/3968e585f7ca8137c127e5ee9f4fb383322d3d0d/docs/UHF_CHANGES_REPORT.md),
+  how UHF support was added to each part (integrals, ansatz, sampling, solver interface, native
+  driver, wiring, tests) and the source's validation runs. Where this port differs from it is in
+  "Differences from the source" above; the report stays the record of the source's changes.
 
 ## Verification against the source
 
