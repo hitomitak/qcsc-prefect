@@ -1,0 +1,41 @@
+# UHF-SQD on ROQUO with two GB200 GPUs per solve, one MPI rank per GPU. Create the blocks with:
+#   uhf-sqd-create-blocks uhf_sqd_blocks.roquo-multigpu.toml
+#
+# hpc_target = "slurm": each solve is a Slurm job of two GPUs on one node, submitted from the
+# login node where the flow runs. Build diag-gpu_uhf-mpi first, on a compute node, with
+# MPI=1 UHF=1 ("ROQUO" in packages/qcsc-prefect-sbd/native/README.md). Davidson settings left
+# out take the source's loose defaults, as in uhf_sqd_blocks.example.toml.
+#
+# For four GPUs (a whole node): gpus_per_node = 4, mpiprocs = 4, adet_comm_size = 2 and
+# bdet_comm_size = 2, as in the UHF-SQD source's ROQUO configuration.
+
+[solver]
+hpc_target = "slurm"
+queue = "roquo"                    # the GPU partition
+project = "YOUR_ROQUO_ACCOUNT"     # the Slurm account
+# On a file system that the login node and the compute nodes both see:
+root_dir = "/path/to/work/uhf-sqd-multigpu"
+sbd_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag-gpu_uhf-mpi"
+
+solver_mode = "gpu"
+resource_class = "gpu"
+num_nodes = 1
+gpus_per_node = 2
+mpiprocs = 2                       # one rank per GPU; each rank picks GPU (local rank % GPUs)
+ompthreads = 36                    # per rank: ROQUO gives 36 cores per GPU
+# SBD's communicator grid; task x adet x bdet must divide the ranks. Splitting the beta
+# determinants over the ranks lowers the memory per GPU.
+task_comm_size = 1
+adet_comm_size = 1
+bdet_comm_size = 2
+launcher = "srun"
+# srun does not take --cpus-per-task from sbatch (Slurm 22.05 and later), so pass it here.
+mpi_options = ["--mpi=pmix", "--cpus-per-task=36"]
+modules = ["cuda/13.2", "nvhpc/26.5", "hpcx/2.50"]
+walltime = "00:20:00"
+
+# Names of their own, so that the blocks of other targets stay as they are.
+command_block_name = "cmd-sbd-uhf-solver-roquo-multigpu"
+execution_profile_block_name = "exec-sbd-uhf-roquo-multigpu"
+hpc_profile_block_name = "hpc-roquo-multigpu-sbd-uhf"
+solver_block_name = "sbd-uhf-solver-roquo-multigpu"
