@@ -150,6 +150,27 @@ def test_uhf_driver_full_space_energy_matches_fci(tmp_path, name, ranks):
     assert result.carryover_bitstrings_b is not None
 
 
+# Two ranks with the determinants split over them: the communicator grid of a solve on two
+# GPUs (uhf_sqd_blocks.roquo-multigpu.example.toml splits the beta determinants).
+@pytest.mark.parametrize("grid", ["adet2", "bdet2"])
+@pytest.mark.parametrize("name", list(MOLECULES))
+def test_uhf_driver_with_split_determinants_matches_fci(tmp_path, name, grid):
+    p = uhf_problem(name)
+    prep_unrestricted(tmp_path, p)
+    split = {"adet2": {"adet_comm_size": 2}, "bdet2": {"bdet_comm_size": 2}}[grid]
+    solver = solver_job.SBDSolverJob(
+        root_dir=str(tmp_path), integrals="unrestricted", **TIGHT, **split
+    )
+    run = run_driver(
+        UHF_BINARY, tmp_path, solver_job._build_solver_args(solver, separate_beta=True), ranks=2
+    )
+    assert run.returncode == 0, run.stdout + run.stderr
+    result = solver_job._read_files(
+        work_dir=tmp_path, norb=p.norb, separate_beta=True, integrals="unrestricted"
+    )
+    assert result.energy + p.mol.energy_nuc() == pytest.approx(p.e_fci, abs=1e-8)
+
+
 def test_uhf_driver_occupancies_match_the_fci_density(tmp_path):
     # NH2 has a non-degenerate ground state, so the occupancies are well defined.
     p = uhf_problem("nh2_doublet")

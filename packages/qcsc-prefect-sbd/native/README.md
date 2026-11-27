@@ -165,8 +165,9 @@ srun --account=<account> --partition=roquo --gpus-per-node=1 --time=01:00:00 --p
 module load cuda/13.2 nvhpc/26.5 && module load hpcx/2.50
 export PATH=/opt/nvidia/hpc_sdk/Linux_aarch64/26.5/compilers/bin:$PATH
 cd packages/qcsc-prefect-sbd/native
-bash build_sbd_gpu.sh            # diag-gpu
-UHF=1 bash build_sbd_gpu.sh      # diag-gpu_uhf
+bash build_sbd_gpu.sh                # diag-gpu
+UHF=1 bash build_sbd_gpu.sh          # diag-gpu_uhf
+MPI=1 UHF=1 bash build_sbd_gpu.sh    # diag-gpu_uhf-mpi: several GPUs per solve
 ```
 
 `hpcx/2.50`'s `mpic++` calls `g++` by default; with `nvc++` on `PATH` the script points it at
@@ -174,8 +175,29 @@ UHF=1 bash build_sbd_gpu.sh      # diag-gpu_uhf
 variables, and `cuda_compile`, which recommends nvcc); `WARNFLAGS=""` shows them.
 
 These are the steps of the UHF-SQD source workflow. With this repository they were checked on
-ROQUO on 2026-11-25: both drivers built, and the one-rank native tests below passed on one GB200
-GPU.
+ROQUO on 2026-11-25: `diag-gpu` and `diag-gpu_uhf` built, and the one-rank native tests below
+passed on one GB200 GPU.
+
+**Several GPUs per solve (`MPI=1`).** The driver `<name>-mpi` (`diag-gpu-mpi`, or
+`diag-gpu_uhf-mpi` with `UHF=1`) runs one MPI rank per GPU. The UHF-SQD source built it as
+`diag-gpu_uhf-mpi-hpcx250`, with the same defines:
+
+- `-DSBD_USE_NCCL`: NCCL collectives between the GPUs. NCCL comes from the NVIDIA HPC SDK
+  (`comm_libs/.../nccl`), found from `nvc++`; set `NCCL_INCLUDE` and `NCCL_LIB` to `nccl.h` and
+  `libnccl.so` if it is elsewhere. The driver is linked with an rpath to it.
+- `-DSBD_NON_CUDA_AWARE_MPI -DSBD_THRUST_SAFE_MPI_ALLREDUCE`: MPI messages are staged through
+  host memory, because `hpcx/2.50` is not a CUDA-aware MPI.
+- `-DSBD_USE_RANK_DISTRIBUTION -DSBD_USE_BLOCK_RANK_DISTRIBUTION`: SBD's distribution of the
+  determinants over the ranks.
+- No `-DSBD_USE_CUBLAS`, as in the source: Davidson then sums across ranks with NCCL, without
+  cuBLAS.
+
+The script checks that the SBD checkout has the NCCL helpers and the fixes r-ccs-cms/sbd PR79 (a
+deadlock with a one-rank `h_comm`) and PR84 (an OpenMP livelock); the pinned revision has them.
+It also stops if the driver has unresolved libraries. Ranks are launched with
+`srun --mpi=pmix`; each rank sees every GPU of the job and takes GPU (node-local rank) modulo
+(number of GPUs), printing `[gpu] rank r/n uses CUDA device d`. So the launcher passes no
+`--gpu-bind`. This driver has not been run on ROQUO yet.
 
 ### Running the native tests on GPUs
 
@@ -189,10 +211,12 @@ allocated GPU node, with the modules the driver was built with:
 ```bash
 cat > ~/sbd-gpu-launch.sh <<'END'
 #!/bin/bash
-# SBD_NATIVE_LAUNCHER for one GPU: called as `sbd-gpu-launch.sh -n N driver args...`.
+# SBD_NATIVE_LAUNCHER for GPUs: called as `sbd-gpu-launch.sh -n N driver args...`.
+# SBD_NATIVE_GPUS GPUs (default 1) are shared by the N ranks.
 [ "$1" = "-n" ] || { echo "usage: sbd-gpu-launch.sh -n N driver args..." >&2; exit 2; }
 ranks=$2; shift 2
-exec srun --mpi=pmix -n "$ranks" --gpus-per-node=1 --cpus-per-task="${SBD_NATIVE_OMP_THREADS:-8}" \
+exec srun --mpi=pmix -n "$ranks" --gpus-per-node="${SBD_NATIVE_GPUS:-1}" \
+  --cpus-per-task="${SBD_NATIVE_OMP_THREADS:-8}" \
   bash -c 'type module >/dev/null 2>&1 || source /etc/profile.d/lmod.sh 2>/dev/null \
              || source /etc/profile.d/modules.sh 2>/dev/null
            module load cuda/13.2 nvhpc/26.5 && module load hpcx/2.50
@@ -208,17 +232,33 @@ salloc --account=<account> --partition=roquo --gpus-per-node=1 --time=00:30:00
 SBD_NATIVE_LAUNCHER=~/sbd-gpu-launch.sh SBD_NATIVE_OMP_THREADS=8 \
 SBD_NATIVE_BINARY="$(realpath diag-gpu)" SBD_NATIVE_UHF_BINARY="$(realpath diag-gpu_uhf)" \
   uv run --no-sync python -m pytest ../tests/test_sbd_native.py ../tests/test_sbd_native_uhf.py \
-  -q -k "not -2]" --basetemp="$(git rev-parse --show-toplevel)/work/native-gpu-tests"
+  -q -k "not -2] and not split" --basetemp="$(git rev-parse --show-toplevel)/work/native-gpu-tests"
 exit
 ```
+
+For the multi-GPU driver, allocate two GPUs and run the two-rank cases: the full space with the
+default grid, and with the alpha or the beta determinants split over the two ranks.
+
+```bash
+salloc --account=<account> --partition=roquo --gpus-per-node=2 --time=00:30:00
+SBD_NATIVE_LAUNCHER=~/sbd-gpu-launch.sh SBD_NATIVE_GPUS=2 SBD_NATIVE_OMP_THREADS=8 \
+SBD_NATIVE_BINARY="$(realpath diag-gpu_uhf-mpi)" SBD_NATIVE_UHF_BINARY="$(realpath diag-gpu_uhf-mpi)" \
+  uv run --no-sync python -m pytest ../tests/test_sbd_native_uhf.py \
+  -q -k "uhf_driver_full_space and -2] or split" \
+  --basetemp="$(git rev-parse --show-toplevel)/work/native-multigpu-tests"
+exit
+```
+
+`SBD_NATIVE_BINARY` is required by the test module; the selected cases run only the UHF driver.
 
 - **`--basetemp`.** The tests write each driver's input (FCIDUMP and determinant files) to their
   temporary directory, and the driver runs there, on the GPU node. pytest's default is under
   `TMPDIR`, which can be local to the login node. `--basetemp` puts it on storage that the GPU
   node sees, independent of `TMPDIR`. pytest empties this directory at each run, so give it one
   of its own.
-- **`-k "not -2]"`.** It leaves out the two-rank cases, whose test ids end in `-2]`. With one GPU,
-  two ranks share it, and `diag-gpu` passes GPU buffers to MPI, which needs a CUDA-aware MPI.
+- **`-k "not -2] and not split"`.** It leaves out the two-rank cases: the test ids that end in
+  `-2]`, and the split-determinant tests. With one GPU, two ranks share it, and `diag-gpu`
+  passes GPU buffers to MPI, which needs a CUDA-aware MPI.
 
 ## Building the Executable on Fugaku
 

@@ -76,6 +76,86 @@ def test_gpu_build_stops_when_the_wrapper_does_not_call_nvcpp(tmp_path):
     assert "Using SBD commit" not in run.stdout
 
 
+# The files of the pinned SBD that the multi-GPU build checks for.
+MULTI_GPU_SBD = {
+    "include/sbd/framework/nccl_utility.h": "// NCCL helpers\n",
+    "include/sbd/chemistry/basic/davidson_thrust.h": "if( h_size == 1 ) {}\n",
+    "include/sbd/chemistry/tpb/helper.h": "cr.reserve(2);\n",
+}
+NCCL_DEFINES = [
+    "-DSBD_USE_NCCL",
+    "-DSBD_NON_CUDA_AWARE_MPI",
+    "-DSBD_THRUST_SAFE_MPI_ALLREDUCE",
+    "-DSBD_USE_RANK_DISTRIBUTION",
+    "-DSBD_USE_BLOCK_RANK_DISTRIBUTION",
+]
+
+
+def nvhpc_with_nccl(tmp_path):
+    """An NVIDIA HPC SDK tree with NCCL's header and library, as MPI=1 looks them up."""
+    root = tmp_path / "nvhpc"
+    include = root / "comm_libs/13.0/nccl/include"
+    lib = root / "comm_libs/13.0/nccl/lib"
+    include.mkdir(parents=True)
+    lib.mkdir(parents=True)
+    (include / "nccl.h").write_text("")
+    (lib / "libnccl.so").write_text("")
+    return root, include, lib
+
+
+@pytest.mark.parametrize("uhf", [False, True])
+def test_mpi_builds_the_multi_gpu_driver_with_nccl(tmp_path, uhf):
+    root, include, lib = nvhpc_with_nccl(tmp_path)
+    native, calls = run_build(
+        tmp_path,
+        "build_sbd_gpu.sh",
+        uhf=uhf,
+        wrapper="open-mpi",
+        sbd_files=MULTI_GPU_SBD,
+        environment_overrides={"MPI": "1", "NVHPC_ROOT": str(root)},
+    )
+    compile_call, link_call = [call[1:] for call in calls if call[0].startswith("OMPI_CXX=")]
+    assert "-c" in compile_call
+    for define in NCCL_DEFINES:
+        assert define in compile_call
+    assert f"-I{include}" in compile_call
+    assert ("-D_UHF" in compile_call) == uhf
+    assert "-DSBD_USE_CUBLAS" not in compile_call
+    assert f"-L{lib}" in link_call and "-lnccl" in link_call
+    assert f"-Wl,-rpath,{lib}" in link_call
+    driver = "diag-gpu_uhf-mpi" if uhf else "diag-gpu-mpi"
+    assert sorted(p.name for p in native.iterdir() if p.name.startswith("diag")) == [driver]
+
+
+def test_mpi_build_stops_without_nccl(tmp_path):
+    run = run_build(
+        tmp_path,
+        "build_sbd_gpu.sh",
+        uhf=True,
+        wrapper="open-mpi",
+        sbd_files=MULTI_GPU_SBD,
+        environment_overrides={"MPI": "1", "NVHPC_ROOT": str(tmp_path / "no-nccl")},
+        expect_failure=True,
+    )
+    assert "MPI=1: NCCL not found" in run.stderr
+    assert "Using SBD commit" not in run.stdout
+
+
+def test_mpi_build_stops_on_an_sbd_without_the_multi_gpu_fixes(tmp_path):
+    root, _, _ = nvhpc_with_nccl(tmp_path)
+    run = run_build(
+        tmp_path,
+        "build_sbd_gpu.sh",
+        uhf=True,
+        wrapper="open-mpi",
+        environment_overrides={"MPI": "1", "NVHPC_ROOT": str(root)},
+        expect_failure=True,
+    )
+    for missing in ("framework/nccl_utility.h", "PR79", "PR84"):
+        assert missing in run.stderr
+    assert not list((tmp_path / "native").glob("diag*"))
+
+
 # A compiler whose object records the build (uhf or restricted) and whose link copies the
 # object. The UHF link waits until the restricted compile has finished, which is the order in
 # which a shared main.o makes the UHF driver link the restricted object.
@@ -163,12 +243,22 @@ def test_concurrent_builds_link_their_own_objects(tmp_path, script):
 
 
 def run_build(
-    tmp_path, script, *, missing_revision=False, uhf=None, wrapper=None, expect_failure=False
+    tmp_path,
+    script,
+    *,
+    missing_revision=False,
+    uhf=None,
+    wrapper=None,
+    expect_failure=False,
+    sbd_files=None,
+    environment_overrides=None,
 ):
     """Run ``script`` with a recording compiler; return the build dir and the compiler calls.
 
     ``wrapper`` replaces mpic++ by a wrapper that answers ``-show``: ``"open-mpi"`` calls
     ``$OMPI_CXX`` (g++ by default) and puts an nvc++ on PATH; ``"g++"`` always calls g++.
+    ``sbd_files`` (path -> text) are added to the requested SBD revision, and
+    ``environment_overrides`` to the build's environment.
     With ``expect_failure`` the failed run is returned instead.
     """
     remote = tmp_path / "remote"
@@ -180,7 +270,11 @@ def run_build(
     git(remote, "commit", "-qm", "old API")
     old = git(remote, "rev-parse", "HEAD")
     marker.write_text("current API\n")
-    git(remote, "commit", "-qam", "current API")
+    for relative, text in (sbd_files or {}).items():
+        (remote / relative).parent.mkdir(parents=True, exist_ok=True)
+        (remote / relative).write_text(text)
+    git(remote, "add", "-A")
+    git(remote, "commit", "-qm", "current API")
     requested = git(remote, "rev-parse", "HEAD")
 
     dependency = tmp_path / "dependency"
@@ -233,10 +327,11 @@ def run_build(
     environment = dict(os.environ, PATH=f"{tools}:{os.environ['PATH']}", SBD_DIR=str(dependency))
     environment.pop("SBD_COMMIT", None)
     environment.pop("CCCOM", None)
-    for name in ("UHF", "OMPI_CXX", "OMPI_CC"):
+    for name in ("UHF", "MPI", "OMPI_CXX", "OMPI_CC", "NVHPC_ROOT", "NCCL_INCLUDE", "NCCL_LIB"):
         environment.pop(name, None)
     if uhf:
         environment["UHF"] = "1"
+    environment.update(environment_overrides or {})
     run = subprocess.run(
         ["bash", str(native / script)],
         cwd=tmp_path,
